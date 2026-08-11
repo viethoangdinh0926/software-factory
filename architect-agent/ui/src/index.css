@@ -1,0 +1,39 @@
+:root {
+  --bg: #f3efe6;
+  --ink: #1c1914;
+  --muted: #6b6458;
+  --panel: #fffdf8;
+  --line: #d9d0c0;
+  --accent: #0f6b5c;
+  --accent-ink: #f4fffb;
+  --danger: #8b2e2e;
+  --font-display: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  --font-body: "Segoe UI", "Helvetica Neue", sans-serif;
+  --font-mono: "IBM Plex Mono", "SFMono-Regular", Menlo, monospace;
+  color: var(--ink);
+  background:
+    radial-gradient(circle at 10% 0%, #efe4cf 0%, transparent 45%),
+    radial-gradient(circle at 90% 10%, #d9ebe4 0%, transparent 40%),
+    var(--bg);
+  font-family: var(--font-body);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+a {
+  color: inherit;
+}

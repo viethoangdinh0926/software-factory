@@ -1,0 +1,6 @@
+# Architect Agent (root)
+.env
+.DS_Store
+
+# Keep skills tracked; ignore local caches
+**/__pycache__/
