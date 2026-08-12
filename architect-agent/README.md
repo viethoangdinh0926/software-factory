@@ -69,3 +69,4 @@ Returns `design_session_id` and `ui_url` (`/sessions/{id}`).
 
 - Agent card: `GET /.well-known/agent-card.json`
 - JSON-RPC: `POST /`
+- On each **Approve & send design**, the architect writes a design-package markdown and delivers it to the Software System Manager via A2A (`SYSTEM_MANAGER_AGENT_URL`). If unset/unreachable, packages are queued under `backend/data/handoffs/`.

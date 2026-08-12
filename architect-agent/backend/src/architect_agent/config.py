@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     grill_me_skill_path: Path = AGENT_ROOT / "skills" / "grill-me" / "SKILL.md"
     static_dir: Path = STATIC_DIR
 
+    # Downstream A2A peer (Software System Manager) — optional until that agent exists
+    system_manager_agent_url: str | None = None
+
 
 @lru_cache
 def get_settings() -> Settings:

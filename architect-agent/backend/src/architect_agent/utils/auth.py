@@ -1,6 +1,6 @@
 from __future__ import annotations
 from threading import Lock
-from typing import dict, Mapping
+from typing import Mapping
 from cachetools import TTLCache
 
 import dataclasses

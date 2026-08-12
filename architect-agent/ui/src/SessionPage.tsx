@@ -86,7 +86,7 @@ export function SessionPage() {
 
   const canApprove =
     (session.phase === "spec_interview" && session.ready_for_design) ||
-    (session.phase === "system_design" && !session.design_approved);
+    (session.phase === "system_design" && !session.finalized);
 
   return (
     <div className={`app ${busy ? "busy" : ""}`}>
@@ -97,7 +97,21 @@ export function SessionPage() {
           <p className="meta">
             Session <code>{session.design_session_id}</code> · Phase{" "}
             <strong>{session.phase}</strong>
+            {session.design_version > 0 ? (
+              <>
+                {" "}
+                · Sent v<strong>{session.design_version}</strong>
+              </>
+            ) : null}
           </p>
+          {session.last_handoff ? (
+            <p className="meta">
+              Last handoff: <strong>{session.last_handoff.status}</strong>
+              {session.last_handoff.target_url
+                ? ` → ${session.last_handoff.target_url}`
+                : " (queued locally)"}
+            </p>
+          ) : null}
         </div>
         <div className="actions">
           <Link className="btn ghost" to="/">
@@ -106,9 +120,9 @@ export function SessionPage() {
           <a className="btn ghost" href={specDownloadUrl(sessionId)}>
             Download business spec
           </a>
-          {session.design_approved ? (
+          {session.design_version > 0 ? (
             <a className="btn ghost" href={finalDownloadUrl(sessionId)}>
-              Download final design
+              Download design package
             </a>
           ) : null}
           <button
@@ -117,7 +131,9 @@ export function SessionPage() {
             disabled={!canApprove || session.finalized || busy}
             onClick={onApprove}
           >
-            {session.phase === "system_design" ? "Finalize design" : "Approve business spec"}
+            {session.phase === "system_design"
+              ? "Approve & send design"
+              : "Approve business spec"}
           </button>
         </div>
       </header>
@@ -143,7 +159,11 @@ export function SessionPage() {
                 rows={3}
                 value={message}
                 onChange={(e) => setMessage(e.target.value)}
-                placeholder="Answer the architect…"
+                placeholder={
+                  session.phase === "system_design"
+                    ? "Ask for design changes…"
+                    : "Answer the architect…"
+                }
                 required
               />
               <button className="btn primary" type="submit" disabled={busy}>

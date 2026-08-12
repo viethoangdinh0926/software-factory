@@ -4,6 +4,15 @@ export type ChatMessage = {
   node?: string;
 };
 
+export type HandoffResult = {
+  status: "sent" | "queued" | "failed" | string;
+  handoff_id: string;
+  path: string;
+  target_url: string | null;
+  detail: string;
+  at: string;
+};
+
 export type DesignSession = {
   design_session_id: string;
   phase: string;
@@ -18,6 +27,8 @@ export type DesignSession = {
   messages: ChatMessage[];
   ui_path: string;
   updated_at: string;
+  design_version: number;
+  last_handoff: HandoffResult | null;
 };
 
 export type DesignStartResponse = {

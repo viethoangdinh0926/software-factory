@@ -14,9 +14,12 @@ _checkpointer = MemorySaver()
 _compiled: CompiledStateGraph | None = None
 
 
-def _after_interview(state: DesignGraphState) -> Literal["system_design", "__end__"]:
+def _after_interview(
+    state: DesignGraphState,
+) -> Literal["system_design", "__end__"]:
     if state.get("spec_approved"):
         return "system_design"
+    # Chat turns end here; SessionStore re-enters the node for the next assistant output.
     return "__end__"
 
 
@@ -36,7 +39,10 @@ def build_graph() -> CompiledStateGraph:
     graph.add_conditional_edges(
         "spec_interview",
         _after_interview,
-        {"system_design": "system_design", "__end__": END},
+        {
+            "system_design": "system_design",
+            "__end__": END,
+        },
     )
     graph.add_conditional_edges(
         "system_design",
@@ -45,6 +51,12 @@ def build_graph() -> CompiledStateGraph:
     )
     _compiled = graph.compile(checkpointer=_checkpointer)
     return _compiled
+
+
+def reset_graph() -> None:
+    """Test helper to clear the singleton compiled graph."""
+    global _compiled
+    _compiled = None
 
 
 def initial_state(session_id: str, markdown: str) -> dict[str, Any]:
@@ -58,4 +70,6 @@ def initial_state(session_id: str, markdown: str) -> dict[str, Any]:
         "design_diagram": "",
         "design_justification": "",
         "design_approved": False,
+        "pending_user_feedback": "",
+        "publish_requested": False,
     }

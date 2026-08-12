@@ -10,8 +10,6 @@ from langchain_core.outputs import ChatGeneration, ChatResult
 
 from architect_agent.config import get_settings
 
-from utils.auth import build_http_clients
-
 
 class StubChatModel(BaseChatModel):
     """Deterministic offline model so the architect graph can be exercised without API keys."""
@@ -36,28 +34,9 @@ class StubChatModel(BaseChatModel):
                 "updated_business_spec": _extract_spec(blob)
                 + "\n\n## Interview notes\n- Captured latest user answer.\n"
             }
-        elif "system design node" in lower or "design_diagram" in lower:
-            payload = {
-                "design_diagram": (
-                    "flowchart LR\n"
-                    "  UI[Web UI] --> API[API Gateway]\n"
-                    "  API --> Core[Core Domain Service]\n"
-                    "  Core --> DB[(Database)]\n"
-                    "  Core --> Notify[Notification Worker]"
-                ),
-                "design_justification": (
-                    "### Web UI\nOperator-facing surface for day-to-day work.\n\n"
-                    "### API Gateway\nAuthn/authz and routing edge.\n\n"
-                    "### Core Domain Service\nOwns primary business invariants.\n\n"
-                    "### Database\nSystem of record for domain entities.\n\n"
-                    "### Notification Worker\nAsync outbound notifications; failure is best-effort."
-                ),
-                "assistant_message": (
-                    "Proposed a modular distributed slice. Chat to refine boundaries, "
-                    "or finalize when this matches your intent."
-                ),
-                "style": "distributed",
-            }
+        elif "architect agent's system design node" in lower or '"design_diagram"' in lower:
+            feedback = _latest_feedback(blob)
+            payload = _stub_design_proposal(blob, feedback)
         else:
             ready = turns >= 2 or "actors:" in lower and "out of scope" in lower
             if ready:
@@ -86,6 +65,93 @@ class StubChatModel(BaseChatModel):
         return ChatResult(
             generations=[ChatGeneration(message=AIMessage(content=json.dumps(payload)))]
         )
+
+
+def _latest_feedback(blob: str) -> str:
+    marker = "Latest user feedback to apply now:"
+    if marker in blob:
+        part = blob.split(marker, 1)[1].strip()
+        for stop in ("Return the full", "Respond ONLY"):
+            if stop in part:
+                part = part.split(stop, 1)[0]
+        return part.strip()
+    # Fallback: last USER: line from conversation
+    users = [line.split(":", 1)[1].strip() for line in blob.splitlines() if line.startswith("USER:")]
+    return users[-1] if users else ""
+
+
+def _stub_design_proposal(blob: str, feedback: str) -> dict[str, Any]:
+    lower_fb = feedback.lower()
+    first_draft = "(none" in blob.lower() and "produce first draft" in blob.lower()
+
+    nodes = [
+        ("UI", "Web UI", "Operator-facing surface for day-to-day work."),
+        ("API", "API Gateway", "Authn/authz and routing edge."),
+        ("Core", "Core Domain Service", "Owns primary business invariants."),
+        ("DB", "Database", "System of record for domain entities."),
+        ("Notify", "Notification Worker", "Async outbound notifications; failure is best-effort."),
+    ]
+    edges = [("UI", "API"), ("API", "Core"), ("Core", "DB"), ("Core", "Notify")]
+    changes: list[str] = []
+
+    if "monolith" in lower_fb:
+        nodes = [
+            ("App", "Modular Monolith", "Single deployable with internal domain modules."),
+            ("DB", "Database", "System of record for domain entities."),
+        ]
+        edges = [("App", "DB")]
+        changes.append("Switched to a modular monolith")
+    if "cache" in lower_fb or "redis" in lower_fb:
+        nodes.append(("Cache", "Cache (Redis)", "Low-latency read cache in front of hot paths."))
+        edges.append(("Core", "Cache") if any(n[0] == "Core" for n in nodes) else ("App", "Cache"))
+        changes.append("Added a cache component")
+    if "search" in lower_fb:
+        nodes.append(("Search", "Search Service", "Indexed search over domain records."))
+        edges.append(("API", "Search") if any(n[0] == "API" for n in nodes) else ("App", "Search"))
+        changes.append("Added a search service")
+    if "remove notification" in lower_fb or "drop notify" in lower_fb or "no notification" in lower_fb:
+        nodes = [n for n in nodes if n[0] != "Notify"]
+        edges = [e for e in edges if "Notify" not in e]
+        changes.append("Removed notification worker")
+    if "auth" in lower_fb and "service" in lower_fb:
+        nodes.append(("Auth", "Auth Service", "Identity, sessions, and token issuance."))
+        edges.append(("API", "Auth") if any(n[0] == "API" for n in nodes) else ("App", "Auth"))
+        changes.append("Added a dedicated auth service")
+
+    # Always reflect non-empty freeform feedback in the draft label for visibility.
+    if feedback and not feedback.startswith("(none") and not changes:
+        nodes.append(("Note", "Design Note", f"Incorporated feedback: {feedback[:120]}"))
+        anchor = nodes[0][0]
+        edges.append((anchor, "Note"))
+        changes.append(f"Incorporated feedback: {feedback[:80]}")
+
+    lines = ["flowchart LR"]
+    for key, label, _ in nodes:
+        lines.append(f"  {key}[{label}]")
+    for a, b in edges:
+        lines.append(f"  {a} --> {b}")
+
+    justification = "\n\n".join(f"### {label}\n{desc}" for _, label, desc in nodes)
+    if first_draft and not changes:
+        assistant = (
+            "Here is the first draft of the system design. Chat to refine components, "
+            "boundaries, or style — the diagram will update with each message."
+        )
+        change_text = "Initial draft"
+    else:
+        change_text = "; ".join(changes) if changes else "Refined wording and kept structure"
+        assistant = (
+            f"Updated the design based on your feedback. {change_text}. "
+            "Keep chatting to refine further, or finalize when ready."
+        )
+
+    return {
+        "design_diagram": "\n".join(lines),
+        "design_justification": justification,
+        "assistant_message": assistant,
+        "style": "monolithic" if "monolith" in lower_fb else "distributed",
+        "changes_made": change_text,
+    }
 
 
 def _extract_spec(blob: str) -> str:
@@ -151,7 +217,12 @@ def get_chat_model() -> BaseChatModel:
             )
 
         if settings.aia_gateway_client_id and settings.aia_gateway_client_secret and settings.aia_gateway_base_url:
-            http_client, http_async_client = build_http_clients(settings.aia_gateway_client_id, settings.aia_gateway_client_secret)
+            from architect_agent.utils.auth import build_http_clients
+
+            http_client, http_async_client = build_http_clients(
+                settings.aia_gateway_client_id,
+                settings.aia_gateway_client_secret,
+            )
             return ChatOpenAI(
                 model=model,
                 base_url=settings.aia_gateway_base_url,

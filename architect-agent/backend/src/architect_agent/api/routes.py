@@ -109,10 +109,10 @@ async def download_spec(session_id: str) -> PlainTextResponse:
 async def download_final(session_id: str) -> PlainTextResponse:
     try:
         session = get_store().get(session_id)
-        if not session.design_approved:
+        if not session.design_approved and session.design_version < 1:
             raise HTTPException(
                 status_code=400,
-                detail="Finalize the design (approve on the design node) before downloading.",
+                detail="Approve a design version before downloading the design package.",
             )
         text = get_store().final_design_markdown(session_id)
     except KeyError as exc:
