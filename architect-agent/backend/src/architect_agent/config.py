@@ -31,6 +31,16 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://127.0.0.1:11434"
     llm_temperature: float = 0.3
 
+    # Dell RealLM Proxy
+    reallm_base_url: str | None = None
+    reallm_api_key: str | None = None
+
+    # Dell AIA Gateway
+    aia_gateway_client_id: str | None = None
+    aia_gateway_client_secret: str | None = None
+    aia_gateway_base_url: str | None = None
+
+
     data_dir: Path = BACKEND_ROOT / "data" / "sessions"
     grill_me_skill_path: Path = AGENT_ROOT / "skills" / "grill-me" / "SKILL.md"
     static_dir: Path = STATIC_DIR

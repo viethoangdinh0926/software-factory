@@ -10,6 +10,8 @@ from langchain_core.outputs import ChatGeneration, ChatResult
 
 from architect_agent.config import get_settings
 
+from utils.auth import build_http_clients
+
 
 class StubChatModel(BaseChatModel):
     """Deterministic offline model so the architect graph can be exercised without API keys."""
@@ -132,41 +134,61 @@ def get_chat_model() -> BaseChatModel:
     model = settings.llm_model
     temperature = settings.llm_temperature
 
+    if not model:
+        raise ValueError("LLM_MODEL is required in .env")
+
     if provider == "stub":
         return StubChatModel()
 
     if provider == "openai":
         from langchain_openai import ChatOpenAI
 
-        if not settings.openai_api_key:
-            raise RuntimeError(
-                "LLM_PROVIDER=openai requires OPENAI_API_KEY in .env "
-                "(or set LLM_PROVIDER=stub / ollama)."
+        if settings.openai_api_key:
+            return ChatOpenAI(
+                model=model,
+                api_key=settings.openai_api_key,
+                temperature=temperature,
             )
-        return ChatOpenAI(
-            model=model,
-            api_key=settings.openai_api_key,
-            temperature=temperature,
-        )
+
+        if settings.aia_gateway_client_id and settings.aia_gateway_client_secret and settings.aia_gateway_base_url:
+            http_client, http_async_client = build_http_clients(settings.aia_gateway_client_id, settings.aia_gateway_client_secret)
+            return ChatOpenAI(
+                model=model,
+                base_url=settings.aia_gateway_base_url,
+                temperature=settings.llm_temperature,
+                request_timeout=120,
+                http_client=http_client,
+                http_async_client=http_async_client
+            )
 
     if provider == "anthropic":
         from langchain_anthropic import ChatAnthropic
 
-        if not settings.anthropic_api_key:
-            raise RuntimeError("LLM_PROVIDER=anthropic requires ANTHROPIC_API_KEY in .env")
-        return ChatAnthropic(
-            model=model,
-            api_key=settings.anthropic_api_key,
-            temperature=temperature,
-        )
+        if settings.anthropic_api_key:
+            return ChatAnthropic(
+                model=model,
+                api_key=settings.anthropic_api_key,
+                temperature=temperature,
+            )
+        
 
     if provider == "ollama":
         from langchain_ollama import ChatOllama
 
-        return ChatOllama(
+        if settings.ollama_base_url:
+            return ChatOllama(
+                model=model,
+                base_url=settings.ollama_base_url,
+                temperature=temperature,
+            )
+
+    if settings.reallm_base_url and settings.reallm_api_key:
+        from langchain_openai import ChatOpenAI
+        return ChatOpenAI(
             model=model,
-            base_url=settings.ollama_base_url,
+            base_url=settings.reallm_base_url,
+            api_key=settings.reallm_api_key,
             temperature=temperature,
         )
 
-    raise RuntimeError(f"Unsupported LLM_PROVIDER: {provider}")
+    raise RuntimeError("Failed to initialize LLM client")
