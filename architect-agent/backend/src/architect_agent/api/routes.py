@@ -105,6 +105,25 @@ async def download_spec(session_id: str) -> PlainTextResponse:
     )
 
 
+@router.get("/api/sessions/{session_id}/download/market-evaluation")
+async def download_market_evaluation(session_id: str) -> PlainTextResponse:
+    try:
+        text = get_store().market_evaluation_markdown(session_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Unknown design session") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return PlainTextResponse(
+        text,
+        media_type="text/markdown; charset=utf-8",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="market-evaluation-{session_id}.md"'
+            )
+        },
+    )
+
+
 @router.get("/api/sessions/{session_id}/download/final")
 async def download_final(session_id: str) -> PlainTextResponse:
     try:

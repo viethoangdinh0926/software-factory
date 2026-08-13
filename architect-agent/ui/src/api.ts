@@ -24,6 +24,9 @@ export type DesignSession = {
   business_spec: string;
   design_diagram: string;
   design_justification: string;
+  market_evaluation_report: string;
+  market_evaluation_grade: string;
+  market_evaluation_done: boolean;
   messages: ChatMessage[];
   ui_path: string;
   updated_at: string;
@@ -81,6 +84,10 @@ export async function approve(sessionId: string): Promise<DesignSession> {
 
 export function specDownloadUrl(sessionId: string): string {
   return `/api/sessions/${sessionId}/download/spec`;
+}
+
+export function marketEvaluationDownloadUrl(sessionId: string): string {
+  return `/api/sessions/${sessionId}/download/market-evaluation`;
 }
 
 export function finalDownloadUrl(sessionId: string): string {

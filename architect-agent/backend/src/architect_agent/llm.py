@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from functools import lru_cache
 from typing import Any
 
@@ -29,42 +30,133 @@ class StubChatModel(BaseChatModel):
         lower = blob.lower()
         turns = blob.count("User answer:") + blob.count("USER:")
 
-        if "update the business specification" in lower or "from one interview answer" in lower:
+        if "compress a living business specification" in lower or "spec to compress:" in lower:
+            payload = {"updated_business_spec": _compact_spec_stub(blob)}
+        elif "compress a system-design justification" in lower or "justification to compress:" in lower:
+            payload = {"design_justification": _compact_justification_stub(blob)}
+        elif "plan web searches" in lower or '"queries"' in lower and "alternatives" in lower:
             payload = {
-                "updated_business_spec": _extract_spec(blob)
-                + "\n\n## Interview notes\n- Captured latest user answer.\n"
+                "queries": [
+                    "warehouse inventory management software alternatives",
+                    "open source WMS competitors",
+                    "build vs buy inventory tracking SaaS",
+                ]
             }
+        elif "market evaluator" in lower or "market evaluation report" in lower:
+            payload = _stub_market_evaluation(blob)
+        elif "update the living business specification" in lower or (
+            "update the business specification" in lower or "from one interview answer" in lower
+        ):
+            # Merge without growing an unbounded interview-notes appendix.
+            payload = {"updated_business_spec": _fold_answer_stub(blob)}
         elif "architect agent's system design node" in lower or '"design_diagram"' in lower:
             feedback = _latest_feedback(blob)
             payload = _stub_design_proposal(blob, feedback)
         else:
-            ready = turns >= 2 or "actors:" in lower and "out of scope" in lower
-            if ready:
+            asked_block = ""
+            if "Already asked question titles" in blob:
+                asked_block = blob.split("Already asked question titles", 1)[1]
+                asked_block = asked_block.split("Uncovered checklist", 1)[0]
+            asked_lower = asked_block.lower()
+
+            questions = [
+                (
+                    "primary actors",
+                    "❓ **Primary actors**: Who uses this system day-to-day, and what job are they hiring it to do?\n\n➡️ (Recommended) Name 1–2 concrete roles with a single primary job each.",
+                ),
+                (
+                    "critical invariants",
+                    "❓ **Critical invariants**: What must never go wrong (money, safety, compliance, trust)?\n\n➡️ (Recommended) List the top 1–3 invariants in plain language.",
+                ),
+                (
+                    "v1 scope",
+                    "❓ **V1 scope**: What 3 capabilities must ship in v1 for the primary job to succeed?\n\n➡️ (Recommended) List three user-visible capabilities, not infrastructure.",
+                ),
+                (
+                    "out of scope",
+                    "❓ **Out of scope / non-goals**: What will you explicitly NOT build in v1?\n\n➡️ (Recommended) Name 2–3 tempting features that are deferred on purpose.",
+                ),
+            ]
+            chosen = next((text for key, text in questions if key not in asked_lower), None)
+            asked_count = sum(1 for key, _ in questions if key in asked_lower)
+            if chosen is None or asked_count >= 3 or turns >= 3:
                 payload = {
                     "ready_for_design": True,
                     "updated_business_spec": _rich_spec(blob),
                     "assistant_message": (
                         "The readiness checklist looks covered. You can keep adding detail, "
-                        "or approve to move into system design."
+                        "or approve to move into market evaluation and system design."
                     ),
-                    "rationale": "Actors, scope, invariants, and non-goals are present.",
+                    "topic_id": "ready",
+                    "rationale": "Checklist covered.",
                 }
             else:
-                questions = [
-                    "❓ **Primary actors**: Who uses this system day-to-day, and what job are they hiring it to do?\n\n➡️ (Recommended) Name 1–2 concrete roles with a single primary job each.",
-                    "❓ **Critical invariants**: What must never go wrong (money, safety, compliance, trust)?\n\n➡️ (Recommended) List the top 1–3 invariants in plain language.",
-                    "❓ **V1 scope vs non-goals**: What is explicitly in v1, and what is out?\n\n➡️ (Recommended) 3 in-scope capabilities and 2 explicit non-goals.",
-                ]
                 payload = {
                     "ready_for_design": False,
                     "updated_business_spec": _rich_spec(blob),
-                    "assistant_message": questions[min(turns, len(questions) - 1)],
+                    "assistant_message": chosen,
+                    "topic_id": "next",
                     "rationale": "Need more crisp decisions before design.",
                 }
 
         return ChatResult(
             generations=[ChatGeneration(message=AIMessage(content=json.dumps(payload)))]
         )
+
+
+def _stub_market_evaluation(blob: str) -> dict[str, Any]:
+    return {
+        "grade": "B",
+        "grade_rationale": (
+            "Clear problem framing with room to differentiate on workflow fit; "
+            "several credible off-the-shelf alternatives exist."
+        ),
+        "summary": (
+            "Solid niche idea. Prefer buying if your needs match a category leader; "
+            "build when your workflow, data model, or compliance rules are the product."
+        ),
+        "report_markdown": (
+            "# Market Evaluation Report\n\n"
+            "## Idea grade\n\n"
+            "**B** — Clear problem with credible alternatives; differentiation depends on "
+            "workflow depth and constraints.\n\n"
+            "## Executive summary\n\n"
+            "Your approved specification describes a practical operational system. "
+            "Popular SaaS and open-source options can cover generic create/read/update and "
+            "reporting needs. Building your own is justified when invariants, offline needs, "
+            "or domain rules are a durable advantage.\n\n"
+            "## Popular alternatives found\n\n"
+            "- [Open-source alternative](https://example.com/open-source-alternative) — "
+            "extensible core workflows; more integration work.\n"
+            "- [SaaS category leader](https://example.com/saas-leader) — fast time-to-value; "
+            "weaker deep customization.\n"
+            "- [Build-vs-buy notes](https://example.com/build-vs-buy) — buy undifferentiated "
+            "capability; build strategic workflow.\n\n"
+            "## Comparison vs your spec\n\n"
+            "Alternatives typically win on speed and ecosystem. Your spec wins if critical "
+            "invariants, actor jobs, or offline/lot-tracking rules are stricter than commodity tools.\n\n"
+            "## When you should use an existing alternative\n\n"
+            "- Needs map cleanly to a common category product\n"
+            "- Time-to-value and ops cost dominate\n"
+            "- Differentiation is not in the core workflow engine\n\n"
+            "## When you should build your own\n\n"
+            "- Spec invariants are product-defining\n"
+            "- Existing tools force painful workarounds for primary actors\n"
+            "- Data model / compliance constraints are unique and durable\n\n"
+            "## Risks if you build\n\n"
+            "- Longer path to a trustworthy v1\n"
+            "- Ongoing ownership of undifferentiated features\n"
+            "- Competition from cheaper packaged tools\n\n"
+            "## Recommended next step\n\n"
+            "If building, proceed to system design with explicit non-goals that commodity tools "
+            "already cover. If buying, shortlist 2 alternatives and prove fit against your "
+            "invariants checklist.\n\n"
+            "## Sources\n\n"
+            "- https://example.com/open-source-alternative\n"
+            "- https://example.com/saas-leader\n"
+            "- https://example.com/build-vs-buy\n"
+        ),
+    }
 
 
 def _latest_feedback(blob: str) -> str:
@@ -78,6 +170,54 @@ def _latest_feedback(blob: str) -> str:
     # Fallback: last USER: line from conversation
     users = [line.split(":", 1)[1].strip() for line in blob.splitlines() if line.startswith("USER:")]
     return users[-1] if users else ""
+
+
+def _fold_answer_stub(blob: str) -> str:
+    spec = _extract_spec(blob)
+    answer = ""
+    if "User answer:" in blob:
+        answer = blob.split("User answer:", 1)[1].strip()
+        for stop in ("Respond ONLY", "Return JSON", "Spec to compress"):
+            if stop in answer:
+                answer = answer.split(stop, 1)[0].strip()
+    if not answer:
+        return _rich_spec(blob if "## Problem" not in spec else spec)
+    # Keep a single rolling decision line instead of appending forever.
+    line = f"- Latest clarified decision: {answer[:180]}"
+    if "## Goals" in spec:
+        if "Latest clarified decision:" in spec:
+            return re.sub(
+                r"- Latest clarified decision:.*",
+                line,
+                spec,
+                count=1,
+            )
+        return spec.replace("## Goals", f"## Goals\n{line}\n", 1)
+    return spec.rstrip() + f"\n\n## Goals\n{line}\n"
+
+
+def _compact_spec_stub(blob: str) -> str:
+    spec = blob
+    if "Spec to compress:" in blob:
+        spec = blob.split("Spec to compress:", 1)[1].strip()
+    # Drop repeated interview-notes style appendices and keep structured core.
+    cleaned = re.sub(r"\n## Interview notes[\s\S]*?(?=\n## |\Z)", "\n", spec)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+    if estimate := len(cleaned):
+        # Deterministic shrink: keep head sections if absurdly long.
+        if estimate > 12000:
+            cleaned = cleaned[:8000].rstrip() + "\n"
+    return cleaned or _rich_spec(blob)
+
+
+def _compact_justification_stub(blob: str) -> str:
+    text = blob
+    if "Justification to compress:" in blob:
+        text = blob.split("Justification to compress:", 1)[1].strip()
+    sections = re.findall(r"(### [^\n]+\n[^\n]+)", text)
+    if sections:
+        return "\n\n".join(sections[:12])
+    return text[:4000]
 
 
 def _stub_design_proposal(blob: str, feedback: str) -> dict[str, Any]:

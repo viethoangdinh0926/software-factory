@@ -8,7 +8,7 @@ from typing_extensions import NotRequired
 class ChatTurn(TypedDict):
     role: Literal["assistant", "user", "system"]
     content: str
-    node: Literal["spec_interview", "system_design"]
+    node: Literal["spec_interview", "system_design", "market_research"]
 
 
 def _merge_spec(left: str | None, right: str | None) -> str:
@@ -30,11 +30,17 @@ def _replace_str(left: str | None, right: str | None) -> str:
     return right
 
 
+def _replace_bool(left: bool | None, right: bool | None) -> bool:
+    if right is None:
+        return bool(left)
+    return bool(right)
+
+
 class DesignGraphState(TypedDict):
     session_id: str
     business_spec: Annotated[str, _merge_spec]
     messages: Annotated[list[ChatTurn], _append_messages]
-    phase: Literal["spec_interview", "system_design", "done"]
+    phase: Literal["spec_interview", "market_research", "system_design", "done"]
     ready_for_design: bool
     spec_approved: bool
     design_diagram: Annotated[str, _replace_str]
@@ -44,3 +50,6 @@ class DesignGraphState(TypedDict):
     publish_requested: bool
     pending_assistant_message: NotRequired[str]
     last_interrupt: NotRequired[dict[str, Any]]
+    market_evaluation_report: Annotated[str, _replace_str]
+    market_evaluation_grade: Annotated[str, _replace_str]
+    market_evaluation_done: Annotated[bool, _replace_bool]

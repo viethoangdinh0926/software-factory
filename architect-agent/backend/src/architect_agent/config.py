@@ -45,6 +45,20 @@ class Settings(BaseSettings):
     grill_me_skill_path: Path = AGENT_ROOT / "skills" / "grill-me" / "SKILL.md"
     static_dir: Path = STATIC_DIR
 
+    # Context-window budgets for long interview / design sessions (approx tokens).
+    context_history_max_tokens: int = 1800
+    context_history_max_turns: int = 12
+    context_spec_soft_tokens: int = 5500
+    context_spec_hard_tokens: int = 9000
+    context_spec_compact_target_tokens: int = 4000
+    context_justification_soft_tokens: int = 3500
+    context_justification_hard_tokens: int = 6000
+    context_justification_compact_target_tokens: int = 2500
+
+    # Market evaluation after first spec approval (web search via DuckDuckGo).
+    # Disabled automatically for LLM_PROVIDER=stub; set false to force offline stubs.
+    market_research_web_enabled: bool = True
+
     # Downstream A2A peer (Software System Manager) — optional until that agent exists
     system_manager_agent_url: str | None = None
 
