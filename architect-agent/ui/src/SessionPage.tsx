@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { Link, useParams } from "react-router-dom";
 import mermaid from "mermaid";
 import {
@@ -79,7 +79,7 @@ export function SessionPage() {
   async function onChat(e: FormEvent) {
     e.preventDefault();
     const text = message.trim();
-    if (!text || chatBusy) return;
+    if (!text || chatBusy || approveBusy) return;
     setChatBusy(true);
     setPendingUserText(text);
     setMessage("");
@@ -95,6 +95,13 @@ export function SessionPage() {
     } finally {
       setChatBusy(false);
     }
+  }
+
+  function onComposerKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
+    if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing) return;
+    e.preventDefault();
+    if (chatBusy || approveBusy || !message.trim()) return;
+    e.currentTarget.form?.requestSubmit();
   }
 
   async function onApprove() {
@@ -281,9 +288,12 @@ export function SessionPage() {
                 rows={3}
                 value={message}
                 onChange={(e) => setMessage(e.target.value)}
+                onKeyDown={onComposerKeyDown}
                 placeholder={chatPlaceholder}
                 disabled={chatBusy || approveBusy}
                 required
+                aria-keyshortcuts="Enter Shift+Enter"
+                title="Enter to send · Shift+Enter for a new line"
               />
               <button
                 className="btn primary"
