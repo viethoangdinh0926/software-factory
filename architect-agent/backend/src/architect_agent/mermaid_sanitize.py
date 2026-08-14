@@ -15,6 +15,42 @@ _SPECIAL_RE = re.compile(r"[()[\]{}|/\\@#%&=+]")
 _STYLE_LINE_RE = re.compile(r"^(\s*style\s+\S+\s+)(.+)$", re.IGNORECASE)
 _CLASSDEF_LINE_RE = re.compile(r"^(\s*classDef\s+\S+\s+)(.+)$", re.IGNORECASE)
 _FILL_RE = re.compile(r"(?:^|,)\s*fill\s*:\s*(#[0-9a-fA-F]{3,8}|[a-zA-Z]+)")
+_NODE_ID_RE = re.compile(r"\b([A-Za-z][\w-]*)\s*(?:\[|\{|\()")
+_STYLE_PARSE_RE = re.compile(r"^\s*style\s+(\S+)\s+(.+)$", re.IGNORECASE)
+_KEYWORD_IDS = {
+    "graph",
+    "flowchart",
+    "subgraph",
+    "end",
+    "style",
+    "classdef",
+    "class",
+    "click",
+    "linkstyle",
+    "direction",
+    "td",
+    "tb",
+    "bt",
+    "rl",
+    "lr",
+}
+
+# Light, hue-distinct fills that stay readable with black bold labels.
+NODE_FILL_PALETTE: tuple[str, ...] = (
+    "#b8d4f0",  # sky
+    "#c8f0d8",  # mint
+    "#ffe2b8",  # peach
+    "#e2d0ff",  # lavender
+    "#ffd0d8",  # rose
+    "#d8f0f0",  # aqua
+    "#fff0a8",  # butter
+    "#d0e8ff",  # ice
+    "#e8f0c8",  # lime
+    "#f0d8e8",  # orchid
+    "#c8e8e0",  # seafoam
+    "#ffe8cc",  # apricot
+)
+
 _NAMED_COLORS: dict[str, tuple[int, int, int]] = {
     "white": (255, 255, 255),
     "black": (0, 0, 0),
@@ -30,7 +66,7 @@ _NAMED_COLORS: dict[str, tuple[int, int, int]] = {
 
 
 def sanitize_mermaid(raw: str) -> str:
-    """Quote Mermaid labels and ensure style fills get contrasting text colors."""
+    """Quote Mermaid labels, contrast fills, and assign distinct node colors."""
     source = raw.strip()
     if not source:
         return source
@@ -50,7 +86,7 @@ def sanitize_mermaid(raw: str) -> str:
     source = "\n".join(
         _rewrite_classdef_contrast(_rewrite_style_contrast(line)) for line in source.splitlines()
     )
-    return source
+    return _ensure_distinct_node_styles(source)
 
 
 def _needs_quotes(label: str) -> bool:
@@ -123,16 +159,78 @@ def _normalize_fill_props(raw_props: str) -> str:
 def _ensure_light_fill(fill: str) -> str:
     rgb = _parse_css_color(fill)
     if rgb is None:
-        return "#b8d4f0"
+        return NODE_FILL_PALETTE[0]
     if _relative_luminance(rgb) >= 0.55:
         return _to_hex(rgb)
-    # Dark fills → light tint of same hue so black text stays readable.
+    # Milder wash so distinct hues stay distinguishable.
     lightened = (
-        int(round(rgb[0] + (255 - rgb[0]) * 0.72)),
-        int(round(rgb[1] + (255 - rgb[1]) * 0.72)),
-        int(round(rgb[2] + (255 - rgb[2]) * 0.72)),
+        int(round(rgb[0] + (255 - rgb[0]) * 0.55)),
+        int(round(rgb[1] + (255 - rgb[1]) * 0.55)),
+        int(round(rgb[2] + (255 - rgb[2]) * 0.55)),
     )
+    if _relative_luminance(lightened) < 0.55:
+        lightened = (
+            int(round(rgb[0] + (255 - rgb[0]) * 0.7)),
+            int(round(rgb[1] + (255 - rgb[1]) * 0.7)),
+            int(round(rgb[2] + (255 - rgb[2]) * 0.7)),
+        )
     return _to_hex(lightened)
+
+
+def _ensure_distinct_node_styles(source: str) -> str:
+    node_ids = _collect_node_ids(source)
+    if not node_ids:
+        return source
+
+    style_by_id: dict[str, str] = {}
+    other_lines: list[str] = []
+    for line in source.splitlines():
+        match = _STYLE_PARSE_RE.match(line)
+        if match:
+            style_by_id[match.group(1)] = match.group(2).strip()
+        else:
+            other_lines.append(line)
+
+    unique_fills: set[str] = set()
+    for props in style_by_id.values():
+        fill_match = _FILL_RE.search(props)
+        if fill_match:
+            unique_fills.add(fill_match.group(1).lower())
+
+    recolor_all = len(style_by_id) == 0 or (len(style_by_id) > 1 and len(unique_fills) <= 1)
+
+    style_lines: list[str] = []
+    for index, node_id in enumerate(node_ids):
+        existing = style_by_id.get(node_id)
+        if existing and not recolor_all:
+            style_lines.append(f"style {node_id} {existing}")
+            continue
+        fill = NODE_FILL_PALETTE[index % len(NODE_FILL_PALETTE)]
+        style_lines.append(
+            f"style {node_id} fill:{fill},stroke:#4a5a70,color:#000000,font-weight:bold"
+        )
+
+    for node_id, props in style_by_id.items():
+        if node_id not in node_ids:
+            style_lines.append(f"style {node_id} {props}")
+
+    body = "\n".join(other_lines).rstrip("\n")
+    return f"{body}\n" + "\n".join(style_lines)
+
+
+def _collect_node_ids(source: str) -> list[str]:
+    # Ignore quoted label text so words like "Agent (" inside labels are not nodes.
+    scrubbed = re.sub(r'"[^"\n]*"', '""', source)
+    ids: list[str] = []
+    seen: set[str] = set()
+    for match in _NODE_ID_RE.finditer(scrubbed):
+        node_id = match.group(1)
+        lower = node_id.lower()
+        if lower in _KEYWORD_IDS or lower in seen:
+            continue
+        seen.add(lower)
+        ids.append(node_id)
+    return ids
 
 
 def _relative_luminance(rgb: tuple[int, int, int]) -> float:

@@ -75,9 +75,12 @@ def system_design_node(state: DesignGraphState) -> dict[str, Any]:
             '  wrap the label in double quotes, e.g. B{"Agent (LLM)"} or A -->|"sync / async"| B.\n'
             "- Never put unquoted (...) inside [], {}, or () shape delimiters.\n"
             "- Keep node IDs short alphanumeric (A, B, ApiGateway).\n"
-            "- Use light style fills with black bold text, e.g.\n"
-            "  style A fill:#b8d4f0,stroke:#4a6a8a,color:#000000\n"
-            "  Avoid dark fills — labels must stay black and readable."
+            "- Use a *different* light fill for each node from this palette:\n"
+            "  #b8d4f0, #c8f0d8, #ffe2b8, #e2d0ff, #ffd0d8, #d8f0f0, #fff0a8, #d0e8ff\n"
+            "  Example: style A fill:#b8d4f0,stroke:#4a5a70,color:#000000\n"
+            "  Example: style B fill:#c8f0d8,stroke:#4a5a70,color:#000000\n"
+            "  Avoid dark fills — labels must stay black and readable.\n"
+            "  Always emit one style line per node."
         ),
         user=(
             f"{mode}\n\n"
