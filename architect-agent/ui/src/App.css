@@ -13,7 +13,9 @@
 .atmosphere {
   position: fixed;
   inset: 0;
-  z-index: 0;
+  /* Must stay behind in-flow UI. z-index:0 painted over header/approve (clicks still
+     hit them via pointer-events:none), crushing the cyan Approve into the dark veil. */
+  z-index: -1;
   pointer-events: none;
   background:
     radial-gradient(ellipse 70% 50% at 12% -10%, rgba(61, 184, 255, 0.22), transparent 55%),
@@ -45,11 +47,14 @@
 }
 
 .top {
+  position: relative;
+  z-index: 1;
   display: flex;
   justify-content: space-between;
   gap: 1.25rem;
   align-items: flex-start;
-  margin-bottom: 1.35rem;
+  margin-bottom: 0.85rem;
+  flex-wrap: wrap;
 }
 
 .home-hero {
@@ -59,6 +64,36 @@
 
 .top-copy {
   min-width: 0;
+  flex: 1 1 18rem;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: flex-end;
+  max-width: 100%;
+}
+
+/* Full-width row so Approve cannot be clipped by header action overflow. */
+.approve-bar {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  justify-content: flex-start;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  margin: 0 0 1.1rem;
+}
+
+.approve-btn {
+  flex: 1 1 auto;
+  max-width: 28rem;
+  min-width: 14rem;
+  min-height: 2.75rem;
+  justify-content: center;
+  font-size: 1rem;
 }
 
 .brand {
@@ -152,6 +187,7 @@ h1 {
   background-color: rgba(255, 255, 255, 0.06);
   background-image: none;
   color: var(--ink);
+  -webkit-text-fill-color: var(--ink);
   border-radius: 0.65rem;
   padding: 0.58rem 0.95rem;
   cursor: pointer;
@@ -161,56 +197,103 @@ h1 {
   justify-content: center;
   font: inherit;
   line-height: 1.2;
+  opacity: 1;
+  visibility: visible;
   transition:
     border-color 0.18s ease,
     background-color 0.18s ease,
-    background-image 0.18s ease,
     transform 0.18s ease,
     box-shadow 0.18s ease,
     filter 0.18s ease,
     opacity 0.18s ease;
 }
 
-.btn:hover:not(:disabled) {
+.btn:hover:not(:disabled):not(.primary) {
   border-color: var(--line-strong);
   background-color: rgba(255, 255, 255, 0.1);
   transform: translateY(-1px);
 }
 
+/* Solid fills only — avoid gradient/shorthand that some engines drop until hover. */
 .btn.primary {
-  background-color: var(--accent);
-  background-image: linear-gradient(135deg, var(--accent) 0%, var(--accent-deep) 100%);
-  border-color: color-mix(in srgb, var(--accent) 70%, white 10%);
+  background-color: #3db8ff;
+  background-image: none;
+  border-color: #9fd9ff;
   color: #041018;
-  font-weight: 600;
+  -webkit-text-fill-color: #041018;
+  font-weight: 700;
+  opacity: 1;
+  visibility: visible;
   box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent),
-    0 10px 28px -12px var(--glow);
+    0 0 0 1px rgba(61, 184, 255, 0.45),
+    0 10px 28px -12px rgba(61, 184, 255, 0.55);
 }
 
-.btn.primary:hover:not(:disabled) {
-  background-color: var(--accent);
-  background-image: linear-gradient(135deg, #5ec4ff 0%, var(--accent) 100%);
-  border-color: color-mix(in srgb, var(--accent) 80%, white 20%);
+.btn.primary:hover:not(:disabled),
+.btn.primary:focus-visible:not(:disabled) {
+  background-color: #6ec9ff;
+  background-image: none;
+  border-color: #c9ecff;
   color: #041018;
+  -webkit-text-fill-color: #041018;
   filter: none;
+  transform: translateY(-1px);
+  opacity: 1;
 }
 
-.btn.primary:disabled,
 .btn:disabled {
-  opacity: 0.5;
   cursor: not-allowed;
   transform: none;
   filter: none;
 }
 
 .btn.primary:disabled {
-  /* Keep the filled look recognizable while disabled, not a nearly invisible chip. */
-  opacity: 0.55;
-  background-color: color-mix(in srgb, var(--accent) 55%, #102038);
+  background-color: #2a4f73;
   background-image: none;
-  color: color-mix(in srgb, #041018 70%, #e8eef8);
+  border-color: #4a6a8a;
+  color: #c5d4e8;
+  -webkit-text-fill-color: #c5d4e8;
   box-shadow: none;
+  opacity: 1;
+  cursor: not-allowed;
+}
+
+/* Approve control: highest-specificity solid paint so it never vanishes when enabled. */
+.approve-btn.btn.primary,
+button.approve-btn {
+  background-color: #3db8ff !important;
+  background-image: none !important;
+  border: 2px solid #9fd9ff !important;
+  color: #041018 !important;
+  -webkit-text-fill-color: #041018 !important;
+  opacity: 1 !important;
+  visibility: visible !important;
+  filter: none !important;
+  mix-blend-mode: normal !important;
+  box-shadow:
+    0 0 0 1px rgba(61, 184, 255, 0.35),
+    0 12px 28px -10px rgba(61, 184, 255, 0.65) !important;
+}
+
+.approve-btn.btn.primary:hover:not(:disabled),
+.approve-btn.btn.primary:focus-visible:not(:disabled),
+button.approve-btn:hover:not(:disabled) {
+  background-color: #6ec9ff !important;
+  color: #041018 !important;
+  -webkit-text-fill-color: #041018 !important;
+  border-color: #c9ecff !important;
+}
+
+.approve-btn.btn.primary:disabled,
+button.approve-btn:disabled {
+  background-color: #2a4f73 !important;
+  background-image: none !important;
+  border-color: #4a6a8a !important;
+  color: #c5d4e8 !important;
+  -webkit-text-fill-color: #c5d4e8 !important;
+  opacity: 1 !important;
+  visibility: visible !important;
+  box-shadow: none !important;
 }
 
 .btn.ghost {
@@ -225,9 +308,73 @@ h1 {
   animation: rise-in 0.6s ease-out 0.08s both;
 }
 
+.session-app {
+  max-width: 1400px;
+}
+
+.session-grid {
+  align-items: stretch;
+}
+
+.session-grid .chat-panel,
+.session-grid .view-panel {
+  min-height: 0;
+  max-height: calc(100vh - 11rem);
+  height: calc(100vh - 11rem);
+}
+
+.session-grid .chat-panel {
+  overflow: hidden;
+}
+
+.session-grid .chat-panel .messages {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.session-grid .chat-panel .composer,
+.session-grid .chat-panel .finalize-note {
+  flex-shrink: 0;
+}
+
+.session-grid .diagram-panel {
+  grid-column: 1 / -1;
+  min-height: 0;
+  max-height: none;
+  height: auto;
+  overflow: visible;
+}
+
+.session-grid .diagram-panel .diagram,
+.session-grid .diagram-panel .diagram-interactive {
+  flex: 0 0 auto;
+  min-height: 0;
+}
+
+.session-grid .diagram-panel .diagram-canvas {
+  /* Absolute SVG does not contribute height; size the viewport explicitly and
+     do not flex-shrink inside a short parent. */
+  flex: 0 0 auto;
+  height: min(78vh, 860px);
+  min-height: 560px;
+  max-height: none;
+}
+
 @media (max-width: 960px) {
   .grid {
     grid-template-columns: 1fr;
+  }
+
+  .session-grid .chat-panel,
+  .session-grid .view-panel {
+    height: auto;
+    max-height: min(70vh, 640px);
+  }
+
+  .session-grid .diagram-panel {
+    grid-column: 1;
   }
 
   .top {
@@ -452,8 +599,8 @@ textarea::placeholder {
   flex-direction: column;
   gap: 0.55rem;
   padding: 0.65rem 0.75rem 0.75rem;
-  min-height: 280px;
-  overflow: hidden;
+  min-height: 0;
+  overflow: visible;
 }
 
 .diagram-toolbar {
@@ -477,9 +624,11 @@ textarea::placeholder {
 }
 
 .diagram-canvas {
-  flex: 1;
-  min-height: 240px;
-  max-height: 52vh;
+  position: relative;
+  flex: 0 0 auto;
+  height: min(78vh, 860px);
+  min-height: 560px;
+  max-height: none;
   overflow: hidden;
   border: 1px solid rgba(142, 168, 196, 0.22);
   border-radius: 0.55rem;
@@ -494,10 +643,13 @@ textarea::placeholder {
 }
 
 .diagram-canvas svg {
-  width: 100%;
-  height: 100%;
+  position: absolute;
+  inset: 0;
+  width: 100% !important;
+  height: 100% !important;
+  max-width: none !important;
   display: block;
-  max-width: none;
+  overflow: visible;
 }
 
 .diagram-movable {

@@ -105,8 +105,12 @@ export function MermaidDiagram({ source }: Props) {
 
         svgEl.removeAttribute("width");
         svgEl.removeAttribute("height");
+        // Mermaid inlines max-width to the diagram's intrinsic size; that caps the SVG
+        // at ~half the full-width panel and clips (swallows) nodes dragged past it.
+        svgEl.style.maxWidth = "none";
         svgEl.style.width = "100%";
         svgEl.style.height = "100%";
+        svgEl.setAttribute("overflow", "visible");
         svgEl.setAttribute("preserveAspectRatio", "xMidYMid meet");
 
         const scene = document.createElementNS("http://www.w3.org/2000/svg", "g");

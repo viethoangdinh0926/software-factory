@@ -218,20 +218,23 @@ export function SessionPage() {
               Download package
             </a>
           ) : null}
-          <button
-            className="btn primary"
-            type="button"
-            disabled={!canApprove || session.finalized || approveBusy || chatBusy}
-            onClick={onApprove}
-          >
-            {approveLabel}
-          </button>
         </div>
       </header>
 
+      <div className="approve-bar">
+        <button
+          className="btn primary approve-btn"
+          type="button"
+          disabled={!canApprove || session.finalized || approveBusy || chatBusy}
+          onClick={onApprove}
+        >
+          {approveLabel}
+        </button>
+      </div>
+
       {error ? <p className="error banner">{error}</p> : null}
 
-      <main className="grid">
+      <main className="grid session-grid">
         <section className="panel chat-panel">
           <div className="panel-head">
             <h2>{nodeTitle}</h2>
@@ -317,24 +320,25 @@ export function SessionPage() {
             </div>
           ) : null}
           {inDesign ? (
-            <>
-              <div className="artifact">
-                <div className="panel-head">
-                  <h2>System design diagram</h2>
-                  <span className="panel-kicker">Diagram</span>
-                </div>
-                <MermaidDiagram source={session.design_diagram} />
+            <div className="artifact">
+              <div className="panel-head">
+                <h2>Justification</h2>
+                <span className="panel-kicker">Rationale</span>
               </div>
-              <div className="artifact">
-                <div className="panel-head">
-                  <h2>Justification</h2>
-                  <span className="panel-kicker">Rationale</span>
-                </div>
-                <MarkdownView content={session.design_justification} className="doc" />
-              </div>
-            </>
+              <MarkdownView content={session.design_justification} className="doc" />
+            </div>
           ) : null}
         </section>
+
+        {inDesign ? (
+          <section className="panel diagram-panel">
+            <div className="panel-head">
+              <h2>System design diagram</h2>
+              <span className="panel-kicker">Diagram</span>
+            </div>
+            <MermaidDiagram source={session.design_diagram} />
+          </section>
+        ) : null}
       </main>
     </div>
   );
