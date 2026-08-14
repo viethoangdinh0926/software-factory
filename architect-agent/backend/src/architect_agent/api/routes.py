@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
@@ -7,6 +9,7 @@ from pydantic import BaseModel, Field
 from architect_agent.config import get_settings
 from architect_agent.sessions import get_store
 
+logger = logging.getLogger(__name__)
 router = APIRouter(tags=["design"])
 
 
@@ -75,6 +78,7 @@ async def chat(session_id: str, body: ChatRequest) -> dict:
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Unknown design session") from exc
     except Exception as exc:  # noqa: BLE001
+        logger.exception("Chat failed for session %s", session_id)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     return session.to_public()
 

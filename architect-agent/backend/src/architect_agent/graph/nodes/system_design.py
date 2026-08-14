@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import json
-import re
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -13,21 +11,9 @@ from architect_agent.context_budget import (
     maybe_compact_design_justification,
 )
 from architect_agent.graph.state import DesignGraphState
+from architect_agent.json_util import coerce_diagram_text, parse_llm_json_object
 from architect_agent.llm import get_chat_model
 from architect_agent.mermaid_sanitize import sanitize_mermaid
-
-_JSON_RE = re.compile(r"\{[\s\S]*\}")
-
-
-def _parse_json(text: str) -> dict[str, Any]:
-    text = text.strip()
-    if text.startswith("```"):
-        text = re.sub(r"^```(?:json)?\s*", "", text)
-        text = re.sub(r"\s*```$", "", text)
-    match = _JSON_RE.search(text)
-    if not match:
-        raise ValueError(f"Expected JSON object in model response: {text[:400]}")
-    return json.loads(match.group(0))
 
 
 def _invoke_json(system: str, user: str) -> dict[str, Any]:
@@ -40,7 +26,7 @@ def _invoke_json(system: str, user: str) -> dict[str, Any]:
         content = "".join(
             block.get("text", "") if isinstance(block, dict) else str(block) for block in content
         )
-    return _parse_json(str(content))
+    return parse_llm_json_object(str(content))
 
 
 def system_design_node(state: DesignGraphState) -> dict[str, Any]:
@@ -70,15 +56,19 @@ def system_design_node(state: DesignGraphState) -> dict[str, Any]:
             "justification for every component.\n"
             "Keep design_justification concise: one short section per component.\n"
             "On every turn after the first draft, treat user chat as design change requests.\n"
-            "Respond ONLY with JSON:\n"
+            "Respond ONLY with a single JSON object (no markdown fences).\n"
+            "Prefer design_diagram_lines (array of Mermaid lines) to avoid broken JSON.\n"
+            "If you use design_diagram as one string, escape newlines as \\n and quotes as \\\".\n"
+            "Schema:\n"
             "{\n"
+            '  "design_diagram_lines": [string, ...],\n'
             '  "design_diagram": string,\n'
             '  "design_justification": string,\n'
             '  "assistant_message": string,\n'
             '  "style": "monolithic" | "distributed",\n'
             '  "changes_made": string\n'
             "}\n"
-            "design_diagram must be raw Mermaid (no markdown fences).\n"
+            "Provide at least one of design_diagram_lines or design_diagram (raw Mermaid).\n"
             "Mermaid label rules (critical):\n"
             "- Prefer flowchart LR or TD.\n"
             "- If a node/edge label contains parentheses, brackets, braces, slashes, or &\n"
@@ -100,7 +90,7 @@ def system_design_node(state: DesignGraphState) -> dict[str, Any]:
         ),
     )
 
-    diagram = sanitize_mermaid(str(proposal.get("design_diagram") or diagram))
+    diagram = sanitize_mermaid(coerce_diagram_text(proposal, fallback=diagram))
     justification = proposal.get("design_justification") or justification
     justification = maybe_compact_design_justification(justification)
     changes = (proposal.get("changes_made") or "").strip()

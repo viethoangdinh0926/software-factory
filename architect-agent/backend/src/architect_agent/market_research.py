@@ -1,30 +1,16 @@
 from __future__ import annotations
 
-import json
 import logging
-import re
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from architect_agent.config import get_settings
 from architect_agent.context_budget import maybe_compact_business_spec
+from architect_agent.json_util import parse_llm_json_object
 from architect_agent.llm import get_chat_model
 
 logger = logging.getLogger(__name__)
-
-_JSON_RE = re.compile(r"\{[\s\S]*\}")
-
-
-def _parse_json(text: str) -> dict[str, Any]:
-    text = text.strip()
-    if text.startswith("```"):
-        text = re.sub(r"^```(?:json)?\s*", "", text)
-        text = re.sub(r"\s*```$", "", text)
-    match = _JSON_RE.search(text)
-    if not match:
-        raise ValueError(f"Expected JSON object in model response: {text[:400]}")
-    return json.loads(match.group(0))
 
 
 def _invoke_json(system: str, user: str) -> dict[str, Any]:
@@ -37,7 +23,7 @@ def _invoke_json(system: str, user: str) -> dict[str, Any]:
         content = "".join(
             block.get("text", "") if isinstance(block, dict) else str(block) for block in content
         )
-    return _parse_json(str(content))
+    return parse_llm_json_object(str(content))
 
 
 def _search_web(query: str, *, max_results: int = 6) -> list[dict[str, str]]:
@@ -157,7 +143,8 @@ def generate_market_evaluation_report(business_spec: str) -> dict[str, Any]:
             "Compare the user's approved business specification against popular existing "
             "alternatives discovered from web search results.\n"
             "Be practical and opinionated. Cite source titles/URLs when used.\n"
-            "Respond ONLY with JSON:\n"
+            "Respond ONLY with a single JSON object.\n"
+            "Escape newlines inside string values as \\n (especially report_markdown).\n"
             "{\n"
             '  "grade": "A" | "B" | "C" | "D" | "F",\n'
             '  "grade_rationale": string,\n'

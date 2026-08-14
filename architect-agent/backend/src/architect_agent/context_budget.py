@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import json
 import logging
-import re
 from typing import Any, Iterable
 
 from architect_agent.config import get_settings
+from architect_agent.json_util import parse_llm_json_object
 
 logger = logging.getLogger(__name__)
 
@@ -194,21 +195,8 @@ def _llm_compact_justification(text: str, *, target_tokens: int) -> str:
     return str(payload.get("design_justification") or text).strip() or text
 
 
-_JSON_RE = re.compile(r"\{[\s\S]*\}")
-
-
 def _parse_json_object(text: str) -> dict[str, Any]:
-    import json
-
-    text = text.strip()
-    if text.startswith("```"):
-        text = re.sub(r"^```(?:json)?\s*", "", text)
-        text = re.sub(r"\s*```$", "", text)
-    match = _JSON_RE.search(text)
-    if not match:
-        return {}
     try:
-        data = json.loads(match.group(0))
-    except json.JSONDecodeError:
+        return parse_llm_json_object(text)
+    except (ValueError, json.JSONDecodeError):
         return {}
-    return data if isinstance(data, dict) else {}

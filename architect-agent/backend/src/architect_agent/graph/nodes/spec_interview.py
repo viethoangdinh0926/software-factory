@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import json
 import logging
-import re
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -27,22 +25,10 @@ from architect_agent.interview_progress import (
     user_requests_approve_anyway,
     user_requests_ready,
 )
+from architect_agent.json_util import parse_llm_json_object
 from architect_agent.llm import get_chat_model
 
 logger = logging.getLogger(__name__)
-
-_JSON_RE = re.compile(r"\{[\s\S]*\}")
-
-
-def _parse_json(text: str) -> dict[str, Any]:
-    text = text.strip()
-    if text.startswith("```"):
-        text = re.sub(r"^```(?:json)?\s*", "", text)
-        text = re.sub(r"\s*```$", "", text)
-    match = _JSON_RE.search(text)
-    if not match:
-        raise ValueError(f"Expected JSON object in model response: {text[:400]}")
-    return json.loads(match.group(0))
 
 
 def _invoke_json(system: str, user: str) -> dict[str, Any]:
@@ -55,7 +41,7 @@ def _invoke_json(system: str, user: str) -> dict[str, Any]:
         content = "".join(
             block.get("text", "") if isinstance(block, dict) else str(block) for block in content
         )
-    return _parse_json(str(content))
+    return parse_llm_json_object(str(content))
 
 
 def spec_interview_node(state: DesignGraphState) -> dict[str, Any]:
@@ -138,7 +124,8 @@ def spec_interview_node(state: DesignGraphState) -> dict[str, Any]:
             "You are the Architect agent's specification interviewer "
             "(merged Business Analyst + Architect discovery).\n"
             f"{GRILL_ME_DIGEST}\n\n"
-            "Respond ONLY with JSON:\n"
+            "Respond ONLY with a single JSON object.\n"
+            "Escape newlines inside string values as \\n.\n"
             "{\n"
             '  "ready_for_design": boolean,\n'
             '  "updated_business_spec": string,\n'
