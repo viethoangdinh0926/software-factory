@@ -52,6 +52,7 @@ export function SessionPage() {
   const [pendingUserText, setPendingUserText] = useState<string | null>(null);
   const [chatBusy, setChatBusy] = useState(false);
   const [approveBusy, setApproveBusy] = useState(false);
+  const [endConfirm, setEndConfirm] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const phaseBeforeApprove = useRef<string | null>(null);
@@ -64,6 +65,7 @@ export function SessionPage() {
 
   useEffect(() => {
     load().catch((err) => setError(err instanceof Error ? err.message : String(err)));
+    setEndConfirm(false);
   }, [load]);
 
   useEffect(() => {
@@ -89,6 +91,7 @@ export function SessionPage() {
     e.preventDefault();
     const text = message.trim();
     if (!text || chatBusy || approveBusy) return;
+    setEndConfirm(false);
     setChatBusy(true);
     setPendingUserText(text);
     setMessage("");
@@ -115,6 +118,7 @@ export function SessionPage() {
 
   async function onApprove() {
     if (approveBusy || !session) return;
+    setEndConfirm(false);
     phaseBeforeApprove.current = session.phase;
     kindBeforeApprove.current = session.approve_kind;
     setApproveBusy(true);
@@ -132,12 +136,13 @@ export function SessionPage() {
   }
 
   async function onEndSession() {
-    if (approveBusy || chatBusy) return;
+    if (approveBusy || chatBusy || !endConfirm) return;
     setApproveBusy(true);
     setError(null);
     try {
       const data = await endSession(sessionId);
       setSession(data);
+      setEndConfirm(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -249,8 +254,43 @@ export function SessionPage() {
               Download package
             </a>
           ) : null}
+          {!session.finalized ? (
+            <button
+              className="btn ghost"
+              type="button"
+              disabled={approveBusy || chatBusy}
+              onClick={() => setEndConfirm(true)}
+              aria-expanded={endConfirm}
+            >
+              End session
+            </button>
+          ) : null}
         </div>
       </header>
+
+      {endConfirm && !session.finalized ? (
+        <div className="end-confirm" role="alertdialog" aria-labelledby="end-confirm-title">
+          <p id="end-confirm-title" className="end-confirm-copy">
+            End this design session? Chat and approve will stop. This cannot be undone.
+          </p>
+          <button
+            className="btn ghost"
+            type="button"
+            disabled={approveBusy}
+            onClick={() => setEndConfirm(false)}
+          >
+            Cancel
+          </button>
+          <button
+            className="btn danger"
+            type="button"
+            disabled={approveBusy || chatBusy}
+            onClick={onEndSession}
+          >
+            {approveBusy ? "Ending…" : "Yes, end session"}
+          </button>
+        </div>
+      ) : null}
 
       <div className="approve-bar">
         <button
@@ -261,16 +301,6 @@ export function SessionPage() {
         >
           {approveLabel}
         </button>
-        {!session.finalized ? (
-          <button
-            className="btn ghost"
-            type="button"
-            disabled={approveBusy || chatBusy}
-            onClick={onEndSession}
-          >
-            End session
-          </button>
-        ) : null}
       </div>
 
       {error ? <p className="error banner">{error}</p> : null}

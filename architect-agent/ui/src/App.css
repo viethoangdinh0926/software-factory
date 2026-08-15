@@ -301,6 +301,43 @@ button.approve-btn:disabled {
   background-color: rgba(255, 255, 255, 0.04);
 }
 
+.btn.danger {
+  background-color: #8b2c3a;
+  background-image: none;
+  border: 2px solid #e07080;
+  color: #fff5f6;
+  -webkit-text-fill-color: #fff5f6;
+}
+
+.btn.danger:hover:not(:disabled),
+.btn.danger:focus-visible:not(:disabled) {
+  background-color: #a83848;
+  border-color: #f0a0aa;
+}
+
+.end-confirm {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.65rem;
+  width: 100%;
+  margin: 0 0 1.1rem;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid rgba(224, 112, 128, 0.45);
+  border-radius: 12px;
+  background: rgba(80, 20, 32, 0.45);
+}
+
+.end-confirm-copy {
+  margin: 0;
+  flex: 1 1 16rem;
+  color: #f3d0d4;
+  font-size: 0.95rem;
+  line-height: 1.4;
+}
+
 .grid {
   display: grid;
   grid-template-columns: 1.05fr 0.95fr;
