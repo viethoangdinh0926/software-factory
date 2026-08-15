@@ -11,7 +11,9 @@ type EdgeInfo = {
   start: string;
   end: string;
   path: SVGPathElement;
+  hitPath: SVGPathElement; // Invisible wider path for easier hovering
   label: SVGGElement | null;
+  relationship?: string;
 };
 
 type NodeDrag = {
@@ -37,9 +39,12 @@ export function MermaidDiagram({ source }: Props) {
   const nodesRef = useRef<Map<string, SVGGElement>>(new Map());
   const viewRef = useRef({ x: 0, y: 0, scale: 1 });
   const dragRef = useRef<DragMode>(null);
+  const hoveredEdgeRef = useRef<EdgeInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [empty, setEmpty] = useState(!source.trim());
   const [ready, setReady] = useState(false);
+  const [hoveredEdge, setHoveredEdge] = useState<EdgeInfo | null>(null);
+  const [tooltipPos, setTooltipPos] = useState<Point | null>(null);
   const sanitized = useMemo(() => sanitizeMermaidSource(source), [source]);
 
   const applyView = () => {
@@ -83,6 +88,8 @@ export function MermaidDiagram({ source }: Props) {
         sceneRef.current = null;
         edgesRef.current = [];
         nodesRef.current = new Map();
+        // Clean up hit paths
+        host.querySelectorAll<SVGPathElement>("[data-hit-path='true']").forEach(p => p.remove());
         if (!cancelled) {
           setEmpty(true);
           setError(null);
@@ -131,6 +138,10 @@ export function MermaidDiagram({ source }: Props) {
           if (key) nodes.set(key, el);
         });
         nodesRef.current = nodes;
+        
+        // Clean up old hit paths before creating new ones
+        scene.querySelectorAll<SVGPathElement>("[data-hit-path='true']").forEach(p => p.remove());
+        
         edgesRef.current = indexEdges(scene, [...nodes.keys()]);
 
         setEmpty(false);
@@ -142,6 +153,8 @@ export function MermaidDiagram({ source }: Props) {
           sceneRef.current = null;
           edgesRef.current = [];
           nodesRef.current = new Map();
+          // Clean up hit paths
+          hostRef.current.querySelectorAll<SVGPathElement>("[data-hit-path='true']").forEach(p => p.remove());
           setError(err instanceof Error ? err.message : String(err));
           setReady(false);
           setEmpty(false);
@@ -170,6 +183,55 @@ export function MermaidDiagram({ source }: Props) {
       const a = new DOMPoint(from.x, from.y).matrixTransform(inv);
       const b = new DOMPoint(to.x, to.y).matrixTransform(inv);
       return { x: b.x - a.x, y: b.y - a.y };
+    };
+
+    const onEdgeMouseEnter = (event: MouseEvent) => {
+      const target = event.target as SVGPathElement;
+      const edge = edgesRef.current.find(e => e.hitPath === target || e.path === target);
+      if (edge) {
+        hoveredEdgeRef.current = edge;
+        setHoveredEdge(edge);
+        const rect = host.getBoundingClientRect();
+        setTooltipPos({
+          x: event.clientX - rect.left,
+          y: event.clientY - rect.top
+        });
+        // Highlight only the visible edge, keep hit path completely transparent
+        edge.path.style.stroke = "#3db8ff";
+        edge.path.style.strokeWidth = "3";
+        // Ensure hit path stays transparent
+        edge.hitPath.style.stroke = "transparent";
+        edge.hitPath.style.strokeOpacity = "0";
+        edge.hitPath.style.fill = "none";
+        edge.hitPath.style.fillOpacity = "0";
+      }
+    };
+
+    const onEdgeMouseLeave = () => {
+      const currentEdge = hoveredEdgeRef.current;
+      if (currentEdge) {
+        // Reset edge styling
+        currentEdge.path.style.stroke = "";
+        currentEdge.path.style.strokeWidth = "";
+        // Ensure hit path stays transparent
+        currentEdge.hitPath.style.stroke = "transparent";
+        currentEdge.hitPath.style.strokeOpacity = "0";
+        currentEdge.hitPath.style.fill = "none";
+        currentEdge.hitPath.style.fillOpacity = "0";
+      }
+      hoveredEdgeRef.current = null;
+      setHoveredEdge(null);
+      setTooltipPos(null);
+    };
+
+    const onEdgeMouseMove = (event: MouseEvent) => {
+      if (hoveredEdgeRef.current) {
+        const rect = host.getBoundingClientRect();
+        setTooltipPos({
+          x: event.clientX - rect.left,
+          y: event.clientY - rect.top
+        });
+      }
     };
 
     const applyNodeDrag = (drag: NodeDrag, client: Point) => {
@@ -267,12 +329,32 @@ export function MermaidDiagram({ source }: Props) {
     host.addEventListener("pointerup", onPointerUp);
     host.addEventListener("pointercancel", onPointerUp);
 
+    // Add edge hover listeners
+    edgesRef.current.forEach(edge => {
+      edge.hitPath.addEventListener("mouseenter", onEdgeMouseEnter);
+      edge.hitPath.addEventListener("mouseleave", onEdgeMouseLeave);
+      edge.hitPath.addEventListener("mousemove", onEdgeMouseMove);
+      edge.path.addEventListener("mouseenter", onEdgeMouseEnter);
+      edge.path.addEventListener("mouseleave", onEdgeMouseLeave);
+      edge.path.addEventListener("mousemove", onEdgeMouseMove);
+    });
+
     return () => {
       host.removeEventListener("wheel", onWheel);
       host.removeEventListener("pointerdown", onPointerDown);
       host.removeEventListener("pointermove", onPointerMove);
       host.removeEventListener("pointerup", onPointerUp);
       host.removeEventListener("pointercancel", onPointerUp);
+
+      // Remove edge hover listeners
+      edgesRef.current.forEach(edge => {
+        edge.hitPath.removeEventListener("mouseenter", onEdgeMouseEnter);
+        edge.hitPath.removeEventListener("mouseleave", onEdgeMouseLeave);
+        edge.hitPath.removeEventListener("mousemove", onEdgeMouseMove);
+        edge.path.removeEventListener("mouseenter", onEdgeMouseEnter);
+        edge.path.removeEventListener("mouseleave", onEdgeMouseLeave);
+        edge.path.removeEventListener("mousemove", onEdgeMouseMove);
+      });
     };
   }, [ready]);
 
@@ -311,6 +393,25 @@ export function MermaidDiagram({ source }: Props) {
         hidden={Boolean(error)}
         aria-label="Interactive architecture diagram"
       />
+      {hoveredEdge && tooltipPos && (
+        <div
+          className="diagram-tooltip"
+          style={{
+            position: "absolute",
+            left: `${tooltipPos.x + 15}px`,
+            top: `${tooltipPos.y + 15}px`,
+            pointerEvents: "none",
+            zIndex: 1000,
+          }}
+        >
+          <div className="diagram-tooltip-content">
+            <strong>{hoveredEdge.start} → {hoveredEdge.end}</strong>
+            {hoveredEdge.relationship && (
+              <p className="diagram-tooltip-description">{hoveredEdge.relationship}</p>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -329,8 +430,10 @@ function rerouteEdge(edge: EdgeInfo, nodes: Map<string, SVGGElement>) {
     edge.start === edge.end ? selfLoopPoints(startCenter, startEl) : orthogonalRoute(startPt, endPt);
 
   writeEdgePath(edge.path, points);
+  writeEdgePath(edge.hitPath, points); // Also update the hit path
   try {
     edge.path.setAttribute("data-points", btoa(JSON.stringify(points)));
+    edge.hitPath.setAttribute("data-points", btoa(JSON.stringify(points)));
   } catch {
     /* ignore */
   }
@@ -534,16 +637,87 @@ function indexEdges(scene: SVGGElement, nodeKeys: string[]): EdgeInfo[] {
     const labelEl = (scene
       .querySelector(`.edgeLabel [data-id="${cssEscape(edgeId)}"]`)
       ?.closest("g.edgeLabel") ?? null) as SVGGElement | null;
+    
+    // Extract relationship label from the edge label element
+    let relationship: string | undefined;
+    if (labelEl) {
+      const labelSpan = labelEl.querySelector("span");
+      if (labelSpan) {
+        relationship = labelSpan.textContent?.trim() || undefined;
+      }
+    }
+    
+    // Generate relationship description if not present
+    if (!relationship) {
+      relationship = generateRelationshipDescription(ends.start, ends.end);
+    }
+    
+    // Create invisible hit path for easier hovering
+    const hitPath = createHitPath(path);
+    
     edges.push({
       id: edgeId,
       start: ends.start,
       end: ends.end,
       path,
+      hitPath,
       label: labelEl,
+      relationship,
     });
   });
 
   return edges;
+}
+
+function createHitPath(originalPath: SVGPathElement): SVGPathElement {
+  const hitPath = originalPath.cloneNode(true) as SVGPathElement;
+  hitPath.setAttribute("data-hit-path", "true");
+  hitPath.style.stroke = "transparent";
+  hitPath.style.strokeWidth = "20"; // Much wider for easier hovering
+  hitPath.style.fill = "none";
+  hitPath.style.fillOpacity = "0";
+  hitPath.style.strokeOpacity = "0";
+  hitPath.style.pointerEvents = "stroke";
+  hitPath.style.cursor = "pointer";
+  hitPath.style.visibility = "visible"; // Ensure it's visible for hit detection but transparent
+  
+  // Remove any fill attributes that might have been cloned
+  hitPath.removeAttribute("fill");
+  
+  // Insert the hit path before the original path so it's on top for hit detection
+  originalPath.parentNode?.insertBefore(hitPath, originalPath);
+  
+  return hitPath;
+}
+
+function generateRelationshipDescription(start: string, end: string): string {
+  // Generate contextual relationship descriptions based on node names
+  const commonPatterns: Record<string, string> = {
+    "Client": "User requests from client devices",
+    "CDN": "Content delivery network for global distribution",
+    "LB": "Load balancing and traffic routing",
+    "GW": "API gateway for request routing",
+    "Auth": "Authentication and authorization",
+    "Meta": "Video metadata management",
+    "Upload": "Video upload and ingestion",
+    "Social": "Social interactions and engagement",
+    "Disc": "Content discovery and search",
+    "UserDB": "User data persistence",
+    "VideoDB": "Video metadata persistence",
+    "S3Raw": "Raw video storage",
+    "Kafka": "Event streaming and messaging",
+    "Transcoder": "Video transcoding and processing",
+    "S3Proc": "Processed video storage",
+    "ES": "Full-text search indexing",
+    "Redis": "Caching and session management",
+    "SocialDB": "Social data persistence",
+    "RecEngine": "Recommendation and personalization",
+  };
+  
+  const startDesc = commonPatterns[start] || `${start} component`;
+  const endDesc = commonPatterns[end] || `${end} component`;
+  
+  return `${startDesc} communicates with ${endDesc}`;
 }
 
 function logicalNodeId(el: Element): string | null {

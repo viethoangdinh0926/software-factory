@@ -38,13 +38,15 @@ def _handoff_dir() -> Path:
 
 
 async def _a2a_send(markdown: str, target_url: str) -> str:
+    import httpx
+
     from a2a.client import ClientConfig, create_client
     from a2a.client.card_resolver import A2ACardResolver
     from a2a.helpers import new_text_message
     from a2a.types import Role, SendMessageRequest
-    import httpx
 
-    async with httpx.AsyncClient(timeout=60.0) as httpx_client:
+    settings = get_settings()
+    async with httpx.AsyncClient(timeout=60.0, verify=settings.ssl_verify) as httpx_client:
         resolver = A2ACardResolver(httpx_client=httpx_client, base_url=target_url.rstrip("/"))
         card = await resolver.get_agent_card()
         client = await create_client(
@@ -112,7 +114,7 @@ def send_design_package(
             detail=response_detail[:2000],
             at=_now(),
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         detail = f"A2A delivery to System Manager failed: {exc}"
         logger.exception("Failed design handoff %s to %s", handoff_id, target)
         return HandoffResult(

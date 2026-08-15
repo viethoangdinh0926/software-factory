@@ -375,6 +375,16 @@ class SessionStore:
             last = session.messages[-1] if session.messages else None
             if not last or last.get("role") != "user" or last.get("content") != user_text:
                 session.messages.append({"role": "user", "content": user_text, "node": node})
+        
+        # Add user message for approve actions to show in UI chat history
+        # This applies whether called via API or UI, making the chat history complete
+        if action == "approve":
+            node = self._active_message_node(session)
+            approve_message = "Approved to advance to next step"
+            last = session.messages[-1] if session.messages else None
+            # Only add if the last message isn't already the same approve message
+            if not last or last.get("role") != "user" or last.get("content") != approve_message:
+                session.messages.append({"role": "user", "content": approve_message, "node": node})
 
         if isinstance(payload, dict):
             session.last_interrupt = payload
@@ -428,7 +438,9 @@ class SessionStore:
         self._persist(session)
 
     def start(self, markdown: str) -> DesignSession:
+        logger.info("SessionStore.start() called with markdown length: %d", len(markdown))
         session_id = str(uuid.uuid4())
+        logger.info("Generated session_id: %s", session_id)
         session = DesignSession(
             session_id=session_id,
             created_at=_now(),
@@ -439,12 +451,22 @@ class SessionStore:
             design_step=0,
         )
         self._sessions[session_id] = session
+        logger.info("Session object created and stored in memory")
 
-        result = self._graph.invoke(
-            initial_state(session_id, markdown),
-            config=self._config(session_id),
-        )
+        logger.info("Invoking graph with initial_state")
+        try:
+            result = self._graph.invoke(
+                initial_state(session_id, markdown),
+                config=self._config(session_id),
+            )
+            logger.info("Graph invoke completed successfully")
+        except Exception:
+            logger.exception("Graph invoke failed")
+            raise
+
+        logger.info("Applying graph result to session")
         self._apply_graph_result(session, result)
+        logger.info("Session start completed successfully")
         return session
 
     def resume(self, session_id: str, action: str, text: str = "") -> DesignSession:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import uvicorn
@@ -18,6 +19,9 @@ from architect_agent.a2a.card import build_agent_card
 from architect_agent.a2a.executor import ArchitectAgentExecutor
 from architect_agent.api.routes import router as design_router
 from architect_agent.config import get_settings
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 def _spa_index(static_dir: Path) -> Path:
@@ -96,6 +100,15 @@ app = create_app()
 
 def main() -> None:
     settings = get_settings()
+    logger.info("Starting architect-agent with settings:")
+    logger.info("  Host: %s", settings.host)
+    logger.info("  Port: %s", settings.port)
+    logger.info("  LLM Provider: %s", settings.llm_provider)
+    logger.info("  LLM Model: %s", settings.llm_model)
+    logger.info("  SSL Verify: %s", settings.ssl_verify)
+    logger.info("  RealLLM Base URL: %s", settings.reallm_base_url)
+    logger.info("  RealLLM API Key: %s", "****" if settings.reallm_api_key else "None")
+    
     uvicorn.run(
         "architect_agent.main:app",
         host=settings.host,

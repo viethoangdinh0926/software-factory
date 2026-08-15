@@ -1,7 +1,4 @@
 from __future__ import annotations
-from threading import Lock
-from typing import Mapping
-from cachetools import TTLCache
 
 import dataclasses
 import hashlib
@@ -10,8 +7,12 @@ import logging
 import math
 import time
 import uuid
+from collections.abc import Mapping
+from threading import Lock
+
 import httpx
 import requests
+from cachetools import TTLCache
 
 logger = logging.getLogger(__name__)
 
@@ -118,25 +119,25 @@ def get_http_client_with_auth_provider(
 
 
 def build_http_clients(
-    client_id: str | None, client_secret: str | None
+    client_id: str | None, client_secret: str | None, verify: bool = True
 ) -> tuple[httpx.Client, httpx.AsyncClient]:
 
     if client_id and client_secret:
         logger.info("Using LLM auth method client_secret")
         http_client = get_http_client_with_auth_provider(
-            client_id=client_id, client_secret=client_secret
+            client_id=client_id, client_secret=client_secret, verify=verify
         )
         async_http_client = get_http_client_with_auth_provider(
-            client_id=client_id, client_secret=client_secret, is_async=True
+            client_id=client_id, client_secret=client_secret, is_async=True, verify=verify
         )
         return http_client, async_http_client
 
     logger.info("Using default LLM auth method")
     http_client = httpx.Client(
-        verify=False, event_hooks=build_event_hooks(async_client=False)
+        verify=verify, event_hooks=build_event_hooks(async_client=False)
     )
     async_http_client = httpx.AsyncClient(
-        verify=False, event_hooks=build_event_hooks(async_client=True)
+        verify=verify, event_hooks=build_event_hooks(async_client=True)
     )
     return http_client, async_http_client
 

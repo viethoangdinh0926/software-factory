@@ -81,5 +81,6 @@ class DesignGraphState(TypedDict):
     scale_estimates: Annotated[str, _replace_str]
     api_contracts: Annotated[str, _replace_str]
     fmea_notes: Annotated[str, _replace_str]
+    spec_enhanced: NotRequired[bool]
     # After market continue: resume_track + resume_step for handoff loop.
     resume_after_market: Annotated[bool, _replace_bool]

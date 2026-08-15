@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from functools import lru_cache
 from typing import Any
 
+import httpx
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 
 from architect_agent.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 
 class StubChatModel(BaseChatModel):
@@ -537,33 +541,47 @@ def _rich_spec(blob: str) -> str:
 
 @lru_cache
 def get_chat_model() -> BaseChatModel:
+    logger.info("get_chat_model() called")
     settings = get_settings()
     provider = settings.llm_provider
     model = settings.llm_model
     temperature = settings.llm_temperature
 
+    logger.info("LLM config: provider=%s, model=%s, temperature=%s", provider, model, temperature)
+    logger.info("SSL_VERIFY setting: %s", settings.ssl_verify)
+
     if not model:
+        logger.error("LLM_MODEL is required in .env")
         raise ValueError("LLM_MODEL is required in .env")
 
     if provider == "stub":
+        logger.info("Using StubChatModel")
         return StubChatModel()
 
     if provider == "openai":
+        logger.info("Using OpenAI provider")
         from langchain_openai import ChatOpenAI
 
         if settings.openai_api_key:
+            logger.info("Using OpenAI API key")
+            http_client = httpx.Client(verify=settings.ssl_verify)
+            http_async_client = httpx.AsyncClient(verify=settings.ssl_verify)
             return ChatOpenAI(
                 model=model,
                 api_key=settings.openai_api_key,
                 temperature=temperature,
+                http_client=http_client,
+                http_async_client=http_async_client,
             )
 
         if settings.aia_gateway_client_id and settings.aia_gateway_client_secret and settings.aia_gateway_base_url:
+            logger.info("Using AIA Gateway")
             from architect_agent.utils.auth import build_http_clients
 
             http_client, http_async_client = build_http_clients(
                 settings.aia_gateway_client_id,
                 settings.aia_gateway_client_secret,
+                verify=settings.ssl_verify,
             )
             return ChatOpenAI(
                 model=model,
@@ -573,6 +591,22 @@ def get_chat_model() -> BaseChatModel:
                 http_client=http_client,
                 http_async_client=http_async_client
             )
+
+        if settings.reallm_base_url and settings.reallm_api_key:
+            logger.info("Using RealLLM proxy: %s", settings.reallm_base_url)
+            http_client = httpx.Client(verify=settings.ssl_verify)
+            http_async_client = httpx.AsyncClient(verify=settings.ssl_verify)
+            return ChatOpenAI(
+                model=model,
+                base_url=settings.reallm_base_url,
+                api_key=settings.reallm_api_key,
+                temperature=temperature,
+                http_client=http_client,
+                http_async_client=http_async_client,
+            )
+        
+        logger.error("No valid OpenAI configuration found")
+        raise ValueError("No valid OpenAI configuration found in .env")
 
     if provider == "anthropic":
         from langchain_anthropic import ChatAnthropic
@@ -594,14 +628,5 @@ def get_chat_model() -> BaseChatModel:
                 base_url=settings.ollama_base_url,
                 temperature=temperature,
             )
-
-    if settings.reallm_base_url and settings.reallm_api_key:
-        from langchain_openai import ChatOpenAI
-        return ChatOpenAI(
-            model=model,
-            base_url=settings.reallm_base_url,
-            api_key=settings.reallm_api_key,
-            temperature=temperature,
-        )
 
     raise RuntimeError("Failed to initialize LLM client")

@@ -31,13 +31,17 @@ async def start_design_session(
     file: UploadFile | None = File(default=None),
 ) -> DesignStartResponse:
     """Single public entrypoint: accept a business-spec (or WIP design) markdown."""
+    logger.info("Starting design session")
     content = ""
     if file is not None:
+        logger.info("Processing uploaded file")
         raw = await file.read()
         content = raw.decode("utf-8")
     elif markdown:
+        logger.info("Processing markdown form field")
         content = markdown
     else:
+        logger.error("No markdown or file provided")
         raise HTTPException(
             status_code=400,
             detail="Provide form field `markdown` or upload a `.md` file as `file`.",
@@ -45,15 +49,22 @@ async def start_design_session(
 
     content = content.strip()
     if not content:
+        logger.error("Empty markdown content")
         raise HTTPException(status_code=400, detail="Markdown body is empty.")
 
+    logger.info("Content length: %d characters", len(content))
+    
     try:
+        logger.info("Calling get_store().start()")
         session = get_store().start(content)
+        logger.info("Session created successfully: %s", session.session_id)
     except Exception as exc:  # noqa: BLE001
+        logger.exception("Failed to start design session")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     settings = get_settings()
     last = session.messages[-1]["content"] if session.messages else None
+    logger.info("Returning design response for session %s", session.session_id)
     return DesignStartResponse(
         design_session_id=session.session_id,
         ui_url=f"{settings.public_base_url}/sessions/{session.session_id}",

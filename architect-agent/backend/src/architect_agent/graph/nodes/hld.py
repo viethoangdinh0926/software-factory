@@ -280,6 +280,11 @@ def _step_artifact_rules(step: int) -> str:
         return header + (
             "HLD Step 6 — write design_justification synthesis (stack, CAP, residual risks). "
             "Set design_ready_to_approve=true. Invite Approve & send design.\n"
+            "When writing design_justification, you MUST explain the functionality of each component "
+            "from the design diagram. For each major component (API Gateway, microservices, databases, "
+            "CDN, message queue, etc.), describe what it does, its role in the system, and how it "
+            "interacts with other components. Structure this as clear sections with component names "
+            "as headers or bullet points.\n"
         )
     return header
 

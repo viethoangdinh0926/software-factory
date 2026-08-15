@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     host: str = "127.0.0.1"
     port: int = 8080
     public_base_url: str = "http://127.0.0.1:8080"
+    ssl_verify: bool = True
 
     # openai | anthropic | ollama | stub
     llm_provider: Literal["openai", "anthropic", "ollama", "stub"] = "stub"

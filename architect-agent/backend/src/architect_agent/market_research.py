@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 
+import httpx
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from architect_agent.config import get_settings
@@ -33,6 +35,11 @@ def _search_web(query: str, *, max_results: int = 6) -> list[dict[str, str]]:
         return _stub_results(query)
 
     try:
+        # Disable SSL verification if needed by setting environment variable
+        original_ssl_verify = os.environ.get("PYTHONHTTPSVERIFY")
+        if not settings.ssl_verify:
+            os.environ["PYTHONHTTPSVERIFY"] = "0"
+
         from ddgs import DDGS
 
         rows: list[dict[str, str]] = []
@@ -45,6 +52,13 @@ def _search_web(query: str, *, max_results: int = 6) -> list[dict[str, str]]:
                         "snippet": str(item.get("body") or item.get("snippet") or "").strip(),
                     }
                 )
+        
+        # Restore original SSL verification setting
+        if original_ssl_verify is not None:
+            os.environ["PYTHONHTTPSVERIFY"] = original_ssl_verify
+        elif "PYTHONHTTPSVERIFY" in os.environ:
+            del os.environ["PYTHONHTTPSVERIFY"]
+            
         return rows
     except Exception:  # noqa: BLE001
         logger.exception("Web search failed for query=%r; falling back to stub results", query)

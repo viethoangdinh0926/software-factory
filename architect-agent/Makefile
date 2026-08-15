@@ -12,6 +12,8 @@ AGENT_ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 UI_DIR     := $(AGENT_ROOT)/ui
 BACKEND_DIR := $(AGENT_ROOT)/backend
 ENV_FILE   := $(AGENT_ROOT)/.env
+# Read SSL_VERIFY from .env file (default to true for secure mode)
+SSL_VERIFY ?= true
 
 .PHONY: all deploy install install-ui install-backend build run stop clean env help
 
@@ -25,6 +27,9 @@ help:
 	@echo "  make run      Start the backend service"
 	@echo "  make env      Create .env from .env.example if missing"
 	@echo "  make clean    Remove UI/backend build artifacts"
+	@echo ""
+	@echo "Options:"
+	@echo "  SSL_VERIFY=false  Ignore SSL certificate verification (set in .env or env var)"
 
 deploy: env install build run
 
@@ -35,6 +40,13 @@ env:
 	else \
 		echo "Using existing $(ENV_FILE)"; \
 	fi
+	@# Read SSL_VERIFY from .env file if it exists
+	@if [ -f "$(ENV_FILE)" ]; then \
+		SSL_VERIFY=$$(grep "^SSL_VERIFY=" "$(ENV_FILE)" | cut -d'=' -f2); \
+		if [ -n "$$SSL_VERIFY" ]; then \
+			export SSL_VERIFY; \
+		fi; \
+	fi
 
 install: install-ui install-backend
 
@@ -42,7 +54,11 @@ install-ui:
 	cd "$(UI_DIR)" && npm install
 
 install-backend:
-	cd "$(BACKEND_DIR)" && uv sync
+	@if [ "$(SSL_VERIFY)" = "false" ]; then \
+		cd "$(BACKEND_DIR)" && uv sync --allow-insecure-host files.pythonhosted.org; \
+	else \
+		cd "$(BACKEND_DIR)" && uv sync; \
+	fi
 
 build:
 	cd "$(UI_DIR)" && npm run build
