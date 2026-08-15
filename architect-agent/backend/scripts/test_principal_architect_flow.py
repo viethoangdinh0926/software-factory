@@ -1,0 +1,97 @@
+#!/usr/bin/env python3
+"""Smoke: Phase 0 → HLD steps → design approve → market → handoff → resume step 4.
+Also covers a short LLD path."""
+from __future__ import annotations
+
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+os.environ["LLM_PROVIDER"] = "stub"
+
+# Isolate session + checkpoint storage for this smoke run.
+tmp = Path(tempfile.mkdtemp(prefix="architect-smoke-"))
+os.environ["DATA_DIR"] = str(tmp / "sessions")
+
+print("importing…", flush=True)
+from architect_agent.config import get_settings
+from architect_agent.llm import get_chat_model
+from architect_agent.graph import reset_graph
+from architect_agent.sessions import SessionStore, _legacy_map
+
+get_settings.cache_clear()
+get_chat_model.cache_clear()
+reset_graph()
+
+# Point checkpointer at temp as well by patching after import is awkward;
+# use unique thread ids via fresh SessionStore — checkpoints share process DB.
+# For smoke we only need functional flow, not checkpoint isolation.
+
+print("HLD path…", flush=True)
+store = SessionStore()
+s = store.start(
+    "# Warehouse Inventory SaaS\n\n"
+    "Distributed multi-tenant inventory tracker with microservices.\n\n"
+    "## Actors\n- Warehouse clerk\n\n## In scope (v1)\n- receive/adjust/report\n\n"
+    "## Out of scope\n- accounting\n\n## Critical invariants\n- no silent stock loss\n\n"
+    "## Success criteria\n- clerks can adjust counts\n\n## Assumptions & risks\n- multi-region later\n"
+)
+print("  start", s.phase, s.design_track, s.design_step, s.to_public()["can_approve"], flush=True)
+pub = s.to_public()
+assert s.phase == "phase0", s.phase
+assert pub["can_approve"], pub
+s = store.approve(s.session_id)
+print("  after phase0", s.phase, s.design_track, s.design_step, flush=True)
+assert s.design_track == "hld", s.design_track
+assert s.phase == "hld" and s.design_step == 1, (s.phase, s.design_step)
+
+for step in range(1, 7):
+    assert s.phase == "hld" and s.design_step == step, (s.phase, s.design_step)
+    assert s.to_public()["can_approve"], s.to_public()
+    s = store.approve(s.session_id)
+    print(f"  after approve@{step}", s.phase, s.design_step, flush=True)
+    if step < 6:
+        assert s.phase == "hld" and s.design_step == step + 1
+    else:
+        assert s.phase == "market_research", s.phase
+        assert s.market_evaluation_done
+        assert s.market_evaluation_report.strip()
+
+version_before = s.design_version
+s = store.approve(s.session_id)
+print("  after market continue", s.phase, s.design_step, s.design_version, flush=True)
+assert s.phase == "hld" and s.design_step == 4, (s.phase, s.design_step)
+assert s.design_version == version_before + 1
+assert s.design_diagram.strip()
+assert s.tradeoff_ledger.strip()
+
+print("LLD path…", flush=True)
+get_settings.cache_clear()
+get_chat_model.cache_clear()
+reset_graph()
+store2 = SessionStore()
+s2 = store2.start(
+    "# In-process pricing library (LLD)\n\n"
+    "Single OS process library for quote calculation. No network services.\n"
+)
+assert s2.phase == "phase0"
+s2 = store2.approve(s2.session_id)
+print("  after phase0", s2.phase, s2.design_track, s2.design_step, flush=True)
+assert s2.design_track == "lld", s2.design_track
+for step in range(1, 4):
+    assert s2.design_step == step
+    s2 = store2.approve(s2.session_id)
+    print(f"  after approve@{step}", s2.phase, s2.design_step, flush=True)
+assert s2.phase == "market_research"
+s2 = store2.approve(s2.session_id)
+assert s2.phase == "lld" and s2.design_step == 3
+assert s2.design_version >= 1
+
+print("legacy map…", flush=True)
+mapped = _legacy_map({"phase": "spec_interview"})
+assert mapped["phase"] == "phase0"
+mapped = _legacy_map({"phase": "system_design"})
+assert mapped["phase"] == "hld" and mapped["design_step"] == 4
+
+print("OK", flush=True)

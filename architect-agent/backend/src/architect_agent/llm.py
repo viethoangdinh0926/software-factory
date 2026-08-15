@@ -49,6 +49,12 @@ class StubChatModel(BaseChatModel):
         ):
             # Merge without growing an unbounded interview-notes appendix.
             payload = {"updated_business_spec": _fold_answer_stub(blob)}
+        elif "phase 0 classifier" in lower or "classify the design scope" in lower:
+            payload = _stub_phase0(blob)
+        elif "lld track node" in lower or "current lld step" in lower:
+            payload = _stub_lld(blob)
+        elif "hld track node" in lower or "current hld step" in lower:
+            payload = _stub_hld(blob)
         elif "architect agent's system design node" in lower or '"design_diagram"' in lower:
             feedback = _latest_feedback(blob)
             payload = _stub_design_proposal(blob, feedback)
@@ -102,6 +108,197 @@ class StubChatModel(BaseChatModel):
         return ChatResult(
             generations=[ChatGeneration(message=AIMessage(content=json.dumps(payload)))]
         )
+
+
+def _stub_phase0(blob: str) -> dict[str, Any]:
+    # Classify from the living-spec / user sections only — system digests mention both tracks.
+    focus = blob
+    for marker in (
+        "Current living specification:",
+        "Living specification:",
+        "Latest user message:",
+    ):
+        if marker in blob:
+            focus = blob.split(marker, 1)[1]
+            break
+    lower = focus.lower()
+    if any(
+        k in lower
+        for k in ("microservice", "distributed", "multi-region", "kafka", "cdn", "multi-tenant")
+    ):
+        track = "hld"
+    elif any(
+        k in lower
+        for k in ("single process", "single os process", "library", "cli", "in-process", "(lld)")
+    ):
+        track = "lld"
+    elif "warehouse" in lower or "inventory" in lower or "saas" in lower:
+        track = "hld"
+    else:
+        track = "lld"
+    return {
+        "design_track": track,
+        "ready_to_advance": True,
+        "updated_business_spec": _rich_spec(blob),
+        "tradeoff_ledger": "- Scope classification pending user confirm.\n",
+        "assistant_message": (
+            f"Scope looks like **{track.upper()}**. "
+            "Click approve to start that track, or tell me if this should be the other track."
+        ),
+    }
+
+
+def _stub_lld(blob: str) -> dict[str, Any]:
+    step = 1
+    if "current lld step: 2" in blob.lower():
+        step = 2
+    elif "current lld step: 3" in blob.lower():
+        step = 3
+    feedback = _latest_feedback(blob)
+    design = _stub_design_proposal(blob, feedback)
+    ledger = (
+        "- Prefer clear domain objects over anemic DTOs.\n"
+        "- Favor composition for cross-cutting policies.\n"
+    )
+    return {
+        "updated_business_spec": _rich_spec(blob),
+        "tradeoff_ledger": ledger,
+        "design_diagram": design["design_diagram"] if step >= 2 else "",
+        "design_diagram_lines": design["design_diagram"].splitlines() if step >= 2 else [],
+        "design_justification": design["design_justification"] if step >= 2 else "",
+        "ready_to_advance": True,
+        "design_ready_to_approve": step >= 3,
+        "assistant_message": (
+            f"LLD step {step} draft ready. "
+            + (
+                "Approve to run market evaluation and hand off."
+                if step >= 3
+                else "Approve to advance, or chat to refine."
+            )
+        ),
+    }
+
+
+def _stub_hld_architecture_diagram(feedback: str = "") -> str:
+    """Concrete multi-tier diagram so Step 4 concreteness checks pass under stub LLM."""
+    lower = feedback.lower()
+    lines = [
+        "flowchart LR",
+        "  Client[Web/Mobile Client] --> LB[Load Balancer]",
+        "  LB --> GW[API Gateway]",
+        "  GW --> Auth[Auth IdentityService]",
+        "  GW --> Catalog[VideoCatalogService]",
+        "  GW --> Upload[UploadService]",
+        "  GW --> Playback[PlaybackService]",
+        "  GW --> Search[SearchService]",
+        "  GW --> Recs[RecommendationsService]",
+        "  GW --> Engage[EngagementService]",
+        "  Upload --> Kafka[Kafka Broker]",
+        "  Kafka --> Transcode[Transcoding Workers]",
+        "  Transcode --> S3[Object Storage S3]",
+        "  Auth --> PG[(Postgres)]",
+        "  Catalog --> PG",
+        "  Playback --> CDN[CDN]",
+        "  CDN --> S3",
+        "  Search --> ES[(Elasticsearch)]",
+        "  Recs --> Redis[(Redis Cache)]",
+        "  Engage --> Kafka",
+    ]
+    if "monolith" in lower:
+        lines = [
+            "flowchart LR",
+            "  Client[Web/Mobile Client] --> LB[Load Balancer]",
+            "  LB --> GW[API Gateway]",
+            "  GW --> Auth[Auth IdentityService]",
+            "  GW --> App[Modular Monolith Domains]",
+            "  App --> PG[(Postgres)]",
+            "  App --> Redis[(Redis Cache)]",
+            "  App --> Kafka[Kafka Broker]",
+            "  Kafka --> Transcode[Transcoding Workers]",
+            "  Transcode --> S3[Object Storage S3]",
+            "  App --> Search[SearchService]",
+            "  Search --> ES[(Elasticsearch)]",
+            "  App --> CDN[CDN]",
+            "  CDN --> S3",
+        ]
+    return "\n".join(lines)
+
+
+def _stub_hld(blob: str) -> dict[str, Any]:
+    step = 1
+    for n in range(1, 7):
+        if f"current hld step: {n}" in blob.lower():
+            step = n
+            break
+    feedback = _latest_feedback(blob)
+    design = _stub_design_proposal(blob, feedback)
+    diagram = _stub_hld_architecture_diagram(feedback) if step >= 4 else ""
+    return {
+        "updated_business_spec": _rich_spec(blob),
+        "tradeoff_ledger": (
+            "- CAP: prefer consistency on ownership/mutations; AP on view counters.\n"
+            "- Pattern: API gateway + bounded-context services + async Kafka events.\n"
+            "- Storage: Postgres for metadata (CP), object storage for media, Redis for hot reads.\n"
+        ),
+        "scale_estimates": (
+            "### Capacity plan\n"
+            "- DAU: 50,000,000\n"
+            "- Peak concurrent viewers: 5,000,000\n"
+            "- Peak read QPS (metadata/playback auth): 120,000\n"
+            "- Peak write/upload QPS: 8,000\n"
+            "- Storage year-1 originals+renditions: 180 PB growth trajectory\n"
+            "- Egress / bandwidth: multi-Tbps via CDN; origin pull << edge hit ratio 95%\n"
+            "- Latency NFR: p99 playback start < 2s; catalog read p99 < 200ms\n"
+            "- Availability SLA: 99.95% streaming control plane\n"
+            if step >= 1
+            else ""
+        ),
+        "api_contracts": (
+            "### IdentityService\n"
+            "- POST /v1/auth/login — email/password → session token (200/401)\n"
+            "- POST /v1/auth/token/refresh — refresh → access token (200/401)\n"
+            "- GET /v1/users/{id} — public profile (200/404)\n"
+            "### ChannelService\n"
+            "- POST /v1/channels — create channel (201)\n"
+            "- GET /v1/channels/{id} — channel metadata (200/404)\n"
+            "### VideoCatalogService\n"
+            "- POST /v1/videos — register upload intent (201)\n"
+            "- GET /v1/videos/{id} — catalog metadata (200/404)\n"
+            "- PATCH /v1/videos/{id} — update title/visibility (200/403)\n"
+            "### UploadService\n"
+            "- POST /v1/uploads — initiate multipart upload; returns signed URLs (201)\n"
+            "- POST /v1/uploads/{id}/complete — finalize parts (200)\n"
+            "### PlaybackService\n"
+            "- GET /v1/playback/{videoId} — signed manifest + CDN URLs (200/403)\n"
+            if step >= 3
+            else ""
+        ),
+        "fmea_notes": (
+            "### FMEA\n"
+            "| Failure mode | Impact | Mitigation |\n"
+            "|---|---|---|\n"
+            "| SPOF: primary Postgres metadata | Catalog/auth outage | Sync replicas + automated failover; read replicas for GET |\n"
+            "| Bottleneck: transcoder backlog | Upload-to-playable latency spike | Priority queues + worker autoscaling + degraded lower-res publish |\n"
+            "| Race: concurrent title edits | Lost updates | Conditional writes / etags on VideoCatalogService |\n"
+            "| Split-brain on dual-writer cache | Stale authz | Single-writer keys; Redis with sticky ownership |\n"
+            "| CDN origin overload | Playback errors | Multi-CDN + high cache TTLs + origin shields |\n"
+            if step >= 5
+            else ""
+        ),
+        "design_diagram": diagram,
+        "design_diagram_lines": diagram.splitlines() if diagram else [],
+        "design_justification": design["design_justification"] if step >= 4 else "",
+        "ready_to_advance": True,
+        "design_ready_to_approve": step >= 6,
+        "assistant_message": (
+            f"HLD step {step} draft ready. "
+            + (
+                "Approve to run market evaluation and hand off."
+                if step >= 6
+                else "Approve to advance, or chat to refine."
+            )
+        ),
+    }
 
 
 def _stub_market_evaluation(blob: str) -> dict[str, Any]:
@@ -160,13 +357,18 @@ def _stub_market_evaluation(blob: str) -> dict[str, Any]:
 
 
 def _latest_feedback(blob: str) -> str:
-    marker = "Latest user feedback to apply now:"
-    if marker in blob:
-        part = blob.split(marker, 1)[1].strip()
-        for stop in ("Return the full", "Respond ONLY"):
-            if stop in part:
-                part = part.split(stop, 1)[0]
-        return part.strip()
+    for marker in (
+        "Latest user feedback to apply now:",
+        "Latest user message:",
+    ):
+        if marker in blob:
+            part = blob.split(marker, 1)[1].strip()
+            for stop in ("Return the full", "Respond ONLY", "Recent "):
+                if stop in part:
+                    part = part.split(stop, 1)[0]
+            text = part.strip()
+            if text and not text.startswith("(none"):
+                return text
     # Fallback: last USER: line from conversation
     users = [line.split(":", 1)[1].strip() for line in blob.splitlines() if line.startswith("USER:")]
     return users[-1] if users else ""

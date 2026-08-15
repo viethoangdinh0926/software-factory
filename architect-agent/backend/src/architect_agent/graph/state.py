@@ -5,10 +5,20 @@ from typing import Annotated, Any, Literal, TypedDict
 from typing_extensions import NotRequired
 
 
+NodeName = Literal[
+    "phase0",
+    "lld",
+    "hld",
+    "market_research",
+    "spec_interview",
+    "system_design",
+]
+
+
 class ChatTurn(TypedDict):
     role: Literal["assistant", "user", "system"]
     content: str
-    node: Literal["spec_interview", "system_design", "market_research"]
+    node: NodeName
 
 
 def _merge_spec(left: str | None, right: str | None) -> str:
@@ -36,12 +46,26 @@ def _replace_bool(left: bool | None, right: bool | None) -> bool:
     return bool(right)
 
 
+def _replace_int(left: int | None, right: int | None) -> int:
+    if right is None:
+        return int(left or 0)
+    return int(right)
+
+
+DesignTrack = Literal["unset", "lld", "hld"]
+PhaseName = Literal["phase0", "lld", "hld", "market_research", "done"]
+
+
 class DesignGraphState(TypedDict):
     session_id: str
     business_spec: Annotated[str, _merge_spec]
     messages: Annotated[list[ChatTurn], _append_messages]
-    phase: Literal["spec_interview", "market_research", "system_design", "done"]
+    phase: PhaseName
+    design_track: DesignTrack
+    design_step: Annotated[int, _replace_int]
     ready_for_design: bool
+    ready_to_advance: bool
+    design_ready_to_approve: bool
     spec_approved: bool
     design_diagram: Annotated[str, _replace_str]
     design_justification: Annotated[str, _replace_str]
@@ -53,3 +77,9 @@ class DesignGraphState(TypedDict):
     market_evaluation_report: Annotated[str, _replace_str]
     market_evaluation_grade: Annotated[str, _replace_str]
     market_evaluation_done: Annotated[bool, _replace_bool]
+    tradeoff_ledger: Annotated[str, _replace_str]
+    scale_estimates: Annotated[str, _replace_str]
+    api_contracts: Annotated[str, _replace_str]
+    fmea_notes: Annotated[str, _replace_str]
+    # After market continue: resume_track + resume_step for handoff loop.
+    resume_after_market: Annotated[bool, _replace_bool]

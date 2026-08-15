@@ -4,10 +4,12 @@ import mermaid from "mermaid";
 import {
   approve,
   chat,
+  endSession,
   finalDownloadUrl,
   getSession,
   marketEvaluationDownloadUrl,
   specDownloadUrl,
+  trackStepLabel,
   type DesignSession,
 } from "./api";
 import { MarkdownView } from "./MarkdownView";
@@ -52,6 +54,8 @@ export function SessionPage() {
   const [approveBusy, setApproveBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const phaseBeforeApprove = useRef<string | null>(null);
+  const kindBeforeApprove = useRef<string | null>(null);
 
   const load = useCallback(async () => {
     const data = await getSession(sessionId);
@@ -67,14 +71,19 @@ export function SessionPage() {
   }, [session?.messages, pendingUserText, chatBusy]);
 
   const inMarket = session?.phase === "market_research";
-  const inDesign = session?.phase === "system_design" || session?.phase === "done";
+  const showDiagram = Boolean(session?.design_diagram?.trim());
+  const showJustification = Boolean(session?.design_justification?.trim());
+  const trackChip = session ? trackStepLabel(session) : null;
+
   const nodeTitle = useMemo(() => {
     if (!session) return "Loading…";
     if (session.finalized) return "Design finalized";
     if (inMarket) return "Market evaluation";
-    if (inDesign) return "System design";
-    return "Specification interview";
-  }, [session, inDesign, inMarket]);
+    if (session.phase === "lld") return "Low-level design";
+    if (session.phase === "hld") return "High-level design";
+    if (session.phase === "phase0") return "Scope classification";
+    return "Design session";
+  }, [session, inMarket]);
 
   async function onChat(e: FormEvent) {
     e.preventDefault();
@@ -105,11 +114,29 @@ export function SessionPage() {
   }
 
   async function onApprove() {
-    if (approveBusy) return;
+    if (approveBusy || !session) return;
+    phaseBeforeApprove.current = session.phase;
+    kindBeforeApprove.current = session.approve_kind;
     setApproveBusy(true);
     setError(null);
     try {
       const data = await approve(sessionId);
+      setSession(data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setApproveBusy(false);
+      phaseBeforeApprove.current = null;
+      kindBeforeApprove.current = null;
+    }
+  }
+
+  async function onEndSession() {
+    if (approveBusy || chatBusy) return;
+    setApproveBusy(true);
+    setError(null);
+    try {
+      const data = await endSession(sessionId);
       setSession(data);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -145,41 +172,37 @@ export function SessionPage() {
     );
   }
 
-  const canApprove =
-    (session.phase === "spec_interview" && session.ready_for_design) ||
-    (session.phase === "market_research" && session.market_evaluation_done) ||
-    (session.phase === "system_design" && !session.finalized);
-
-  const phaseLabel =
-    session.phase === "spec_interview"
-      ? "Interview"
-      : session.phase === "market_research"
-        ? "Market eval"
-        : session.phase === "system_design"
-          ? "Design"
-          : session.phase;
-
+  const canApprove = Boolean(session.can_approve) && !session.finalized;
   const approveLabel = approveBusy
-    ? session.phase === "spec_interview"
-      ? "Researching market…"
-      : session.phase === "market_research"
-        ? "Starting design…"
-        : "Sending…"
-    : session.phase === "system_design"
-      ? "Approve & send design"
-      : session.phase === "market_research"
-        ? "Continue to system design"
-        : "Approve business spec";
+    ? kindBeforeApprove.current === "design"
+      ? "Researching alternatives…"
+      : phaseBeforeApprove.current === "market_research"
+        ? "Handing off & resuming design…"
+        : "Advancing…"
+    : session.approve_label || "Continue";
+
+  const thinkingLabel =
+    approveBusy && kindBeforeApprove.current === "design"
+      ? "Researching alternatives and grading the idea…"
+      : approveBusy && phaseBeforeApprove.current === "market_research"
+        ? "Handing off the design package and resuming design…"
+        : approveBusy
+          ? "Advancing the design track…"
+          : "Working on your message…";
 
   const chatPlaceholder = chatBusy
     ? "Wait for the architect to finish…"
-    : session.phase === "system_design"
-      ? "Ask for design changes…"
-      : session.phase === "market_research"
-        ? "Optional note before continuing to design…"
+    : session.phase === "market_research"
+      ? "Optional note before continuing after market evaluation…"
+      : session.phase === "lld" || session.phase === "hld"
+        ? "Ask for design changes or answer the current step…"
         : "Answer the architect…";
 
   const showMarketReport = Boolean(session.market_evaluation_report?.trim());
+  const showLedger = Boolean(session.tradeoff_ledger?.trim());
+  const showScale = Boolean(session.scale_estimates?.trim());
+  const showApis = Boolean(session.api_contracts?.trim());
+  const showFmea = Boolean(session.fmea_notes?.trim());
 
   return (
     <div className="app session-app">
@@ -189,7 +212,8 @@ export function SessionPage() {
           <p className="brand">Architect Agent</p>
           <h1>Design atelier</h1>
           <div className="meta-row">
-            <span className="chip">{phaseLabel}</span>
+            {trackChip ? <span className="chip">{trackChip}</span> : null}
+            <span className="chip">{session.phase.replaceAll("_", " ")}</span>
             {session.market_evaluation_grade ? (
               <span className="chip accent">Grade {session.market_evaluation_grade}</span>
             ) : null}
@@ -237,6 +261,16 @@ export function SessionPage() {
         >
           {approveLabel}
         </button>
+        {!session.finalized ? (
+          <button
+            className="btn ghost"
+            type="button"
+            disabled={approveBusy || chatBusy}
+            onClick={onEndSession}
+          >
+            End session
+          </button>
+        ) : null}
       </div>
 
       {error ? <p className="error banner">{error}</p> : null}
@@ -270,13 +304,7 @@ export function SessionPage() {
                   <span className="dot" />
                   <span className="dot" />
                   <span className="dot" />
-                  <span>
-                    {approveBusy && session.phase === "spec_interview"
-                      ? "Researching alternatives and grading the idea…"
-                      : approveBusy && session.phase === "market_research"
-                        ? "Drafting the system design…"
-                        : "Working on your message…"}
-                  </span>
+                  <span>{thinkingLabel}</span>
                 </div>
               </div>
             ) : null}
@@ -316,6 +344,42 @@ export function SessionPage() {
             </div>
             <MarkdownView content={session.business_spec} className="doc" />
           </div>
+          {showLedger ? (
+            <div className="artifact">
+              <div className="panel-head">
+                <h2>Trade-off ledger</h2>
+                <span className="panel-kicker">Decisions</span>
+              </div>
+              <MarkdownView content={session.tradeoff_ledger} className="doc" />
+            </div>
+          ) : null}
+          {showScale ? (
+            <div className="artifact">
+              <div className="panel-head">
+                <h2>Scale estimates</h2>
+                <span className="panel-kicker">Capacity</span>
+              </div>
+              <MarkdownView content={session.scale_estimates} className="doc" />
+            </div>
+          ) : null}
+          {showApis ? (
+            <div className="artifact">
+              <div className="panel-head">
+                <h2>API contracts</h2>
+                <span className="panel-kicker">Interfaces</span>
+              </div>
+              <MarkdownView content={session.api_contracts} className="doc" />
+            </div>
+          ) : null}
+          {showFmea ? (
+            <div className="artifact">
+              <div className="panel-head">
+                <h2>FMEA notes</h2>
+                <span className="panel-kicker">Risks</span>
+              </div>
+              <MarkdownView content={session.fmea_notes} className="doc" />
+            </div>
+          ) : null}
           {showMarketReport ? (
             <div className="artifact">
               <div className="panel-head">
@@ -329,7 +393,7 @@ export function SessionPage() {
               <MarkdownView content={session.market_evaluation_report} className="doc doc-tall" />
             </div>
           ) : null}
-          {inDesign ? (
+          {showJustification ? (
             <div className="artifact">
               <div className="panel-head">
                 <h2>Justification</h2>
@@ -340,7 +404,7 @@ export function SessionPage() {
           ) : null}
         </section>
 
-        {inDesign ? (
+        {showDiagram ? (
           <section className="panel diagram-panel">
             <div className="panel-head">
               <h2>System design diagram</h2>

@@ -32,8 +32,9 @@ export function HomePage() {
           <p className="brand">Architect Agent</p>
           <h1>Shape the system before the build.</h1>
           <p className="lede">
-            Paste a business specification. The architect interviews you, then drafts a living
-            design you can revise and hand off.
+            Paste a business specification. The principal architect classifies LLD vs HLD,
+            walks structured design steps with a trade-off ledger, then re-evaluates the
+            market on each design handoff.
           </p>
         </div>
       </header>

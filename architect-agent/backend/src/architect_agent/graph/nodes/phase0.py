@@ -1,0 +1,157 @@
+from __future__ import annotations
+
+from typing import Any
+
+from langgraph.types import interrupt
+
+from architect_agent.context_budget import (
+    INTERVIEW_TECHNIQUE_DIGEST,
+    JSON_OUTPUT_DIGEST,
+    PRINCIPAL_ARCHITECT_DIGEST,
+    format_history_tail,
+    maybe_compact_business_spec,
+)
+from architect_agent.graph.nodes.common import approve_label, invoke_json
+from architect_agent.graph.state import DesignGraphState
+
+
+def phase0_classify_node(state: DesignGraphState) -> dict[str, Any]:
+    """Phase 0: classify LLD vs HLD (or ask clarifying questions)."""
+    business_spec = maybe_compact_business_spec(state.get("business_spec") or "")
+    pending = (state.get("pending_user_feedback") or "").strip()
+    prior = [m for m in (state.get("messages") or []) if m.get("node") == "phase0"]
+    history_tail = format_history_tail(prior)
+    track = state.get("design_track") or "unset"
+
+    if track in {"lld", "hld"} and state.get("ready_to_advance"):
+        return {
+            "phase": "phase0",
+            "design_track": track,
+            "design_step": 0,
+            "ready_to_advance": True,
+            "pending_user_feedback": "",
+            "pending_assistant_message": state.get("pending_assistant_message") or "",
+        }
+
+    result = invoke_json(
+        system=(
+            "You are the Architect agent's Phase 0 classifier (Principal Architect).\n"
+            f"{PRINCIPAL_ARCHITECT_DIGEST}\n\n"
+            f"{INTERVIEW_TECHNIQUE_DIGEST}\n\n"
+            f"{JSON_OUTPUT_DIGEST}\n\n"
+            "Task: classify LLD vs HLD from the spec on THIS turn if possible.\n"
+            "HLD if the idea is a product/platform spanning network, storage, CDN, "
+            "multi-user scale, or 'like YouTube/Uber/SaaS'. LLD if it is a library, CLI, "
+            "or single OS process.\n"
+            "Do NOT ask for DAU/QPS/bitrate here — that is HLD Step 1.\n"
+            "If classification is already clear, set design_track to lld or hld and "
+            "ready_to_advance=true. assistant_message should say the classification and "
+            "invite Approve to start the track.\n"
+            "Ask ONE clarifying question ONLY if LLD vs HLD is truly ambiguous; still "
+            "propose a (Recommended) track.\n"
+            "Respond ONLY with JSON:\n"
+            "{\n"
+            '  "design_track": "unset" | "lld" | "hld",\n'
+            '  "ready_to_advance": boolean,\n'
+            '  "updated_business_spec": string,\n'
+            '  "tradeoff_ledger": string,\n'
+            '  "assistant_message": string\n'
+            "}\n"
+            "updated_business_spec: keep/structure the spec; do not empty it.\n"
+            "tradeoff_ledger: one line noting the classification assumption.\n"
+            "Escape newlines in strings as \\n."
+        ),
+        user=(
+            f"Current living specification:\n\n{business_spec}\n\n"
+            f"Recent Phase 0 turns:\n{history_tail}\n\n"
+            f"Latest user message:\n{pending or '(none — initial classification)'}\n"
+        ),
+    )
+
+    new_track = str(result.get("design_track") or "unset").lower()
+    if new_track not in {"unset", "lld", "hld"}:
+        new_track = "unset"
+    ready = bool(result.get("ready_to_advance")) and new_track in {"lld", "hld"}
+    spec = result.get("updated_business_spec") or business_spec
+    ledger = result.get("tradeoff_ledger") or state.get("tradeoff_ledger") or ""
+    assistant = (
+        result.get("assistant_message")
+        or (
+            f"Scope classified as **{new_track.upper()}**. Click approve to begin the track."
+            if ready
+            else "I need a bit more detail to classify LLD vs HLD."
+        )
+    )
+
+    return {
+        "phase": "phase0",
+        "design_track": new_track,  # type: ignore[typeddict-item]
+        "design_step": 0,
+        "business_spec": spec,
+        "tradeoff_ledger": ledger,
+        "ready_to_advance": ready,
+        "ready_for_design": ready,
+        "design_ready_to_approve": False,
+        "pending_user_feedback": "",
+        "pending_assistant_message": assistant,
+        "publish_requested": False,
+        "messages": [{"role": "assistant", "content": assistant, "node": "phase0"}],
+    }
+
+
+def phase0_wait_node(state: DesignGraphState) -> dict[str, Any]:
+    track = state.get("design_track") or "unset"
+    step = int(state.get("design_step") or 0)
+    ready = bool(state.get("ready_to_advance"))
+    assistant = state.get("pending_assistant_message") or ""
+
+    resume = interrupt(
+        {
+            "phase": "phase0",
+            "design_track": track,
+            "design_step": step,
+            "assistant_message": assistant,
+            "business_spec": state.get("business_spec") or "",
+            "tradeoff_ledger": state.get("tradeoff_ledger") or "",
+            "ready_to_advance": ready,
+            "can_approve": ready,
+            "approve_kind": "advance",
+            "approve_label": approve_label("phase0", track, step),
+        }
+    )
+
+    action = (resume or {}).get("action", "chat")
+    user_text = ((resume or {}).get("text") or "").strip()
+    msgs: list[dict[str, Any]] = []
+    if user_text:
+        msgs.append({"role": "user", "content": user_text, "node": "phase0"})
+
+    if action == "approve" and ready and track in {"lld", "hld"}:
+        enter_msg = f"Starting **{track.upper()}** track."
+        msgs.append({"role": "assistant", "content": enter_msg, "node": "phase0"})
+        return {
+            "phase": track,  # type: ignore[typeddict-item]
+            "design_track": track,  # type: ignore[typeddict-item]
+            "design_step": 1,
+            "ready_to_advance": False,
+            "pending_user_feedback": "",
+            "pending_assistant_message": enter_msg,
+            "messages": msgs,
+        }
+
+    if action == "session_done":
+        msgs.append({"role": "assistant", "content": "Session marked done.", "node": "phase0"})
+        return {
+            "phase": "done",
+            "pending_assistant_message": "Session marked done.",
+            "messages": msgs,
+        }
+
+    return {
+        "phase": "phase0",
+        "design_track": track,  # type: ignore[typeddict-item]
+        "design_step": 0,
+        "ready_to_advance": False,
+        "pending_user_feedback": user_text,
+        "messages": msgs,
+    }

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+"""Smoke: revise diagram via chat on HLD step 4 after market handoff."""
 from __future__ import annotations
 
 import os
@@ -20,23 +21,22 @@ print("store…", flush=True)
 store = SessionStore()
 print("start…", flush=True)
 s = store.start(
-    "# Spec\n\n## Actors\n- Clerk\n\n## In scope (v1)\n- receive\n\n"
+    "# Spec\n\nDistributed warehouse inventory with microservices.\n\n"
+    "## Actors\n- Clerk\n\n## In scope (v1)\n- receive\n\n"
     "## Out of scope\n- accounting\n\n## Critical invariants\n- no silent stock loss\n\n"
     "## Success criteria\n- clerks can adjust counts\n\n## Assumptions & risks\n- single tenant\n"
 )
-print("started", s.phase, s.ready_for_design, flush=True)
-for ans in [
-    "Clerks and manager; keep accurate stock counts.",
-    "Never lose adjustments; audit everything. V1 receive/adjust/report. Out: purchasing.",
-]:
-    if s.ready_for_design:
-        break
-    s = store.chat(s.session_id, ans)
-    print("chat", s.ready_for_design, len(s.messages), flush=True)
-
-print("approve…", flush=True)
+print("started", s.phase, s.design_track, flush=True)
+assert s.phase == "phase0"
 s = store.approve(s.session_id)
-print("approve", s.phase, flush=True)
+assert s.design_track == "hld"
+
+# Advance through HLD 1..6 → market → continue → step 4
+for _ in range(6):
+    s = store.approve(s.session_id)
+assert s.phase == "market_research"
+s = store.approve(s.session_id)
+assert s.phase == "hld" and s.design_step == 4
 print("d1", repr(s.design_diagram[:100]), flush=True)
 d1 = s.design_diagram
 

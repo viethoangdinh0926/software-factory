@@ -4,29 +4,47 @@ from typing import Any
 
 from langgraph.types import interrupt
 
+from architect_agent.graph.nodes.common import approve_label
 from architect_agent.graph.state import DesignGraphState
 from architect_agent.market_research import generate_market_evaluation_report
 
 
 def market_research_node(state: DesignGraphState) -> dict[str, Any]:
-    """Compare the approved spec to popular alternatives and produce an evaluation report."""
-    if state.get("market_evaluation_done") and state.get("market_evaluation_report"):
-        return {
-            "phase": "market_research",
-            "pending_assistant_message": state.get("pending_assistant_message") or "",
-        }
-
+    """Re-evaluate the market against the latest design package (every design approve)."""
     business_spec = state.get("business_spec") or ""
-    result = generate_market_evaluation_report(business_spec)
+    diagram = state.get("design_diagram") or ""
+    justification = state.get("design_justification") or ""
+    ledger = state.get("tradeoff_ledger") or ""
+    scale = state.get("scale_estimates") or ""
+    prior_grade = state.get("market_evaluation_grade") or ""
+    prior_report = state.get("market_evaluation_report") or ""
+
+    research_blob = (
+        f"{business_spec}\n\n"
+        f"## Scale estimates\n{scale}\n\n"
+        f"## Trade-off ledger\n{ledger}\n\n"
+        f"## Current design diagram\n```mermaid\n{diagram}\n```\n\n"
+        f"## Design justification\n{justification}\n"
+    )
+    if prior_grade or prior_report:
+        research_blob += (
+            f"\n## Prior market grade\n{prior_grade}\n\n"
+            f"## Prior market report (for delta context)\n{prior_report[:4000]}\n"
+        )
+
+    result = generate_market_evaluation_report(research_blob)
     report = result["report_markdown"]
     grade = result["grade"]
     summary = result["summary"]
+    track = state.get("design_track") or "hld"
+    version_hint = "this design version"
 
     assistant_message = (
-        f"Spec approved. I researched popular alternatives and graded this idea "
-        f"**{grade}**.\n\n{summary}\n\n"
-        "Review the **Market evaluation** report in the side panel (you can download it). "
-        "When you're ready, click **Continue to system design**."
+        f"Market evaluation for {version_hint} complete — idea grade **{grade}**.\n\n"
+        f"{summary}\n\n"
+        "Review the **Market evaluation** report. When you're ready, click "
+        "**Continue after market evaluation** to hand off the design package and "
+        f"resume **{str(track).upper()}** design iteration."
     )
 
     return {
@@ -37,6 +55,7 @@ def market_research_node(state: DesignGraphState) -> dict[str, Any]:
         "pending_user_feedback": "",
         "pending_assistant_message": assistant_message,
         "publish_requested": False,
+        "resume_after_market": True,
         "messages": [
             {"role": "assistant", "content": assistant_message, "node": "market_research"}
         ],
@@ -44,44 +63,81 @@ def market_research_node(state: DesignGraphState) -> dict[str, Any]:
 
 
 def market_wait_node(state: DesignGraphState) -> dict[str, Any]:
-    """Pause so the user can read the market evaluation before system design."""
+    """Pause for market report review; continue triggers handoff + design resume."""
     report = state.get("market_evaluation_report") or ""
     grade = state.get("market_evaluation_grade") or ""
     assistant_message = state.get("pending_assistant_message") or ""
+    track = state.get("design_track") or "hld"
 
     resume = interrupt(
         {
             "phase": "market_research",
+            "design_track": track,
+            "design_step": int(state.get("design_step") or 0),
             "assistant_message": assistant_message,
             "business_spec": state.get("business_spec") or "",
+            "tradeoff_ledger": state.get("tradeoff_ledger") or "",
+            "design_diagram": state.get("design_diagram") or "",
+            "design_justification": state.get("design_justification") or "",
             "market_evaluation_report": report,
             "market_evaluation_grade": grade,
             "can_approve": True,
             "can_download_market_report": True,
+            "approve_kind": "continue_after_market",
+            "approve_label": approve_label("market_research", track, 0),
             "ready_for_design": True,
         }
     )
 
     action = (resume or {}).get("action", "approve")
     user_text = ((resume or {}).get("text") or "").strip()
-
-    proceed_msg = "Continuing to system design with your approved specification."
     msgs: list[dict[str, Any]] = []
     if action == "chat" and user_text:
         msgs.append({"role": "user", "content": user_text, "node": "market_research"})
+
+    if action == "session_done":
+        msgs.append(
+            {"role": "assistant", "content": "Session marked done.", "node": "market_research"}
+        )
+        return {
+            "phase": "done",
+            "pending_assistant_message": "Session marked done.",
+            "publish_requested": False,
+            "messages": msgs,
+        }
+
+    # Resume design iteration: HLD → step 4; LLD → step 3 (verify).
+    if track == "lld":
+        next_phase = "lld"
+        next_step = 3
+    else:
+        next_phase = "hld"
+        next_step = 4
+
+    proceed_msg = (
+        "Continuing after market evaluation: design package will be handed off, "
+        f"then resume **{str(track).upper()}** at step {next_step}."
+    )
+    if user_text:
         proceed_msg = (
-            f"Noted before design: {user_text[:240]}"
+            f"Noted: {user_text[:240]}"
             + ("…" if len(user_text) > 240 else "")
-            + " Continuing to system design."
+            + " "
+            + proceed_msg
         )
     msgs.append({"role": "assistant", "content": proceed_msg, "node": "market_research"})
 
     return {
-        "phase": "system_design",
-        "spec_approved": True,
+        "phase": next_phase,  # type: ignore[typeddict-item]
+        "design_track": track if track in {"lld", "hld"} else "hld",  # type: ignore[typeddict-item]
+        "design_step": next_step,
         "market_evaluation_done": True,
         "market_evaluation_report": report,
         "market_evaluation_grade": grade,
+        "publish_requested": True,
+        "resume_after_market": False,
+        "ready_to_advance": False,
+        "design_ready_to_approve": False,
         "pending_user_feedback": user_text if action == "chat" else "",
         "pending_assistant_message": proceed_msg,
         "messages": msgs,

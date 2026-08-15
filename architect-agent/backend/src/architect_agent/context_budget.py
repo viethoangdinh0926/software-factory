@@ -12,30 +12,56 @@ logger = logging.getLogger(__name__)
 # Approx chars-per-token for English/markdown budgeting (conservative).
 _CHARS_PER_TOKEN = 4
 
-# Compact grill-me digest — keeps interview rules without shipping the full skill file
-# on every turn (frontmatter + prose). Full skill remains on disk for humans/docs.
-GRILL_ME_DIGEST = """
-Grill-me interview rules:
-1. Ask exactly ONE question per turn; wait for the answer.
-2. Prefer foundational decisions first (actors → jobs → scope → constraints → non-goals).
-3. Offer a (Recommended) answer; challenge vague language until precise.
-4. Capture durable decisions into the living business-spec markdown (no raw Q&A logs).
-5. ready_for_design=true only when the spec covers: problem, actors/jobs, v1 scope,
-   explicit non-goals, critical invariants, success criteria, major assumptions/risks
-   — OR when the user explicitly asks to stop questioning / approve / move on.
-6. User may keep adding detail after ready; only they approve advancing.
-7. NEVER repeat or lightly rephrase a question already asked. If a topic was asked,
-   move to a different uncovered checklist topic — or mark ready if none remain.
-8. Prefer the next uncovered checklist topic over deepening a topic that already has
-   a usable answer in the living spec.
-9. If the user explicitly says to stop asking, approve, or that they are done/ready,
-   stop questioning immediately. If the living spec is too thin to sketch a design,
-   say so honestly and list the gaps (do not enable approval unless they say
-   "approve anyway"). If the spec is sufficient, tell them to click "Approve business spec".
+# Compact digests — keep interview technique + principal-architect workflow without
+# shipping full skill files on every turn. Full skills remain on disk for humans/docs.
+JSON_OUTPUT_DIGEST = """
+OUTPUT FORMAT (non-negotiable):
+- Reply with ONE JSON object. The first non-whitespace character MUST be `{`.
+- No markdown essays, no # headings, no ``` fences, no bare Mermaid outside JSON.
+- Put Mermaid only in design_diagram_lines as an array of short strings
+  (one statement per element: "flowchart LR", "  Client --> GW[API Gateway]", ...).
+- Escape newlines in strings as \\n.
+- assistant_message: short (≤400 chars). Brief what you wrote into artifacts and
+  invite Approve. At most ONE ❓ question, and only if a decision would change architecture.
+""".strip()
 
-Question format:
+INTERVIEW_TECHNIQUE_DIGEST = """
+Effortless interview (grill-me, low friction):
+1. Do the work for the interviewer. On every turn, WRITE the current step's primary
+   artifact in full using explicit labeled assumptions. Do not stall waiting for numbers.
+2. Ask at most ONE question per turn, and only if the answer would change a major
+   boundary (LLD vs HLD, consistency vs availability, monolith vs services).
+3. Always include a (Recommended) default. Treat silence / "ok" / Approve as accepting it.
+4. NEVER repeat or rephrase a question already asked. If they did not answer, keep the
+   recommended default in the artifact and invite Approve.
+5. Capture decisions in living artifacts (spec, ledger, scale, APIs, FMEA, diagram),
+   not in chat. Chat is a brief briefing, not the design document.
+6. If the user says stop / ready / approve, stop questioning and mark ready_to_advance
+   when the step artifact meets the depth bar.
+
+Question format (optional; skip if artifacts are already sufficient):
 ❓ **<short title>**: <question>
-➡️ (Recommended) <recommended answer>
+➡️ (Recommended) <default you already wrote into the artifact>
+""".strip()
+
+# Backward-compatible alias used by older interview helpers.
+GRILL_ME_DIGEST = INTERVIEW_TECHNIQUE_DIGEST
+
+PRINCIPAL_ARCHITECT_DIGEST = """
+Principal Software Architect workflow:
+- Propose labeled assumptions instead of blocking on missing details.
+- Phase 0: classify LLD (single OS process) vs HLD (distributed) from the spec.
+  "Like YouTube/Netflix/Uber/SaaS/marketplace" → HLD. Library/CLI/in-process → LLD.
+  Classify on the first turn whenever the spec is enough; do not interview for scale yet.
+- LLD: (1) gather rules with recommended defaults written into the spec (2) OO blueprint
+  + patterns + SOLID + class/structure Mermaid (3) verify; invite Approve & send.
+- HLD (strict order): (1) numeric capacity plan (2) domain model (3) services + HTTP APIs
+  (4) infra + concrete Mermaid (5) structured FMEA (6) synthesis.
+- Primary artifact this turn must be COMPLETE (never empty / never a one-liner).
+  Other fields: "" so the server keeps prior values (avoids truncation).
+- HLD Step 4 diagram: 12–25 nodes — clients, LB, API gateway, auth, each named service,
+  Redis, Kafka, search, CDN, Postgres, object storage — not a 5-node concept pipeline.
+- Steps 1/3/5 artifacts must be structured (bullets/tables with numbers or METHOD /path).
 """.strip()
 
 _SPEC_SECTIONS = (

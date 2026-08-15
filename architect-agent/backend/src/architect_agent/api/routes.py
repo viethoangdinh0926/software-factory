@@ -94,6 +94,17 @@ async def approve(session_id: str) -> dict:
     return session.to_public()
 
 
+@router.post("/api/sessions/{session_id}/end")
+async def end_session(session_id: str) -> dict:
+    try:
+        session = get_store().end_session(session_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Unknown design session") from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return session.to_public()
+
+
 @router.get("/api/sessions/{session_id}/download/spec")
 async def download_spec(session_id: str) -> PlainTextResponse:
     try:

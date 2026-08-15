@@ -3,51 +3,59 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Any
 
 from json_repair import repair_json
 
-_OBJECT_RE = re.compile(r"\{[\s\S]*\}")
+logger = logging.getLogger(__name__)
+
+_OBJECT_START_RE = re.compile(r"\{")
 
 
 def parse_llm_json_object(text: str) -> dict[str, Any]:
     """Extract and parse a JSON object from model output.
 
-    Models frequently emit Mermaid / markdown with literal newlines or unescaped
-    quotes inside JSON string values. Try strict parse, then control-char repair,
-    then ``json-repair``.
+    Handles:
+    - trailing prose / second objects (``Extra data``)
+    - raw newlines inside string values
+    - **truncated** replies (unbalanced braces / cut mid-string) via close+repair
     """
     cleaned = _strip_fences(text.strip())
-    blob = _extract_object(cleaned)
+    if not cleaned:
+        raise ValueError("Expected JSON object in model response: (empty)")
 
     errors: list[str] = []
-    for candidate in (blob, _escape_raw_controls_in_strings(blob)):
+    candidates = _candidate_blobs(cleaned)
+
+    for candidate in candidates:
+        parsed = _try_parse_dict(candidate)
+        if parsed is not None:
+            return parsed
         try:
-            data = json.loads(candidate)
-            if isinstance(data, dict):
-                return data
-            errors.append(f"parsed non-object {type(data).__name__}")
+            json.loads(candidate)
         except json.JSONDecodeError as exc:
             errors.append(str(exc))
 
-    try:
-        repaired = repair_json(blob, return_objects=True)
-    except Exception as exc:  # noqa: BLE001
-        raise ValueError(
-            "Failed to parse model JSON "
-            f"({'; '.join(errors[:2]) or 'unknown'}); repair also failed: {exc}"
-        ) from exc
+    # Last resort: json-repair only when the text looks like it contains an object.
+    if "{" in cleaned:
+        for candidate in candidates:
+            try:
+                repaired = repair_json(candidate, return_objects=True)
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"repair failed: {exc}")
+                continue
+            if isinstance(repaired, dict):
+                return repaired
+            if isinstance(repaired, str):
+                parsed = _try_parse_dict(repaired)
+                if parsed is not None:
+                    return parsed
 
-    if isinstance(repaired, dict):
-        return repaired
-    if isinstance(repaired, str):
-        data = json.loads(repaired)
-        if isinstance(data, dict):
-            return data
     raise ValueError(
         "Failed to parse model JSON into an object "
-        f"({'; '.join(errors[:2]) or type(repaired).__name__})"
+        f"({'; '.join(errors[:2]) or 'unknown'}; preview={cleaned[:240]!r})"
     )
 
 
@@ -62,6 +70,147 @@ def coerce_diagram_text(payload: dict[str, Any], fallback: str = "") -> str:
     return fallback
 
 
+_MERMAID_FENCE_RE = re.compile(
+    r"```(?:mermaid)?\s*\n([\s\S]*?)```",
+    re.IGNORECASE,
+)
+_MERMAID_START_RE = re.compile(
+    r"(?im)^(?:mermaid\s*\n)?((?:flowchart|graph|sequenceDiagram|classDiagram|stateDiagram"
+    r"|erDiagram|journey|gantt|pie|mindmap|timeline|C4Context|C4Container)\b[\s\S]+)"
+)
+
+
+def extract_mermaid_from_text(text: str) -> str:
+    """Pull a Mermaid diagram out of markdown / bare diagram replies."""
+    raw = (text or "").strip()
+    if not raw:
+        return ""
+    fences = _MERMAID_FENCE_RE.findall(raw)
+    for block in fences:
+        block = block.strip()
+        if re.match(
+            r"^(?:flowchart|graph|sequenceDiagram|classDiagram|stateDiagram|erDiagram)\b",
+            block,
+            re.I,
+        ):
+            return block
+        # Fenced as ```mermaid with body starting after optional blank lines
+        if "-->" in block or "subgraph" in block.lower():
+            return block
+    match = _MERMAID_START_RE.search(raw)
+    if match:
+        body = match.group(1).strip()
+        # Stop at markdown headings that often follow diagrams in prose dumps.
+        body = re.split(r"\n(?=#{1,3}\s)", body, maxsplit=1)[0].strip()
+        return body
+    return ""
+
+
+def recover_architecture_payload_from_prose(text: str) -> dict[str, Any] | None:
+    """Best-effort payload when the model ignores JSON and dumps markdown/Mermaid."""
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return None
+    # If it already looks like JSON, do not invent a recovery object here.
+    if cleaned.lstrip().startswith("{") or cleaned.lstrip().startswith("```json"):
+        return None
+
+    mermaid = extract_mermaid_from_text(cleaned)
+    if mermaid:
+        lines = [ln for ln in mermaid.splitlines() if ln.strip() != ""]
+        logger.info(
+            "Recovered Mermaid (%d lines) from non-JSON LLM reply",
+            len(lines),
+        )
+        return {
+            "updated_business_spec": "",
+            "tradeoff_ledger": "",
+            "scale_estimates": "",
+            "api_contracts": "",
+            "fmea_notes": "",
+            "design_diagram_lines": lines,
+            "design_diagram": "",
+            "design_justification": "",
+            "ready_to_advance": False,
+            "design_ready_to_approve": False,
+            "assistant_message": (
+                "Recovered a Mermaid diagram from a non-JSON model reply. "
+                "Review the diagram; reply again if other artifacts still need deepening."
+            ),
+        }
+
+    # Pure prose / architecture essay — keep session alive with a clear nudge.
+    if len(cleaned) > 40 and not cleaned.lstrip().startswith("{"):
+        logger.info("LLM returned prose without Mermaid; synthesizing empty-artifact payload")
+        return {
+            "updated_business_spec": "",
+            "tradeoff_ledger": "",
+            "scale_estimates": "",
+            "api_contracts": "",
+            "fmea_notes": "",
+            "design_diagram_lines": [],
+            "design_diagram": "",
+            "design_justification": "",
+            "ready_to_advance": False,
+            "design_ready_to_approve": False,
+            "assistant_message": (
+                "I need a single JSON object (starting with `{`), not a markdown essay. "
+                "Put Mermaid in `design_diagram_lines` as an array of short lines, and leave "
+                "unchanged fields as empty strings."
+            ),
+        }
+    return None
+
+
+def _candidate_blobs(cleaned: str) -> list[str]:
+    """Build parse candidates: balanced object, truncated tail, control-escaped variants."""
+    blobs: list[str] = []
+    starts = _object_start_indexes(cleaned)
+    if not starts:
+        blobs.append(cleaned)
+    else:
+        start = starts[0]
+        try:
+            blobs.append(_extract_balanced_object(cleaned))
+        except ValueError:
+            # Truncated model output — take from first `{` through end and close later.
+            tail = cleaned[start:]
+            blobs.append(tail)
+            blobs.append(_close_truncated_json(tail))
+            logger.info(
+                "LLM JSON appears truncated/unbalanced (%d chars); attempting repair",
+                len(tail),
+            )
+
+        # Also try from later `{` if the first was prose with a brace.
+        for start in starts[1:3]:
+            chunk = cleaned[start:]
+            try:
+                blobs.append(_extract_balanced_object(cleaned[start:]))
+            except ValueError:
+                blobs.append(_close_truncated_json(chunk))
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for blob in blobs:
+        for variant in (blob, _escape_raw_controls_in_strings(blob)):
+            if variant and variant not in seen:
+                seen.add(variant)
+                out.append(variant)
+    return out
+
+
+def _try_parse_dict(text: str) -> dict[str, Any] | None:
+    parsed = _raw_decode_object(text)
+    if isinstance(parsed, dict):
+        return parsed
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
 def _strip_fences(text: str) -> str:
     if not text.startswith("```"):
         return text
@@ -70,11 +219,88 @@ def _strip_fences(text: str) -> str:
     return text.strip()
 
 
-def _extract_object(text: str) -> str:
-    match = _OBJECT_RE.search(text)
-    if not match:
-        raise ValueError(f"Expected JSON object in model response: {text[:400]}")
-    return match.group(0)
+def _object_start_indexes(text: str) -> list[int]:
+    return [m.start() for m in _OBJECT_START_RE.finditer(text)]
+
+
+def _raw_decode_object(text: str) -> dict[str, Any] | list[Any] | None:
+    """Parse the first JSON value; ignore trailing Extra data."""
+    try:
+        data, _end = json.JSONDecoder().raw_decode(text.lstrip())
+    except json.JSONDecodeError:
+        return None
+    return data  # type: ignore[return-value]
+
+
+def _extract_balanced_object(text: str) -> str:
+    """Return the first top-level `{...}` using brace depth (string-aware)."""
+    start = text.find("{")
+    if start < 0:
+        raise ValueError("no object start")
+
+    depth = 0
+    in_string = False
+    escape = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if in_string:
+            if escape:
+                escape = False
+                continue
+            if ch == "\\":
+                escape = True
+                continue
+            if ch == '"':
+                in_string = False
+            continue
+
+        if ch == '"':
+            in_string = True
+            continue
+        if ch == "{":
+            depth += 1
+            continue
+        if ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+    raise ValueError("unbalanced JSON object")
+
+
+def _close_truncated_json(text: str) -> str:
+    """Best-effort close of truncated JSON (open strings / braces / brackets)."""
+    in_string = False
+    escape = False
+    stack: list[str] = []
+    for ch in text:
+        if in_string:
+            if escape:
+                escape = False
+                continue
+            if ch == "\\":
+                escape = True
+                continue
+            if ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+            continue
+        if ch in "{[":
+            stack.append("}" if ch == "{" else "]")
+            continue
+        if ch in "}]" and stack and stack[-1] == ch:
+            stack.pop()
+
+    out = text.rstrip()
+    # Trim a dangling trailing backslash or incomplete escape.
+    while out.endswith("\\"):
+        out = out[:-1]
+    if in_string:
+        out += '"'
+    while stack:
+        out += stack.pop()
+    return out
 
 
 def _escape_raw_controls_in_strings(text: str) -> str:

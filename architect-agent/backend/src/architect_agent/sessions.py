@@ -13,6 +13,7 @@ from langgraph.types import Command
 from architect_agent.a2a.system_manager import HandoffResult, send_design_package
 from architect_agent.config import get_settings
 from architect_agent.graph import build_graph, initial_state
+from architect_agent.graph.nodes.common import approve_label
 from architect_agent.mermaid_sanitize import sanitize_mermaid
 
 logger = logging.getLogger(__name__)
@@ -22,16 +23,53 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _legacy_map(data: dict[str, Any]) -> dict[str, Any]:
+    """Map pre–principal-architect session JSON onto track/step phases."""
+    phase = str(data.get("phase") or "phase0")
+    track = str(data.get("design_track") or "").lower()
+    step = data.get("design_step")
+    if track not in {"unset", "lld", "hld"}:
+        track = ""
+    if phase in {"phase0", "lld", "hld", "market_research", "done"} and track:
+        return {
+            "phase": phase,
+            "design_track": track,
+            "design_step": int(step if step is not None else (0 if phase == "phase0" else 1)),
+        }
+    if phase == "spec_interview":
+        return {"phase": "phase0", "design_track": "unset", "design_step": 0}
+    if phase == "system_design":
+        # Best-effort: treat legacy design sessions as mid-HLD diagram iteration.
+        return {"phase": "hld", "design_track": "hld", "design_step": 4}
+    if phase == "market_research":
+        return {
+            "phase": "market_research",
+            "design_track": track or "hld",
+            "design_step": int(step if step is not None else 6),
+        }
+    if phase == "done":
+        return {"phase": "done", "design_track": track or "hld", "design_step": int(step or 0)}
+    return {"phase": "phase0", "design_track": "unset", "design_step": 0}
+
+
 @dataclass
 class DesignSession:
     session_id: str
     created_at: str
     updated_at: str
-    phase: str = "spec_interview"
+    phase: str = "phase0"
+    design_track: str = "unset"
+    design_step: int = 0
     business_spec: str = ""
     design_diagram: str = ""
     design_justification: str = ""
+    tradeoff_ledger: str = ""
+    scale_estimates: str = ""
+    api_contracts: str = ""
+    fmea_notes: str = ""
     ready_for_design: bool = False
+    ready_to_advance: bool = False
+    design_ready_to_approve: bool = False
     spec_approved: bool = False
     design_approved: bool = False
     messages: list[dict[str, Any]] = field(default_factory=list)
@@ -44,21 +82,44 @@ class DesignSession:
     market_evaluation_done: bool = False
 
     def to_public(self) -> dict[str, Any]:
+        interrupt = self.last_interrupt or {}
+        can_approve = bool(interrupt.get("can_approve"))
+        if not interrupt:
+            can_approve = bool(
+                (self.phase == "phase0" and self.ready_to_advance)
+                or (self.phase in {"lld", "hld"} and (self.ready_to_advance or self.design_ready_to_approve))
+                or (self.phase == "market_research" and self.market_evaluation_done)
+            )
+        label = str(
+            interrupt.get("approve_label")
+            or approve_label(
+                self.phase,
+                self.design_track,
+                self.design_step,
+                design_ready=self.design_ready_to_approve,
+            )
+        )
         return {
             "design_session_id": self.session_id,
             "phase": self.phase,
+            "design_track": self.design_track,
+            "design_step": self.design_step,
             "ready_for_design": self.ready_for_design,
+            "ready_to_advance": self.ready_to_advance,
+            "design_ready_to_approve": self.design_ready_to_approve,
             "spec_approved": self.spec_approved,
             "design_approved": self.design_approved,
             "finalized": self.finalized,
-            "can_approve": bool(
-                (self.phase == "spec_interview" and self.ready_for_design)
-                or (self.phase == "market_research" and self.market_evaluation_done)
-                or (self.phase == "system_design" and not self.finalized)
-            ),
+            "can_approve": can_approve and not self.finalized,
+            "approve_label": label,
+            "approve_kind": interrupt.get("approve_kind") or "",
             "business_spec": self.business_spec,
             "design_diagram": self.design_diagram,
             "design_justification": self.design_justification,
+            "tradeoff_ledger": self.tradeoff_ledger,
+            "scale_estimates": self.scale_estimates,
+            "api_contracts": self.api_contracts,
+            "fmea_notes": self.fmea_notes,
             "market_evaluation_report": self.market_evaluation_report,
             "market_evaluation_grade": self.market_evaluation_grade,
             "market_evaluation_done": self.market_evaluation_done,
@@ -74,20 +135,29 @@ def _session_from_disk(data: dict[str, Any]) -> DesignSession:
     session_id = data.get("design_session_id") or data.get("session_id")
     if not session_id:
         raise KeyError("session file missing design_session_id")
+    mapped = _legacy_map(data)
     return DesignSession(
         session_id=session_id,
         created_at=str(data.get("created_at") or data.get("updated_at") or _now()),
         updated_at=str(data.get("updated_at") or _now()),
-        phase=str(data.get("phase") or "spec_interview"),
+        phase=mapped["phase"],
+        design_track=mapped["design_track"],
+        design_step=int(mapped["design_step"]),
         business_spec=str(data.get("business_spec") or ""),
         design_diagram=str(data.get("design_diagram") or ""),
         design_justification=str(data.get("design_justification") or ""),
-        ready_for_design=bool(data.get("ready_for_design")),
+        tradeoff_ledger=str(data.get("tradeoff_ledger") or ""),
+        scale_estimates=str(data.get("scale_estimates") or ""),
+        api_contracts=str(data.get("api_contracts") or ""),
+        fmea_notes=str(data.get("fmea_notes") or ""),
+        ready_for_design=bool(data.get("ready_for_design") or data.get("ready_to_advance")),
+        ready_to_advance=bool(data.get("ready_to_advance") or data.get("ready_for_design")),
+        design_ready_to_approve=bool(data.get("design_ready_to_approve")),
         spec_approved=bool(data.get("spec_approved")),
         design_approved=bool(data.get("design_approved")),
         messages=list(data.get("messages") or []),
         last_interrupt=data.get("last_interrupt"),
-        finalized=bool(data.get("finalized")),
+        finalized=bool(data.get("finalized")) or mapped["phase"] == "done",
         design_version=int(data.get("design_version") or 0),
         last_handoff=data.get("last_handoff"),
         market_evaluation_report=str(data.get("market_evaluation_report") or ""),
@@ -122,9 +192,14 @@ class SessionStore:
                 raise KeyError(session_id)
             session = _session_from_disk(json.loads(path.read_text(encoding="utf-8")))
             self._sessions[session_id] = session
-            logger.info("Restored design session %s from disk (phase=%s)", session_id, session.phase)
+            logger.info(
+                "Restored design session %s from disk (phase=%s track=%s step=%s)",
+                session_id,
+                session.phase,
+                session.design_track,
+                session.design_step,
+            )
 
-        # Ensure LangGraph is waiting on an interrupt so chat/approve can resume.
         self._ensure_graph_resumable(session)
         return session
 
@@ -138,18 +213,60 @@ class SessionStore:
     def _wait_node(self, session: DesignSession) -> str:
         if session.phase == "market_research":
             return "market_wait"
-        if session.phase == "system_design" or (
-            session.spec_approved and session.market_evaluation_done
-        ):
-            return "design_wait"
-        return "spec_wait"
+        if session.phase == "lld":
+            return "lld_wait"
+        if session.phase == "hld":
+            return "hld_wait"
+        if session.phase == "phase0":
+            return "phase0_wait"
+        # Legacy fallbacks already mapped in _legacy_map; keep safe defaults.
+        if session.phase == "system_design":
+            return "hld_wait"
+        if session.phase == "spec_interview":
+            return "phase0_wait"
+        return "phase0_wait"
 
     def _active_message_node(self, session: DesignSession) -> str:
+        if session.phase in {"lld", "hld", "phase0", "market_research"}:
+            return session.phase
         if session.phase == "system_design":
-            return "system_design"
-        if session.phase == "market_research":
-            return "market_research"
-        return "spec_interview"
+            return "hld"
+        return "phase0"
+
+    def _seed_state(self, session: DesignSession, last_assistant: str) -> dict[str, Any]:
+        return {
+            "session_id": session.session_id,
+            "business_spec": session.business_spec,
+            "messages": [],
+            "phase": session.phase if session.phase in {"phase0", "lld", "hld", "market_research", "done"} else "phase0",
+            "design_track": session.design_track if session.design_track in {"unset", "lld", "hld"} else "unset",
+            "design_step": session.design_step,
+            "ready_for_design": session.ready_for_design,
+            "ready_to_advance": session.ready_to_advance,
+            "design_ready_to_approve": session.design_ready_to_approve,
+            "spec_approved": session.spec_approved,
+            "design_diagram": session.design_diagram,
+            "design_justification": session.design_justification,
+            "design_approved": False,
+            "pending_user_feedback": "",
+            "publish_requested": False,
+            "pending_assistant_message": (
+                last_assistant
+                or (
+                    str(session.last_interrupt.get("assistant_message") or "")
+                    if session.last_interrupt
+                    else ""
+                )
+            ),
+            "market_evaluation_report": session.market_evaluation_report,
+            "market_evaluation_grade": session.market_evaluation_grade,
+            "market_evaluation_done": session.market_evaluation_done,
+            "tradeoff_ledger": session.tradeoff_ledger,
+            "scale_estimates": session.scale_estimates,
+            "api_contracts": session.api_contracts,
+            "fmea_notes": session.fmea_notes,
+            "resume_after_market": False,
+        }
 
     def _ensure_graph_resumable(self, session: DesignSession) -> None:
         """After process restart, rebuild a wait-node interrupt without rewriting chat history."""
@@ -166,46 +283,15 @@ class SessionStore:
                 last_assistant = str(msg["content"])
                 break
 
-        phase = (
-            "system_design"
-            if wait_node == "design_wait"
-            else "market_research"
-            if wait_node == "market_wait"
-            else "spec_interview"
-        )
-        seed = {
-            "session_id": session.session_id,
-            "business_spec": session.business_spec,
-            "messages": [],
-            "phase": phase,
-            "ready_for_design": session.ready_for_design,
-            "spec_approved": session.spec_approved
-            or wait_node in {"design_wait", "market_wait"},
-            "design_diagram": session.design_diagram,
-            "design_justification": session.design_justification,
-            "design_approved": False,
-            "pending_user_feedback": "",
-            "publish_requested": False,
-            "pending_assistant_message": (
-                last_assistant
-                or (
-                    str(session.last_interrupt.get("assistant_message") or "")
-                    if session.last_interrupt
-                    else ""
-                )
-            ),
-            "market_evaluation_report": session.market_evaluation_report,
-            "market_evaluation_grade": session.market_evaluation_grade,
-            "market_evaluation_done": session.market_evaluation_done
-            or wait_node in {"market_wait", "design_wait"},
-        }
+        as_node = {
+            "phase0_wait": "phase0_classify",
+            "lld_wait": "lld_step",
+            "hld_wait": "hld_step",
+            "market_wait": "market_research",
+        }[wait_node]
+        seed = self._seed_state(session, last_assistant)
         preserved_messages = list(session.messages)
         try:
-            as_node = {
-                "design_wait": "system_design",
-                "market_wait": "market_research",
-                "spec_wait": "spec_interview",
-            }[wait_node]
             self._graph.update_state(config, seed, as_node=as_node)
             result = self._graph.invoke(None, config=config)
             self._apply_graph_result(
@@ -254,13 +340,29 @@ class SessionStore:
             session.design_diagram = sanitize_mermaid(values["design_diagram"])
         if values.get("design_justification"):
             session.design_justification = values["design_justification"]
+        if values.get("tradeoff_ledger") is not None:
+            session.tradeoff_ledger = str(values.get("tradeoff_ledger") or "")
+        if values.get("scale_estimates") is not None:
+            session.scale_estimates = str(values.get("scale_estimates") or "")
+        if values.get("api_contracts") is not None:
+            session.api_contracts = str(values.get("api_contracts") or "")
+        if values.get("fmea_notes") is not None:
+            session.fmea_notes = str(values.get("fmea_notes") or "")
         if values.get("market_evaluation_report"):
             session.market_evaluation_report = values["market_evaluation_report"]
         if values.get("market_evaluation_grade"):
             session.market_evaluation_grade = values["market_evaluation_grade"]
         if "market_evaluation_done" in values:
             session.market_evaluation_done = bool(values.get("market_evaluation_done"))
+        if values.get("design_track"):
+            session.design_track = str(values["design_track"])
+        if "design_step" in values:
+            session.design_step = int(values.get("design_step") or 0)
         session.ready_for_design = bool(values.get("ready_for_design", session.ready_for_design))
+        session.ready_to_advance = bool(values.get("ready_to_advance", session.ready_to_advance))
+        session.design_ready_to_approve = bool(
+            values.get("design_ready_to_approve", session.design_ready_to_approve)
+        )
         session.spec_approved = bool(values.get("spec_approved", session.spec_approved))
         session.design_approved = bool(values.get("design_approved", session.design_approved))
         session.phase = values.get("phase", session.phase)
@@ -268,7 +370,6 @@ class SessionStore:
         if preserve_messages is not None:
             session.messages = list(preserve_messages)
 
-        # Never replace UI history from the graph message channel — it is LLM context only.
         if user_text and action == "chat":
             node = self._active_message_node(session)
             last = session.messages[-1] if session.messages else None
@@ -278,8 +379,18 @@ class SessionStore:
         if isinstance(payload, dict):
             session.last_interrupt = payload
             session.phase = payload.get("phase", session.phase)
+            if payload.get("design_track"):
+                session.design_track = str(payload["design_track"])
+            if "design_step" in payload:
+                session.design_step = int(payload.get("design_step") or 0)
             session.ready_for_design = bool(
                 payload.get("ready_for_design", session.ready_for_design)
+            )
+            session.ready_to_advance = bool(
+                payload.get("ready_to_advance", session.ready_to_advance)
+            )
+            session.design_ready_to_approve = bool(
+                payload.get("design_ready_to_approve", session.design_ready_to_approve)
             )
             if payload.get("business_spec"):
                 session.business_spec = payload["business_spec"]
@@ -291,6 +402,14 @@ class SessionStore:
                 session.design_justification = (
                     payload.get("design_justification") or session.design_justification
                 )
+            if payload.get("tradeoff_ledger") is not None:
+                session.tradeoff_ledger = str(payload.get("tradeoff_ledger") or "")
+            if payload.get("scale_estimates") is not None:
+                session.scale_estimates = str(payload.get("scale_estimates") or "")
+            if payload.get("api_contracts") is not None:
+                session.api_contracts = str(payload.get("api_contracts") or "")
+            if payload.get("fmea_notes") is not None:
+                session.fmea_notes = str(payload.get("fmea_notes") or "")
             if payload.get("market_evaluation_report"):
                 session.market_evaluation_report = str(payload["market_evaluation_report"])
                 session.market_evaluation_done = True
@@ -315,6 +434,9 @@ class SessionStore:
             created_at=_now(),
             updated_at=_now(),
             business_spec=markdown,
+            phase="phase0",
+            design_track="unset",
+            design_step=0,
         )
         self._sessions[session_id] = session
 
@@ -330,18 +452,16 @@ class SessionStore:
         if session.finalized:
             return session
 
-        publishing_design = action == "approve" and session.phase == "system_design"
-        # One resume runs: wait → (optional generate) → wait interrupt.
+        # Handoff runs after market continue (not on design-version approve entry).
+        handoff_after_market = action == "approve" and session.phase == "market_research"
+
         result = self._graph.invoke(
             Command(resume={"action": action, "text": text}),
             config=self._config(session_id),
         )
         self._apply_graph_result(session, result, user_text=text or None, action=action)
 
-        if publishing_design or bool(
-            (self._graph.get_state(self._config(session_id)).values or {}).get("publish_requested")
-        ):
-            # Do not update_state here — it would clear the wait-node interrupt.
+        if handoff_after_market:
             self._publish_design_to_system_manager(session)
 
         return session
@@ -360,9 +480,8 @@ class SessionStore:
             f"Handoff v{session.design_version} → System Manager: {handoff.status}. "
             f"{handoff.detail}"
         )
-        session.messages.append(
-            {"role": "assistant", "content": status_line, "node": "system_design"}
-        )
+        node = "hld" if session.design_track == "hld" else "lld"
+        session.messages.append({"role": "assistant", "content": status_line, "node": node})
         self._persist(session)
         return handoff
 
@@ -372,6 +491,9 @@ class SessionStore:
     def approve(self, session_id: str) -> DesignSession:
         return self.resume(session_id, action="approve")
 
+    def end_session(self, session_id: str) -> DesignSession:
+        return self.resume(session_id, action="session_done")
+
     def current_spec_markdown(self, session_id: str) -> str:
         session = self.get(session_id)
         return session.business_spec
@@ -380,29 +502,42 @@ class SessionStore:
         session = self.get(session_id)
         report = (session.market_evaluation_report or "").strip()
         if not report:
-            raise ValueError("Approve the business spec first to generate a market evaluation.")
+            raise ValueError("Complete a design-version approve to generate a market evaluation.")
         return report
 
     def final_design_markdown(self, session_id: str) -> str:
         session = self.get(session_id)
         version = max(session.design_version, 1)
         parts = [
-            f"# System Design Package\n",
+            "# System Design Package\n",
             f"Design session: `{session.session_id}`\n",
             f"Design version: `{version}`\n",
+            f"Track: `{session.design_track}` step `{session.design_step}`\n",
             f"Generated: {session.updated_at}\n",
             "\n---\n",
             "## Business Specification\n\n",
             session.business_spec.strip(),
             "\n\n---\n",
-            "## Design Diagram\n\n",
-            "```mermaid\n",
-            (session.design_diagram or "").strip(),
-            "\n```\n\n",
-            "## Design Justification\n\n",
-            (session.design_justification or "").strip(),
-            "\n",
         ]
+        if session.tradeoff_ledger.strip():
+            parts.extend(["## Trade-off Ledger\n\n", session.tradeoff_ledger.strip(), "\n\n---\n"])
+        if session.scale_estimates.strip():
+            parts.extend(["## Scale Estimates\n\n", session.scale_estimates.strip(), "\n\n---\n"])
+        if session.api_contracts.strip():
+            parts.extend(["## API Contracts\n\n", session.api_contracts.strip(), "\n\n---\n"])
+        if session.fmea_notes.strip():
+            parts.extend(["## FMEA Notes\n\n", session.fmea_notes.strip(), "\n\n---\n"])
+        parts.extend(
+            [
+                "## Design Diagram\n\n",
+                "```mermaid\n",
+                (session.design_diagram or "").strip(),
+                "\n```\n\n",
+                "## Design Justification\n\n",
+                (session.design_justification or "").strip(),
+                "\n",
+            ]
+        )
         return "".join(parts)
 
 

@@ -4,11 +4,18 @@
 architect-agent/
   backend/          # Python A2A FastAPI + LangGraph service
   ui/               # TypeScript React (Vite) SPA
-  skills/           # grill-me skill used by the interview node
+  skills/           # principal-architect (+ grill-me interview technique)
   .env              # LLM + host config
 ```
 
 After `ui` is built, static files land in `backend/src/architect_agent/static/` and are served at the service public base URL.
+
+## Design flow (Principal Architect)
+
+1. **Phase 0** — classify **LLD** (single-process) vs **HLD** (distributed).
+2. **LLD** steps 1–3 or **HLD** steps 1–6 with a living spec, trade-off ledger, and step artifacts.
+3. **Approve & send design** (design-version approve) → **market evaluation** (fresh report + grade) → continue → handoff to System Manager + resume design (HLD defaults to step 4).
+4. Step advances (1–5) do **not** trigger market research.
 
 ## Deploy (from scratch)
 
@@ -56,6 +63,13 @@ Vague idea: track warehouse stock.'
 
 Returns `design_session_id` and `ui_url` (`/sessions/{id}`).
 
+### Smoke (stub LLM)
+
+```bash
+cd backend
+LLM_PROVIDER=stub uv run python scripts/test_principal_architect_flow.py
+```
+
 ### LLM (`.env` at architect-agent root)
 
 | Variable | Meaning |
@@ -69,4 +83,4 @@ Returns `design_session_id` and `ui_url` (`/sessions/{id}`).
 
 - Agent card: `GET /.well-known/agent-card.json`
 - JSON-RPC: `POST /`
-- On each **Approve & send design**, the architect writes a design-package markdown and delivers it to the Software System Manager via A2A (`SYSTEM_MANAGER_AGENT_URL`). If unset/unreachable, packages are queued under `backend/data/handoffs/`.
+- On each **Continue after market evaluation** (after design-version approve), the architect writes a design-package markdown and delivers it to the Software System Manager via A2A (`SYSTEM_MANAGER_AGENT_URL`). If unset/unreachable, packages are queued under `backend/data/handoffs/`.

@@ -43,6 +43,9 @@ class Settings(BaseSettings):
 
     data_dir: Path = BACKEND_ROOT / "data" / "sessions"
     grill_me_skill_path: Path = AGENT_ROOT / "skills" / "grill-me" / "SKILL.md"
+    principal_architect_skill_path: Path = (
+        AGENT_ROOT / "skills" / "principal-architect" / "SKILL.md"
+    )
     static_dir: Path = STATIC_DIR
 
     # Context-window budgets for long interview / design sessions (approx tokens).
