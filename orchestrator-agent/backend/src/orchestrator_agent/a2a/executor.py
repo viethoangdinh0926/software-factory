@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import threading
 
 from a2a.helpers import (
     get_message_text,
@@ -14,7 +16,17 @@ from a2a.server.tasks import TaskUpdater
 from a2a.types import TaskState
 
 from orchestrator_agent.config import get_settings
+from orchestrator_agent.package_parse import parse_design_package
 from orchestrator_agent.sessions import get_store
+
+logger = logging.getLogger(__name__)
+
+
+def _ingest_later(markdown: str) -> None:
+    try:
+        get_store().ingest(markdown)
+    except Exception:
+        logger.exception("Background ingest of architect package failed")
 
 
 class OrchestratorAgentExecutor(AgentExecutor):
@@ -34,7 +46,7 @@ class OrchestratorAgentExecutor(AgentExecutor):
         )
         await updater.update_status(
             state=TaskState.TASK_STATE_WORKING,
-            message=new_text_message("Ingesting architect design package…"),
+            message=new_text_message("Accepting architect design package…"),
         )
 
         markdown = get_message_text(context.message) if context.message else ""
@@ -46,28 +58,35 @@ class OrchestratorAgentExecutor(AgentExecutor):
             return
 
         try:
-            session = get_store().ingest(markdown.strip())
+            parsed = parse_design_package(markdown.strip())
+            if not parsed.design_session_id:
+                raise ValueError("Design package is missing a design session ID.")
         except ValueError as exc:
             await updater.update_status(
                 state=TaskState.TASK_STATE_FAILED,
                 message=new_text_message(str(exc)),
             )
             return
-        except Exception as exc:  # noqa: BLE001
-            await updater.update_status(
-                state=TaskState.TASK_STATE_FAILED,
-                message=new_text_message(f"Ingest failed: {exc}"),
-            )
-            return
+
+        # Ack immediately. Full extract/prime can take minutes and used to time out A2A.
+        thread = threading.Thread(
+            target=_ingest_later,
+            args=(markdown.strip(),),
+            name=f"orchestrator-ingest-{parsed.design_session_id[:8]}",
+            daemon=True,
+        )
+        thread.start()
 
         settings = get_settings()
         payload = {
-            "design_session_id": session.design_session_id,
-            "ui_url": f"{settings.public_base_url}/sessions/{session.design_session_id}",
-            "topology": session.topology,
-            "design_version": session.design_version,
-            "phase": session.phase,
-            "assistant_message": session.messages[-1]["content"] if session.messages else None,
+            "design_session_id": parsed.design_session_id,
+            "ui_url": f"{settings.public_base_url}/sessions/{parsed.design_session_id}",
+            "topology": "unset",
+            "design_version": parsed.design_version,
+            "phase": "ingest",
+            "assistant_message": (
+                "Design package accepted. Orchestrator is opening planning tiles in the background."
+            ),
         }
         await updater.add_artifact(
             parts=[
@@ -80,7 +99,7 @@ class OrchestratorAgentExecutor(AgentExecutor):
         await updater.update_status(
             state=TaskState.TASK_STATE_COMPLETED,
             message=new_text_message(
-                f"Workflow {session.design_session_id} ready. Open UI: {payload['ui_url']}"
+                f"Workflow {parsed.design_session_id} accepted. Open UI: {payload['ui_url']}"
             ),
         )
 

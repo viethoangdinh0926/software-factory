@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from orchestrator_agent.json_util import parse_llm_json_object
 from orchestrator_agent.llm import get_chat_model
+from orchestrator_agent.query_intent import with_resolution_close
+
+ProseRecover = Callable[[str], dict[str, Any] | None]
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +56,12 @@ def decorate_service(svc: dict[str, Any], *, finalized: bool = False) -> dict[st
     return out
 
 
-def invoke_json(system: str, user: str) -> dict[str, Any]:
+def invoke_json(
+    system: str,
+    user: str,
+    *,
+    recover_prose: ProseRecover | None = None,
+) -> dict[str, Any]:
     model = get_chat_model()
     messages = [SystemMessage(content=system), HumanMessage(content=user)]
     content = _invoke_content(model, messages)
@@ -67,7 +76,19 @@ def invoke_json(system: str, user: str) -> dict[str, Any]:
             HumanMessage(content=f"Retry now. Preview of bad reply:\n{content[:900]}"),
         ]
         content2 = _invoke_content(model, retry_messages)
-        return parse_llm_json_object(content2)
+        try:
+            return parse_llm_json_object(content2)
+        except ValueError as second_exc:
+            for blob in (content2, content):
+                if recover_prose is not None:
+                    recovered = recover_prose(blob)
+                    if recovered is not None:
+                        logger.warning(
+                            "LLM JSON parse failed after retry; using prose recovery: %s",
+                            second_exc,
+                        )
+                        return recovered
+            raise ValueError(f"LLM JSON parse failed after retry: {second_exc}") from first_exc
 
 
 def _invoke_content(model: Any, messages: list[Any]) -> str:
@@ -128,6 +149,95 @@ def empty_service(
     }
 
 
+def _as_visible_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, list):
+        return "\n".join(part for part in (_as_visible_text(item) for item in value) if part).strip()
+    if isinstance(value, dict):
+        for key in ("text", "content", "message", "markdown", "assistant_message"):
+            text = _as_visible_text(value.get(key))
+            if text:
+                return text
+        return ""
+    return str(value).strip()
+
+
+def pick_assistant_message(
+    payload: dict[str, Any] | None,
+    *,
+    fallback: str,
+    artifact_keys: tuple[str, ...] = (),
+    preview_limit: int = 1600,
+) -> str:
+    """Never return empty: models often fill the artifact and leave assistant_message blank."""
+    data = payload or {}
+    for key in ("assistant_message", "rationale", "summary", "message"):
+        text = _as_visible_text(data.get(key))
+        if text:
+            return text
+    for key in artifact_keys:
+        text = _as_visible_text(data.get(key))
+        if not text:
+            continue
+        if len(text) <= preview_limit:
+            return text
+        clipped = text[:preview_limit]
+        if "\n" in clipped:
+            clipped = clipped.rsplit("\n", 1)[0]
+        return clipped.rstrip() + "\n\n…"
+    return (
+        fallback.strip()
+        or "Updated this service. Reply if you want changes, or approve to continue."
+    )
+
+
+def _qa_recover(text: str) -> dict[str, Any] | None:
+    body = (text or "").strip()
+    if not body:
+        return None
+    return {"assistant_message": body}
+
+
+def answer_current_artifacts(
+    *,
+    question: str,
+    artifacts: str,
+    system_extra: str = "",
+) -> str:
+    """Answer a question from current artifacts without rewriting the step."""
+    extra = f"{system_extra.strip()}\n" if system_extra.strip() else ""
+    result = invoke_json(
+        system=(
+            "You are answering a question about the current workflow step before the user "
+            "approves it.\n"
+            f"{extra}"
+            "Answer with concrete facts from the artifacts. Quote METHOD /path, stack "
+            "choices, and names when relevant.\n"
+            "Do not invite Approve. Do not say you finalized or updated anything.\n"
+            'Respond ONLY with JSON: {"assistant_message": string}'
+        ),
+        user=f"Current artifacts:\n{artifacts}\n\nUser question:\n{question}",
+        recover_prose=_qa_recover,
+    )
+    return with_resolution_close(
+        pick_assistant_message(
+            result,
+            fallback="I can answer from the current artifacts on this step. Ask about a specific detail.",
+            artifact_keys=(),
+        ),
+        changed=False,
+    )
+
+
+def close_after_feedback(message: str, *, pending: str, changed: bool) -> str:
+    if not (pending or "").strip():
+        return message
+    return with_resolution_close(message, changed=changed)
+
+
 def skill_digest() -> str:
     from orchestrator_agent.config import get_settings
 
@@ -137,3 +247,59 @@ def skill_digest() -> str:
     except OSError:
         return "You are the Software Factory Orchestrator."
     return text[:4000]
+
+
+def service_focus_system(name: str) -> str:
+    """System prefix so a planning tile stays on one microservice."""
+    return (
+        f"You are planning ONE microservice: {name}. This tile is not the platform design.\n"
+        f"Stay on {name}'s API, behavior, and its own data/runtime.\n"
+        "Do not restate overall architecture. Do not design other microservices.\n"
+        "Do not prescribe shared infra (CDN, load balancers, Kafka, Redis, object storage, "
+        "search clusters) unless this service itself owns that store or must call it as a client.\n"
+        "Peer services may be invoked; do not specify their internals or tech choices.\n"
+        "If the user asked a question, answer it in assistant_message with concrete facts "
+        "(methods, paths, fields). Do not reply with a status recap like 'I finalized the design'. "
+        "If they raised a concern or asked to change something, update this service's artifact, "
+        "list **Updates to this proposal**, then invite Approve for that version."
+    )
+
+
+def service_focus_user_block(
+    state: dict[str, Any],
+    svc: dict[str, Any],
+    *,
+    pending: str = "",
+    extra: str = "",
+) -> str:
+    """User payload with this service's contract, peers, and tile chat — not the full package."""
+    from orchestrator_agent.package_parse import service_contract_section
+
+    names = [str(n) for n in (svc.get("names") or []) if n]
+    name = names[-1] if names else "Service"
+    peers = [
+        str((s.get("names") or ["peer"])[-1])
+        for s in (state.get("services") or [])
+        if s.get("status") != "suspended" and s.get("microservice_id") != svc.get("microservice_id")
+    ]
+    contract = str(svc.get("architect_api_contract") or "").strip()
+    section = service_contract_section(str(state.get("package_markdown") or ""), names) or contract
+    history_lines: list[str] = []
+    for msg in list(svc.get("messages") or [])[-6:]:
+        role = str(msg.get("role") or "assistant")
+        content = str(msg.get("content") or "").strip()
+        if not content:
+            continue
+        cap = 700 if role == "user" else 350
+        history_lines.append(f"{role}: {content[:cap]}")
+    parts = [
+        f"Focus microservice: {name}",
+        f"Role: {svc.get('role_key') or ''}",
+        f"Peer microservices (call them; do not plan them): {', '.join(peers) or '(none)'}",
+        f"Architect contract for {name} only:\n{section or '(none)'}",
+        "Recent tile conversation:\n" + ("\n".join(history_lines) if history_lines else "(none)"),
+        f"Latest user message:\n{pending or '(none)'}",
+    ]
+    if extra.strip():
+        parts.append(extra.strip())
+    return "\n\n".join(parts)

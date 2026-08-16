@@ -15,7 +15,10 @@ os.environ["DATA_DIR"] = str(tmp / "sessions")
 print("importing…", flush=True)
 from orchestrator_agent.config import get_settings
 from orchestrator_agent.graph import reset_graph
+from orchestrator_agent.graph.nodes.common import pick_assistant_message, service_focus_user_block
 from orchestrator_agent.llm import get_chat_model
+from orchestrator_agent.package_parse import extract_http_endpoints, format_agreed_endpoints, service_contract_section
+from orchestrator_agent.query_intent import is_revision_request, wants_endpoint_list
 from orchestrator_agent.sessions import SessionStore, reset_store
 
 get_settings.cache_clear()
@@ -58,6 +61,41 @@ hld_v1 = _package(
     ),
 )
 
+print("service-scoped package excerpt…", flush=True)
+ident_only = service_contract_section(hld_v1, ["IdentityService"])
+assert "POST /v1/auth/login" in ident_only
+assert "VideoCatalogService" not in ident_only
+assert "Business Specification" not in ident_only
+focus = service_focus_user_block(
+    {"package_markdown": hld_v1, "services": []},
+    {
+        "names": ["IdentityService"],
+        "role_key": "identity",
+        "architect_api_contract": "POST /v1/auth/login",
+        "microservice_id": "id-1",
+        "messages": [],
+    },
+)
+assert "Focus microservice: IdentityService" in focus
+assert "Package excerpt" not in focus
+assert "Kafka" not in focus
+assert pick_assistant_message({"assistant_message": ""}, fallback="Hi") == "Hi"
+assert "POST /login" in pick_assistant_message(
+    {"assistant_message": "  ", "api_design": "POST /login"},
+    fallback="missing",
+    artifact_keys=("api_design",),
+)
+assert wants_endpoint_list("Show me all URL enpoints we aggreed on")
+assert not is_revision_request("Show me all URL endpoints we agreed on")
+assert is_revision_request("Add a health check endpoint")
+assert is_revision_request("Why is there no rate limiting?")
+eps = extract_http_endpoints(
+    "## Endpoint: POST /v1/auth/register\nGET /v1/users/{id}\n`PATCH /v1/users/me`"
+)
+assert ("POST", "/v1/auth/register") in eps
+assert ("GET", "/v1/users/{id}") in eps
+assert "POST /v1/auth/register" in format_agreed_endpoints("IdentityService", eps)
+
 print("HLD v1 ingest…", flush=True)
 store = SessionStore()
 s = store.ingest(hld_v1)
@@ -79,6 +117,17 @@ first_ids = {
 assert "IdentityService" in first_ids and "VideoCatalogService" in first_ids
 catalog_id = first_ids["VideoCatalogService"]
 identity_id = first_ids["IdentityService"]
+
+print("  identity api-type qa…", flush=True)
+proposed = next(x for x in live if x["microservice_id"] == identity_id).get("proposed_api_type")
+s = store.chat(SESSION, "Why is REST recommended?", service_id=identity_id)
+ident = next(x for x in s.to_public()["services"] if x["microservice_id"] == identity_id)
+assert ident["status"] == "awaiting_api_type", ident["status"]
+assert ident["can_approve"]
+assert ident.get("proposed_api_type") == proposed
+assert ident["messages"][-1]["content"].strip()
+assert "Updates to this proposal" in ident["messages"][-1]["content"]
+assert "None" in ident["messages"][-1]["content"]
 
 s = store.approve(SESSION, service_id=identity_id)
 ident = next(x for x in s.to_public()["services"] if x["microservice_id"] == identity_id)

@@ -105,6 +105,20 @@ async def approve(session_id: str) -> dict:
     return session.to_public()
 
 
+@router.post("/api/sessions/{session_id}/retry-handoff")
+async def retry_handoff(session_id: str) -> dict:
+    try:
+        session = get_store().retry_orchestrator_handoff(session_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Unknown design session") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Retry handoff failed for session %s", session_id)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return session.to_public()
+
+
 @router.post("/api/sessions/{session_id}/end")
 async def end_session(session_id: str) -> dict:
     try:

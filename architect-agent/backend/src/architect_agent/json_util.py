@@ -12,6 +12,11 @@ from json_repair import repair_json
 logger = logging.getLogger(__name__)
 
 _OBJECT_START_RE = re.compile(r"\{")
+_FENCED_JSON_RE = re.compile(r"```(?:json)?\s*\r?\n([\s\S]*?)```", re.IGNORECASE)
+_MARKET_GRADE_RE = re.compile(
+    r"(?i)(?:idea\s+)?grade\b[^\nA-F]{0,48}\b([ABCDF])(?:\s*[+\-])?\b"
+)
+_BOLD_GRADE_RE = re.compile(r"\*\*\s*([ABCDF])(?:\s*[+\-])?\s*\*\*")
 
 
 def parse_llm_json_object(text: str) -> dict[str, Any]:
@@ -21,6 +26,7 @@ def parse_llm_json_object(text: str) -> dict[str, Any]:
     - trailing prose / second objects (``Extra data``)
     - raw newlines inside string values
     - **truncated** replies (unbalanced braces / cut mid-string) via close+repair
+    - ```json fences after a markdown preamble
     """
     cleaned = _strip_fences(text.strip())
     if not cleaned:
@@ -162,9 +168,86 @@ def recover_architecture_payload_from_prose(text: str) -> dict[str, Any] | None:
     return None
 
 
+def recover_market_evaluation_from_prose(text: str) -> dict[str, Any] | None:
+    """Treat a markdown essay as the market-evaluation report when JSON is missing."""
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return None
+    if cleaned.lstrip().startswith("{") or cleaned.lstrip().startswith("```json"):
+        return None
+    looks_like_report = bool(
+        re.search(
+            r"(?i)(executive summary|market evaluation|popular alternatives|"
+            r"build vs buy|idea grade|strategic recommendations)",
+            cleaned,
+        )
+    )
+    if not looks_like_report and len(cleaned) < 80:
+        return None
+    grade = _extract_letter_grade(cleaned)
+    summary = _executive_summary(cleaned)
+    report = cleaned if cleaned.lstrip().startswith("#") else (
+        "# Market Evaluation Report\n\n" + cleaned
+    )
+    logger.info("Recovered market evaluation from non-JSON LLM reply (grade=%s)", grade)
+    return {
+        "grade": grade,
+        "grade_rationale": summary,
+        "summary": summary,
+        "report_markdown": report,
+    }
+
+
+def recover_interview_payload_from_prose(text: str) -> dict[str, Any] | None:
+    """Keep the spec interview alive when the model dumps prose instead of JSON."""
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return None
+    if cleaned.lstrip().startswith("{") or cleaned.lstrip().startswith("```json"):
+        return None
+    logger.info("Recovered spec-interview payload from non-JSON LLM reply")
+    return {
+        "ready_for_design": False,
+        "updated_business_spec": "",
+        "assistant_message": (
+            "I need a JSON object to continue the interview. Send your next answer, "
+            "or approve when the checklist is covered."
+        ),
+        "topic_id": "format",
+        "rationale": "model returned non-JSON",
+    }
+
+
+def _extract_letter_grade(text: str) -> str:
+    match = _MARKET_GRADE_RE.search(text) or _BOLD_GRADE_RE.search(text)
+    if match:
+        return match.group(1).upper()
+    return "C"
+
+
+def _executive_summary(text: str) -> str:
+    match = re.search(
+        r"(?is)##\s*executive summary\s*\n+(.+?)(?=\n##\s|\Z)",
+        text,
+    )
+    blob = match.group(1) if match else ""
+    if not blob.strip():
+        for para in re.split(r"\n\s*\n", text):
+            para = para.strip()
+            if para and not para.startswith("#") and len(para) > 40:
+                blob = para
+                break
+    blob = re.sub(r"\s+", " ", blob).strip()
+    return blob[:600] or "Market evaluation complete; see the report for details."
+
+
 def _candidate_blobs(cleaned: str) -> list[str]:
     """Build parse candidates: balanced object, truncated tail, control-escaped variants."""
     blobs: list[str] = []
+    for fence in _FENCED_JSON_RE.findall(cleaned):
+        fence = fence.strip()
+        if fence.startswith("{") or fence.startswith("["):
+            blobs.append(fence)
     starts = _object_start_indexes(cleaned)
     if not starts:
         blobs.append(cleaned)

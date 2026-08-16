@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.types import interrupt
 
 from architect_agent.config import get_settings
@@ -14,6 +13,7 @@ from architect_agent.context_budget import (
     maybe_compact_business_spec,
 )
 from architect_agent.graph.state import DesignGraphState
+from architect_agent.graph.nodes.common import invoke_json
 from architect_agent.interview_progress import (
     extract_question_titles,
     fallback_question,
@@ -25,23 +25,9 @@ from architect_agent.interview_progress import (
     user_requests_approve_anyway,
     user_requests_ready,
 )
-from architect_agent.json_util import parse_llm_json_object
-from architect_agent.llm import get_chat_model
+from architect_agent.json_util import recover_interview_payload_from_prose
 
 logger = logging.getLogger(__name__)
-
-
-def _invoke_json(system: str, user: str) -> dict[str, Any]:
-    model = get_chat_model()
-    response = model.invoke(
-        [SystemMessage(content=system), HumanMessage(content=user)],
-    )
-    content = response.content
-    if isinstance(content, list):
-        content = "".join(
-            block.get("text", "") if isinstance(block, dict) else str(block) for block in content
-        )
-    return parse_llm_json_object(str(content))
 
 
 def spec_interview_node(state: DesignGraphState) -> dict[str, Any]:
@@ -61,7 +47,7 @@ def spec_interview_node(state: DesignGraphState) -> dict[str, Any]:
     forced_ready = user_requests_ready(pending_user_feedback)
 
     if pending_user_feedback and not forced_ready:
-        fold = _invoke_json(
+        fold = invoke_json(
             system=(
                 "Update the living business specification markdown from one interview answer.\n"
                 "Merge the answer into the correct sections. Keep the document concise.\n"
@@ -73,6 +59,8 @@ def spec_interview_node(state: DesignGraphState) -> dict[str, Any]:
                 f"Spec:\n{business_spec}\n\n"
                 f"User answer:\n{pending_user_feedback}\n"
             ),
+            recover_prose=recover_interview_payload_from_prose,
+            prefer_prose=True,
         )
         business_spec = fold.get("updated_business_spec") or business_spec
         business_spec = maybe_compact_business_spec(business_spec)
@@ -81,7 +69,7 @@ def spec_interview_node(state: DesignGraphState) -> dict[str, Any]:
         # Still fold any incidental content, but don't block on LLM if this is only a control phrase.
         if len(pending_user_feedback.split()) > 8:
             try:
-                fold = _invoke_json(
+                fold = invoke_json(
                     system=(
                         "Update the living business specification markdown from one interview answer.\n"
                         "Ignore pure process instructions like 'stop asking' / 'approve'.\n"
@@ -92,6 +80,8 @@ def spec_interview_node(state: DesignGraphState) -> dict[str, Any]:
                         f"Spec:\n{business_spec}\n\n"
                         f"User answer:\n{pending_user_feedback}\n"
                     ),
+                    recover_prose=recover_interview_payload_from_prose,
+                    prefer_prose=True,
                 )
                 business_spec = fold.get("updated_business_spec") or business_spec
                 business_spec = maybe_compact_business_spec(business_spec)
@@ -119,7 +109,7 @@ def spec_interview_node(state: DesignGraphState) -> dict[str, Any]:
             ],
         }
 
-    assessment = _invoke_json(
+    assessment = invoke_json(
         system=(
             "You are the Architect agent's specification interviewer "
             "(merged Business Analyst + Architect discovery).\n"
@@ -152,6 +142,7 @@ def spec_interview_node(state: DesignGraphState) -> dict[str, Any]:
             "If uncovered topics remain, ask exactly ONE new question for the next uncovered topic.\n"
             "If none remain, set ready_for_design=true and invite approval — do not invent filler questions."
         ),
+        recover_prose=recover_interview_payload_from_prose,
     )
 
     business_spec = assessment.get("updated_business_spec") or business_spec

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useState, type FormEvent, type KeyboardEvent } from "react";
 import { Link, useParams } from "react-router-dom";
 import mermaid from "mermaid";
 import {
@@ -55,12 +55,7 @@ function ServiceTile({
 }) {
   const [message, setMessage] = useState("");
   const [pending, setPending] = useState<string | null>(null);
-  const endRef = useRef<HTMLDivElement>(null);
   const open = svc.discussion_open && svc.status !== "suspended";
-
-  useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [svc.messages, pending, busy]);
 
   async function onChat(e: FormEvent) {
     e.preventDefault();
@@ -100,75 +95,80 @@ function ServiceTile({
         <span className="panel-kicker">{svc.status}</span>
       </div>
       <p className="mono tile-id">{svc.microservice_id}</p>
-      <div className="messages">
-        {(svc.messages || []).map((msg, i) => (
-          <div key={`${msg.role}-${i}`} className={`bubble ${msg.role}`}>
-            <span className="who">{msg.role}</span>
-            <MarkdownView content={msg.content} className="bubble-md" />
-          </div>
-        ))}
-        {pending ? (
-          <div className="bubble user pending">
-            <span className="who">you</span>
-            <MarkdownView content={pending} className="bubble-md" />
-          </div>
+      <div className="tile-body">
+        <div className="messages">
+          {(svc.messages || [])
+            .filter((msg) => (msg.content || "").trim())
+            .map((msg, i) => (
+            <div key={`${msg.role}-${i}`} className={`bubble ${msg.role}`}>
+              <span className="who">{msg.role}</span>
+              <MarkdownView content={msg.content} className="bubble-md" />
+            </div>
+          ))}
+          {pending ? (
+            <div className="bubble user pending">
+              <span className="who">you</span>
+              <MarkdownView content={pending} className="bubble-md" />
+            </div>
+          ) : null}
+          {busy ? (
+            <div className="bubble assistant thinking">
+              <span className="thinking-row">
+                <span className="dot" />
+                <span className="dot" />
+                <span className="dot" />
+                Planning…
+              </span>
+            </div>
+          ) : null}
+        </div>
+        {apiType ? (
+          <article className="artifact">
+            <h3>API type</h3>
+            <p>{apiType}</p>
+          </article>
         ) : null}
-        {busy ? (
-          <div className="bubble assistant thinking">
-            <span className="thinking-row">
-              <span className="dot" />
-              <span className="dot" />
-              <span className="dot" />
-              Planning…
-            </span>
-          </div>
+        {svc.api_design ? (
+          <article className="artifact">
+            <h3>API design</h3>
+            <div className="doc">
+              <MarkdownView content={svc.api_design} />
+            </div>
+          </article>
         ) : null}
-        <div ref={endRef} />
+        {svc.tech_stack ? (
+          <article className="artifact">
+            <h3>Tech stack</h3>
+            <div className="doc">
+              <MarkdownView content={svc.tech_stack} />
+            </div>
+          </article>
+        ) : null}
       </div>
-      {apiType ? (
-        <article className="artifact">
-          <h3>API type</h3>
-          <p>{apiType}</p>
-        </article>
-      ) : null}
-      {svc.api_design ? (
-        <article className="artifact">
-          <h3>API design</h3>
-          <div className="doc">
-            <MarkdownView content={svc.api_design} />
-          </div>
-        </article>
-      ) : null}
-      {svc.tech_stack ? (
-        <article className="artifact">
-          <h3>Tech stack</h3>
-          <div className="doc">
-            <MarkdownView content={svc.tech_stack} />
-          </div>
-        </article>
-      ) : null}
-      {svc.can_approve ? (
-        <button className="btn primary" type="button" disabled={busy} onClick={onApprove}>
-          {busy ? "Working…" : svc.approve_label || "Approve"}
-        </button>
-      ) : null}
-      {open ? (
-        <form className="composer" onSubmit={onChat}>
-          <textarea
-            value={message}
-            onChange={(e) => setMessage(e.target.value)}
-            onKeyDown={onComposerKey}
-            rows={2}
-            disabled={busy}
-            placeholder="Discuss this service… Enter to send"
-          />
-          <button className="btn" type="submit" disabled={busy || !message.trim()}>
-            Send
+      <div className="tile-footer">
+        {svc.can_approve ? (
+          <button className="btn primary" type="button" disabled={busy} onClick={onApprove}>
+            {busy ? "Working…" : svc.approve_label || "Approve"}
           </button>
-        </form>
-      ) : (
-        <p className="finalize-note">This microservice is suspended.</p>
-      )}
+        ) : null}
+        {open ? (
+          <form className="composer" onSubmit={onChat}>
+            <textarea
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              onKeyDown={onComposerKey}
+              rows={2}
+              disabled={busy}
+              placeholder="Discuss this service… Enter to send"
+            />
+            <button className="btn" type="submit" disabled={busy || !message.trim()}>
+              Send
+            </button>
+          </form>
+        ) : (
+          <p className="finalize-note">This microservice is suspended.</p>
+        )}
+      </div>
     </section>
   );
 }
@@ -181,7 +181,6 @@ export function SessionPage() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [endConfirm, setEndConfirm] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
   const chatBusy = busyId === "session";
   const anyBusy = Boolean(busyId);
 
@@ -202,10 +201,6 @@ export function SessionPage() {
     }, 4000);
     return () => window.clearInterval(id);
   }, [load, anyBusy]);
-
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [session?.messages, pendingUserText, chatBusy]);
 
   async function onChat(e: FormEvent) {
     e.preventDefault();
@@ -384,7 +379,9 @@ export function SessionPage() {
                 <span className="panel-kicker">application</span>
               </div>
               <div className="messages">
-                {session.messages.map((msg, i) => (
+                {session.messages
+                  .filter((msg) => (msg.content || "").trim())
+                  .map((msg, i) => (
                   <div key={`${msg.role}-${i}`} className={`bubble ${msg.role}`}>
                     <span className="who">{msg.role}</span>
                     <MarkdownView content={msg.content} className="bubble-md" />
@@ -406,7 +403,6 @@ export function SessionPage() {
                     </span>
                   </div>
                 ) : null}
-                <div ref={messagesEndRef} />
               </div>
               {session.finalized || locked ? (
                 <p className="finalize-note">

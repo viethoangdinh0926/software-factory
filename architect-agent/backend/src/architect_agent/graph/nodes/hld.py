@@ -13,10 +13,16 @@ from architect_agent.context_budget import (
     maybe_compact_business_spec,
     maybe_compact_design_justification,
 )
-from architect_agent.graph.nodes.common import approve_label, invoke_json, is_design_approve_step
+from architect_agent.graph.nodes.common import (
+    answer_before_approve,
+    approve_label,
+    invoke_json,
+    is_design_approve_step,
+)
 from architect_agent.graph.state import DesignGraphState
 from architect_agent.json_util import coerce_diagram_text
 from architect_agent.mermaid_sanitize import sanitize_mermaid
+from architect_agent.query_intent import FEEDBACK_RESOLUTION_RULES, is_informational_query, with_resolution_close
 
 _STEP_TITLES = {
     1: "Requirements & capacity estimation",
@@ -421,7 +427,8 @@ def hld_step_node(state: DesignGraphState) -> dict[str, Any]:
             '  "assistant_message": string\n'
             "}\n"
             "If you rewrite the primary field, it must meet the depth bar so "
-            "ready_to_advance can be true. Empty primary field is a failure."
+            "ready_to_advance can be true. Empty primary field is a failure.\n"
+            f"{FEEDBACK_RESOLUTION_RULES if pending else ''}"
         ),
         user=(
             f"Living specification:\n\n{business_spec}\n\n"
@@ -474,6 +481,16 @@ def hld_step_node(state: DesignGraphState) -> dict[str, Any]:
     )
 
     assistant = result.get("assistant_message") or f"HLD step {step} update."
+    if pending:
+        changed = (
+            scale != prior_scale
+            or apis != prior_apis
+            or fmea != prior_fmea
+            or ledger != prior_ledger
+            or diagram != prior_diagram
+            or str(result.get("updated_business_spec") or business_spec) != business_spec
+        )
+        assistant = with_resolution_close(str(assistant), changed=changed)
 
     return {
         "phase": "hld",
@@ -492,6 +509,7 @@ def hld_step_node(state: DesignGraphState) -> dict[str, Any]:
         "pending_user_feedback": "",
         "pending_assistant_message": assistant,
         "publish_requested": False,
+        "stay_on_interrupt": False,
         "messages": [{"role": "assistant", "content": assistant, "node": "hld"}],
     }
 
@@ -545,6 +563,7 @@ def hld_wait_node(state: DesignGraphState) -> dict[str, Any]:
             "market_evaluation_done": False,
             "pending_user_feedback": "",
             "pending_assistant_message": msg,
+            "stay_on_interrupt": False,
             "messages": msgs,
         }
 
@@ -560,6 +579,7 @@ def hld_wait_node(state: DesignGraphState) -> dict[str, Any]:
             "design_ready_to_approve": False,
             "pending_user_feedback": "",
             "pending_assistant_message": msg,
+            "stay_on_interrupt": False,
             "messages": msgs,
         }
 
@@ -568,8 +588,23 @@ def hld_wait_node(state: DesignGraphState) -> dict[str, Any]:
         return {
             "phase": "done",
             "pending_assistant_message": "Session marked done.",
+            "stay_on_interrupt": False,
             "messages": msgs,
         }
+
+    if user_text and is_informational_query(user_text):
+        return answer_before_approve(
+            state,
+            user_text,
+            node="hld",
+            base={
+                "phase": "hld",
+                "design_track": "hld",
+                "design_step": step,
+                "ready_to_advance": ready,
+                "design_ready_to_approve": design_ready,
+            },
+        )
 
     return {
         "phase": "hld",
@@ -578,5 +613,6 @@ def hld_wait_node(state: DesignGraphState) -> dict[str, Any]:
         "ready_to_advance": False,
         "pending_user_feedback": user_text,
         "publish_requested": False,
+        "stay_on_interrupt": False,
         "messages": msgs,
     }

@@ -10,7 +10,7 @@ from typing import Any
 
 from langgraph.types import Command
 
-from architect_agent.a2a.orchestrator import HandoffResult, send_design_package
+from architect_agent.a2a.orchestrator import HandoffResult, retry_design_package, send_design_package
 from architect_agent.config import get_settings
 from architect_agent.graph import build_graph, initial_state
 from architect_agent.graph.nodes.common import approve_label
@@ -21,6 +21,11 @@ logger = logging.getLogger(__name__)
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _handoff_retryable(last_handoff: dict[str, Any] | None) -> bool:
+    status = str((last_handoff or {}).get("status") or "")
+    return status in {"failed", "queued"}
 
 
 def _legacy_map(data: dict[str, Any]) -> dict[str, Any]:
@@ -128,6 +133,7 @@ class DesignSession:
             "updated_at": self.updated_at,
             "design_version": self.design_version,
             "last_handoff": self.last_handoff,
+            "can_retry_handoff": _handoff_retryable(self.last_handoff) and not self.finalized,
         }
 
 
@@ -266,6 +272,7 @@ class SessionStore:
             "api_contracts": session.api_contracts,
             "fmea_notes": session.fmea_notes,
             "resume_after_market": False,
+            "stay_on_interrupt": False,
         }
 
     def _ensure_graph_resumable(self, session: DesignSession) -> None:
@@ -502,10 +509,44 @@ class SessionStore:
             f"Handoff v{session.design_version} → Orchestrator: {handoff.status}. "
             f"{handoff.detail}"
         )
+        if handoff.status in {"failed", "queued"}:
+            status_line += (
+                " You can retry this same package from the session without another design cycle."
+            )
         node = "hld" if session.design_track == "hld" else "lld"
         session.messages.append({"role": "assistant", "content": status_line, "node": node})
         self._persist(session)
         return handoff
+
+    def retry_orchestrator_handoff(self, session_id: str) -> DesignSession:
+        """Resend the last failed/queued package. Does not advance the design track or version."""
+        session = self.get(session_id)
+        if session.finalized:
+            raise ValueError("Session is finalized.")
+        if not _handoff_retryable(session.last_handoff):
+            raise ValueError("Nothing to retry; last handoff already sent or no package exists.")
+        if session.design_version < 1:
+            raise ValueError("No design package has been published yet.")
+        last = session.last_handoff or {}
+        handoff = retry_design_package(
+            session_id=session.session_id,
+            version=session.design_version,
+            saved_path=str(last.get("path") or "") or None,
+            markdown=self.final_design_markdown(session.session_id),
+        )
+        session.last_handoff = handoff.to_public()
+        status_line = (
+            f"Retry handoff v{session.design_version} → Orchestrator: {handoff.status}. "
+            f"{handoff.detail}"
+        )
+        if handoff.status in {"failed", "queued"}:
+            status_line += (
+                " You can retry this same package again without another design cycle."
+            )
+        node = "hld" if session.design_track == "hld" else "lld"
+        session.messages.append({"role": "assistant", "content": status_line, "node": node})
+        self._persist(session)
+        return session
 
     def chat(self, session_id: str, text: str) -> DesignSession:
         return self.resume(session_id, action="chat", text=text)

@@ -42,6 +42,7 @@ export type DesignSession = {
   updated_at: string;
   design_version: number;
   last_handoff: HandoffResult | null;
+  can_retry_handoff: boolean;
 };
 
 export type DesignStartResponse = {
@@ -88,6 +89,12 @@ export async function chat(sessionId: string, message: string): Promise<DesignSe
 
 export async function approve(sessionId: string): Promise<DesignSession> {
   const res = await fetch(`/api/sessions/${sessionId}/approve`, { method: "POST" });
+  if (!res.ok) throw new Error(await readError(res));
+  return res.json() as Promise<DesignSession>;
+}
+
+export async function retryHandoff(sessionId: string): Promise<DesignSession> {
+  const res = await fetch(`/api/sessions/${sessionId}/retry-handoff`, { method: "POST" });
   if (!res.ok) throw new Error(await readError(res));
   return res.json() as Promise<DesignSession>;
 }

@@ -32,7 +32,13 @@ class StubChatModel(BaseChatModel):
     ) -> ChatResult:
         blob = "\n".join(str(m.content) for m in messages)
         lower = blob.lower()
-        if "orchestrator topology classifier" in lower:
+        if "answering a question about" in lower:
+            payload = {
+                "assistant_message": _stub_qa(blob),
+                "api_design": "",
+                "tech_stack": "",
+            }
+        elif "orchestrator topology classifier" in lower:
             payload = _stub_topology(blob)
         elif "orchestrator service matcher" in lower:
             payload = _stub_match(blob)
@@ -52,6 +58,36 @@ class StubChatModel(BaseChatModel):
         return ChatResult(
             generations=[ChatGeneration(message=AIMessage(content=json.dumps(payload)))]
         )
+
+
+def _stub_qa(blob: str) -> str:
+    lower = blob.lower()
+    if "endpoint" in lower or " url" in lower or "urls" in lower:
+        found = re.findall(
+            r"\b((?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+/[A-Za-z0-9_{}\-./]*)",
+            blob,
+            re.I,
+        )
+        uniq: list[str] = []
+        seen: set[str] = set()
+        for item in found:
+            key = item.upper()
+            if key in seen:
+                continue
+            seen.add(key)
+            uniq.append(item)
+        if uniq:
+            return "Agreed URL endpoints:\n" + "\n".join(f"- `{item}`" for item in uniq[:24])
+    if "rest" in lower or "grpc" in lower or "graphql" in lower:
+        return (
+            "The current recommendation on this tile is taken from the architect contract "
+            "and similar services of this role. I have not changed the API type."
+        )
+    if "stack" in lower or "python" in lower or "java" in lower:
+        return "The current tech stack on this step is unchanged. I can quote language, framework, and datastore if you want a specific line."
+    if "standalone" in lower or "distributed" in lower or "topology" in lower:
+        return "The proposed topology is based on the architect track and package. I have not changed the classification."
+    return "Answered from the current artifacts on this step. Ask about a specific detail if you want more."
 
 
 def _track_from_blob(blob: str) -> str:

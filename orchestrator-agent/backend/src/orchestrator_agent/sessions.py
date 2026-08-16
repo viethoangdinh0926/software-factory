@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,7 +14,7 @@ from orchestrator_agent.a2a.engineer import send_plan_spec, send_suspend
 from orchestrator_agent.config import get_settings
 from orchestrator_agent.graph import build_graph, initial_state
 from orchestrator_agent.graph.nodes.common import decorate_service
-from orchestrator_agent.package_parse import parse_design_package
+from orchestrator_agent.package_parse import ParsedPackage, parse_design_package
 
 logger = logging.getLogger(__name__)
 
@@ -133,7 +134,17 @@ class SessionStore:
     def __init__(self) -> None:
         self._graph = build_graph()
         self._cache: dict[str, WorkflowSession] = {}
+        self._ingest_locks: dict[str, threading.Lock] = {}
+        self._ingest_locks_guard = threading.Lock()
         self._load_disk()
+
+    def _lock_for(self, session_id: str) -> threading.Lock:
+        with self._ingest_locks_guard:
+            lock = self._ingest_locks.get(session_id)
+            if lock is None:
+                lock = threading.Lock()
+                self._ingest_locks[session_id] = lock
+            return lock
 
     def _session_path(self, session_id: str) -> Path:
         return get_settings().data_dir / f"{session_id}.json"
@@ -201,6 +212,10 @@ class SessionStore:
         parsed = parse_design_package(markdown)
         if not parsed.design_session_id:
             raise ValueError("Design package is missing a design session ID.")
+        with self._lock_for(parsed.design_session_id):
+            return self._ingest_locked(parsed, markdown)
+
+    def _ingest_locked(self, parsed: ParsedPackage, markdown: str) -> WorkflowSession:
         session_id = parsed.design_session_id
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         inbound = self._inbound_dir() / f"{session_id}-v{parsed.design_version}-{stamp}.md"

@@ -1,33 +1,169 @@
 from __future__ import annotations
 
-import json
+import logging
+import re
 import uuid
 from typing import Any
 
 from orchestrator_agent.graph.nodes.common import empty_service, invoke_json, replace_service, skill_digest
 from orchestrator_agent.graph.nodes.ingest import reset_planning_fields
+from orchestrator_agent.json_util import recover_extract_from_prose
+from orchestrator_agent.package_parse import extract_core_services
+
+logger = logging.getLogger(__name__)
+
+_STEM_RE = re.compile(r"[^a-z0-9]+")
+
+
+def _stem(value: str) -> str:
+    text = _STEM_RE.sub("", (value or "").lower().replace("service", ""))
+    return text
+
+
+def _best_previous_id(
+    item: dict[str, Any],
+    previous: list[dict[str, Any]],
+    used: set[str],
+) -> str:
+    """Match a newly extracted service to a prior UUID by role or name, not LLM guesswork."""
+    role = str(item.get("role_key") or "").lower().strip()
+    name = str(item.get("name") or "").strip()
+    name_stem = _stem(name)
+    role_stem = _stem(role)
+
+    def candidates() -> list[tuple[int, str]]:
+        ranked: list[tuple[int, str]] = []
+        for prev in previous:
+            pid = str(prev.get("microservice_id") or "")
+            if not pid or pid in used or prev.get("status") == "suspended":
+                continue
+            prev_role = str(prev.get("role_key") or "").lower().strip()
+            prev_names = [str(n) for n in (prev.get("names") or [])]
+            prev_stems = [_stem(n) for n in prev_names if _stem(n)]
+            score = 0
+            if role and prev_role and role == prev_role:
+                score = 100
+            elif name and name in prev_names:
+                score = 90
+            elif role and prev_role and (role in prev_role or prev_role in role) and min(len(role), len(prev_role)) >= 5:
+                score = 80
+            elif name_stem and any(
+                (name_stem in ps or ps in name_stem) and min(len(name_stem), len(ps)) >= 5 for ps in prev_stems
+            ):
+                score = 70
+            elif (
+                role_stem
+                and _stem(prev_role)
+                and (role_stem in _stem(prev_role) or _stem(prev_role) in role_stem)
+                and min(len(role_stem), len(_stem(prev_role))) >= 5
+            ):
+                score = 60
+            if score:
+                ranked.append((score, pid))
+        ranked.sort(reverse=True)
+        return ranked
+
+    ranked = candidates()
+    return ranked[0][1] if ranked else ""
+
+
+def _align_update(
+    *,
+    previous: list[dict[str, Any]],
+    new_list: list[Any],
+    session_id: str,
+    version: int,
+    actions: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[str]]:
+    """Keep prior UUIDs for renamed services; add unmatched new ones; suspend leftovers."""
+    used: set[str] = set()
+    live: list[dict[str, Any]] = []
+    newly_removed: list[str] = []
+    for item in new_list:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "Service")
+        role = str(item.get("role_key") or name.lower())
+        contract = str(item.get("contract_summary") or "")
+        mid = _best_previous_id(item, previous, used)
+        if mid:
+            used.add(mid)
+            old = next(s for s in previous if str(s.get("microservice_id")) == mid)
+            names = list(old.get("names") or [])
+            if name not in names:
+                names.append(name)
+            svc = reset_planning_fields(old)
+            svc["names"] = names
+            svc["role_key"] = role or old.get("role_key")
+            svc["architect_api_contract"] = contract or old.get("architect_api_contract") or ""
+            svc["status"] = "planning"
+            live.append(svc)
+        else:
+            live.append(
+                empty_service(
+                    microservice_id=str(uuid.uuid4()),
+                    name=name,
+                    role_key=role,
+                    contract=contract,
+                )
+            )
+
+    suspended: list[dict[str, Any]] = []
+    for old in previous:
+        pid = str(old.get("microservice_id") or "")
+        if old.get("status") == "suspended":
+            suspended.append(old)
+            continue
+        if not pid or pid in used:
+            continue
+        marked = dict(old)
+        marked["status"] = "suspended"
+        suspended.append(marked)
+        newly_removed.append(pid)
+        actions.append(
+            {
+                "action": "suspend",
+                "design_session_id": session_id,
+                "design_version": version,
+                "microservice_id": pid,
+                "reason": "service_removed",
+            }
+        )
+    return live + suspended, actions, newly_removed
 
 
 def extract_services_node(state: dict[str, Any]) -> dict[str, Any]:
     package = state.get("package_markdown") or ""
-    extracted = invoke_json(
-        system=(
-            "You are the orchestrator service extractor.\n"
-            f"{skill_digest()}\n\n"
-            "Extract the core microservices from the architect design package "
-            "(API contracts, diagram, spec). Ignore infra-only boxes (CDN, LB, Kafka) "
-            "unless they are product services.\n"
-            "Respond ONLY with JSON:\n"
-            "{\n"
-            '  "services": [{"name": string, "role_key": string, "contract_summary": string}],\n'
-            '  "assistant_message": string\n'
-            "}\n"
-            "role_key is a stable kebab-case responsibility (identity, video-catalog), not the display name."
-        ),
-        user=f"Design package:\n{package[:14000]}\n",
-    )
+    heuristic = extract_core_services(package)
+    if heuristic:
+        extracted = {
+            "services": heuristic,
+            "assistant_message": "Extracted core microservices from API Contracts headings.",
+        }
+    else:
+        extracted = invoke_json(
+            system=(
+                "You are the orchestrator service extractor.\n"
+                f"{skill_digest()}\n\n"
+                "Extract the core microservices from the architect design package "
+                "(API contracts, diagram, spec). Ignore infra-only boxes (CDN, LB, Kafka) "
+                "unless they are product services.\n"
+                "Respond ONLY with JSON:\n"
+                "{\n"
+                '  "services": [{"name": string, "role_key": string, "contract_summary": string}],\n'
+                '  "assistant_message": string\n'
+                "}\n"
+                "role_key is a stable kebab-case responsibility (identity, video-catalog), not the display name."
+            ),
+            user=f"Design package:\n{package[:60000]}\n",
+            recover_prose=recover_extract_from_prose,
+        )
     new_list = extracted.get("services") or []
-    if not isinstance(new_list, list) or not new_list:
+    if not isinstance(new_list, list):
+        new_list = []
+    if heuristic:
+        new_list = heuristic
+    elif not new_list:
         new_list = [
             {
                 "name": "CoreDomainService",
@@ -42,106 +178,21 @@ def extract_services_node(state: dict[str, Any]) -> dict[str, Any]:
     session_id = str(state.get("design_session_id") or "")
 
     if ingest_kind == "update" and previous:
-        match_result = invoke_json(
-            system=(
-                "You are the orchestrator service matcher.\n"
-                "Match NEW services to PREVIOUS ones by responsibility (role_key / contract), "
-                "NOT by display name. A renamed service is the same service.\n"
-                "Respond ONLY with JSON:\n"
-                "{\n"
-                '  "matches": [{"name": string, "role_key": string, "microservice_id": string, '
-                '"contract_summary": string}],\n'
-                '  "removed_microservice_ids": [string]\n'
-                "}\n"
-                "microservice_id is the previous UUID when matched, or empty string if new."
-            ),
-            user=(
-                "PREVIOUS_SERVICES_JSON:\n"
-                + json.dumps(
-                    [
-                        {
-                            "microservice_id": s.get("microservice_id"),
-                            "names": s.get("names"),
-                            "role_key": s.get("role_key"),
-                            "status": s.get("status"),
-                        }
-                        for s in previous
-                    ]
-                )
-                + "\nNEW_SERVICES_JSON:\n"
-                + json.dumps(new_list)
-            ),
-        )
-        matches = match_result.get("matches") or []
-        removed_ids = [str(x) for x in (match_result.get("removed_microservice_ids") or [])]
-        prev_by_id = {str(s.get("microservice_id")): s for s in previous}
-        services: list[dict[str, Any]] = []
-        used: set[str] = set()
-        for item in matches:
-            name = str(item.get("name") or "Service")
-            role = str(item.get("role_key") or name.lower())
-            mid = str(item.get("microservice_id") or "").strip()
-            contract = str(item.get("contract_summary") or "")
-            if mid and mid in prev_by_id:
-                used.add(mid)
-                old = prev_by_id[mid]
-                names = list(old.get("names") or [])
-                if name not in names:
-                    names.append(name)
-                svc = reset_planning_fields(old)
-                svc["names"] = names
-                svc["role_key"] = role or old.get("role_key")
-                svc["architect_api_contract"] = contract or old.get("architect_api_contract") or ""
-                svc["status"] = "planning"
-                services.append(svc)
-            else:
-                svc = empty_service(
-                    microservice_id=str(uuid.uuid4()),
-                    name=name,
-                    role_key=role,
-                    contract=contract,
-                )
-                services.append(svc)
         actions: list[dict[str, Any]] = list(state.get("pending_engineer_actions") or [])
-        suspended = []
-        for pid in removed_ids:
-            old = prev_by_id.get(pid)
-            if not old or old.get("status") == "suspended":
-                continue
-            used.add(pid)
-            marked = dict(old)
-            marked["status"] = "suspended"
-            suspended.append(marked)
-            actions.append(
-                {
-                    "action": "suspend",
-                    "design_session_id": session_id,
-                    "design_version": version,
-                    "microservice_id": pid,
-                    "reason": "service_removed",
-                }
-            )
-        # Any previous not matched and not listed removed still counts as removed.
-        for pid, old in prev_by_id.items():
-            if pid in used or old.get("status") == "suspended":
-                continue
-            marked = dict(old)
-            marked["status"] = "suspended"
-            suspended.append(marked)
-            actions.append(
-                {
-                    "action": "suspend",
-                    "design_session_id": session_id,
-                    "design_version": version,
-                    "microservice_id": pid,
-                    "reason": "service_removed",
-                }
-            )
-        notice = extracted.get("assistant_message") or "Extracted core microservices."
-        if removed_ids:
-            notice += f" Suspended removed services: {', '.join(removed_ids[:6])}."
+        services, actions, removed = _align_update(
+            previous=previous,
+            new_list=new_list,
+            session_id=session_id,
+            version=version,
+            actions=actions,
+        )
+        notice = str(extracted.get("assistant_message") or "Extracted core microservices.")
+        live_n = sum(1 for s in services if s.get("status") != "suspended")
+        notice += f" Matching kept {live_n} live service(s)."
+        if removed:
+            notice += f" Suspended removed services: {', '.join(removed[:6])}."
         return {
-            "services": services + suspended,
+            "services": services,
             "pending_engineer_actions": actions,
             "active_service_id": "",
             "phase": "extract",
@@ -178,7 +229,27 @@ def prime_all_services_node(state: dict[str, Any]) -> dict[str, Any]:
     for svc in services:
         if svc.get("status") in {"suspended", "sent", "awaiting_api_type", "awaiting_api_design", "awaiting_stack"}:
             continue
-        updated = research_api_type_for(state, svc, pending="")
+        try:
+            updated = research_api_type_for(state, svc, pending="")
+        except Exception:
+            name = (svc.get("names") or ["service"])[-1]
+            logger.exception("API type research failed for %s; defaulting to REST", name)
+            updated = dict(svc)
+            updated["proposed_api_type"] = updated.get("proposed_api_type") or "REST"
+            updated["api_type_recommendation"] = updated.get("api_type_recommendation") or "keep"
+            updated["status"] = "awaiting_api_type"
+            msgs = list(updated.get("messages") or [])
+            msgs.append(
+                {
+                    "role": "assistant",
+                    "content": (
+                        "Could not parse an API-type recommendation from the model; "
+                        "defaulting to REST. Discuss this tile to change it."
+                    ),
+                    "node": "api_type",
+                }
+            )
+            updated["messages"] = msgs
         out = replace_service(out, updated)
     live = [s for s in out if s.get("status") != "suspended"]
     names = ", ".join((s.get("names") or ["service"])[-1] for s in live) or "none"

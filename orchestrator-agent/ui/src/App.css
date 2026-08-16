@@ -1039,11 +1039,52 @@ textarea::placeholder {
   grid-template-columns: repeat(auto-fit, minmax(22rem, 1fr));
   gap: 1rem;
   margin: 0 0 1.25rem;
+  align-items: stretch;
 }
 
-.service-tile {
+.service-tile.panel {
   min-height: 24rem;
+  height: min(78vh, 920px);
   max-height: min(78vh, 920px);
+  overflow: hidden;
+}
+
+.service-tile .panel-head,
+.service-tile .tile-id {
+  flex-shrink: 0;
+}
+
+.service-tile .tile-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  padding-right: 0.2rem;
+}
+
+.service-tile .messages {
+  flex: 0 0 auto;
+  overflow: visible;
+  min-height: 6rem;
+}
+
+.service-tile .doc {
+  max-height: none;
+}
+
+.service-tile .tile-footer {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.service-tile .composer,
+.service-tile .finalize-note {
+  margin: 0;
 }
 
 .service-tile.suspended {

@@ -4,28 +4,12 @@ import logging
 import os
 from typing import Any
 
-import httpx
-from langchain_core.messages import HumanMessage, SystemMessage
-
 from architect_agent.config import get_settings
 from architect_agent.context_budget import maybe_compact_business_spec
-from architect_agent.json_util import parse_llm_json_object
-from architect_agent.llm import get_chat_model
+from architect_agent.graph.nodes.common import invoke_json
+from architect_agent.json_util import recover_market_evaluation_from_prose
 
 logger = logging.getLogger(__name__)
-
-
-def _invoke_json(system: str, user: str) -> dict[str, Any]:
-    model = get_chat_model()
-    response = model.invoke(
-        [SystemMessage(content=system), HumanMessage(content=user)],
-    )
-    content = response.content
-    if isinstance(content, list):
-        content = "".join(
-            block.get("text", "") if isinstance(block, dict) else str(block) for block in content
-        )
-    return parse_llm_json_object(str(content))
 
 
 def _search_web(query: str, *, max_results: int = 6) -> list[dict[str, str]]:
@@ -97,13 +81,16 @@ def _stub_results(query: str) -> list[dict[str, str]]:
 
 def _plan_search_queries(business_spec: str) -> list[str]:
     try:
-        planned = _invoke_json(
+        planned = invoke_json(
             system=(
                 "You plan web searches to find popular existing alternatives to a software idea.\n"
                 "Return JSON: {\"queries\": string[]} with 2-4 short search queries "
-                "(product category + alternatives / competitors / open source)."
+                "(product category + alternatives / competitors / open source).\n"
+                "FIRST non-whitespace character MUST be `{`. No markdown."
             ),
             user=f"Business specification:\n\n{business_spec}\n",
+            recover_prose=lambda _text: {"queries": []},
+            prefer_prose=True,
         )
         queries = [str(q).strip() for q in (planned.get("queries") or []) if str(q).strip()]
         if queries:
@@ -151,14 +138,15 @@ def generate_market_evaluation_report(business_spec: str) -> dict[str, Any]:
         for s in sources
     ) or "(No web sources available — reason from general market knowledge and mark uncertainty.)"
 
-    evaluation = _invoke_json(
+    evaluation = invoke_json(
         system=(
             "You are the Architect agent's market evaluator.\n"
             "Compare the user's approved business specification against popular existing "
             "alternatives discovered from web search results.\n"
             "Be practical and opinionated. Cite source titles/URLs when used.\n"
-            "Respond ONLY with a single JSON object.\n"
-            "Escape newlines inside string values as \\n (especially report_markdown).\n"
+            "Respond ONLY with a single JSON object. FIRST non-whitespace character MUST be `{`.\n"
+            "Do not write an essay before the JSON. Put the full markdown report inside "
+            "report_markdown (escape newlines as \\n).\n"
             "{\n"
             '  "grade": "A" | "B" | "C" | "D" | "F",\n'
             '  "grade_rationale": string,\n'
@@ -181,6 +169,8 @@ def generate_market_evaluation_report(business_spec: str) -> dict[str, Any]:
             f"Approved business specification:\n\n{spec}\n\n"
             f"Web search findings:\n\n{sources_blob}\n"
         ),
+        recover_prose=recover_market_evaluation_from_prose,
+        prefer_prose=True,
     )
 
     report = str(evaluation.get("report_markdown") or "").strip()

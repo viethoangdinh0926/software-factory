@@ -11,9 +11,49 @@ from architect_agent.context_budget import (
     format_history_tail,
     maybe_compact_business_spec,
 )
-from architect_agent.graph.nodes.common import approve_label, invoke_json
+from architect_agent.graph.nodes.common import answer_before_approve, approve_label, invoke_json
 from architect_agent.graph.state import DesignGraphState
+from architect_agent.query_intent import (
+    FEEDBACK_RESOLUTION_RULES,
+    is_informational_query,
+    with_resolution_close,
+)
 from architect_agent.web_search import perform_web_search
+
+_STRUCTURED_SPEC_HINTS = (
+    "## actors",
+    "## in scope",
+    "## out of scope",
+    "## goals",
+    "## problem",
+    "## critical invariants",
+    "## success criteria",
+    "## assumptions",
+)
+
+
+def _spec_looks_structured(text: str) -> bool:
+    """True when the living spec already has enough signal to classify LLD vs HLD."""
+    body = text or ""
+    lower = body.lower()
+    if any(
+        k in lower
+        for k in (
+            "microservice",
+            "distributed",
+            "single os process",
+            "single process",
+            "in-process",
+            "(lld)",
+            "(hld)",
+        )
+    ):
+        return True
+    if "##" not in body:
+        return False
+    if len(body) > 500:
+        return True
+    return sum(1 for hint in _STRUCTURED_SPEC_HINTS if hint in lower) >= 3
 
 
 def phase0_classify_node(state: DesignGraphState) -> dict[str, Any]:
@@ -33,10 +73,10 @@ def phase0_classify_node(state: DesignGraphState) -> dict[str, Any]:
             "ready_to_advance": True,
             "pending_user_feedback": "",
             "pending_assistant_message": state.get("pending_assistant_message") or "",
+            "stay_on_interrupt": False,
         }
 
-    # Check if spec is comprehensive enough (has at least 500 characters and multiple sections)
-    spec_comprehensive = len(business_spec) > 500 and "##" in business_spec
+    spec_comprehensive = _spec_looks_structured(business_spec)
     
     # If spec is not comprehensive and hasn't been enhanced yet, perform web search
     if not spec_comprehensive and not spec_enhanced:
@@ -114,6 +154,7 @@ def phase0_classify_node(state: DesignGraphState) -> dict[str, Any]:
             "pending_user_feedback": "",
             "pending_assistant_message": spec_template_result.get("assistant_message") or "",
             "publish_requested": False,
+            "stay_on_interrupt": False,
             "messages": [{"role": "assistant", "content": spec_template_result.get("assistant_message") or "", "node": "phase0"}],
         }
 
@@ -150,21 +191,30 @@ def phase0_classify_node(state: DesignGraphState) -> dict[str, Any]:
         if new_track not in {"unset", "lld", "hld"}:
             new_track = "unset"
         ready = bool(spec_update_result.get("ready_to_advance")) and new_track in {"lld", "hld"}
-        
+        spec = spec_update_result.get("updated_business_spec") or business_spec
+        assistant = str(spec_update_result.get("assistant_message") or "")
+        if pending:
+            assistant = with_resolution_close(
+                assistant,
+                changed=spec != business_spec
+                or new_track != str(state.get("design_track") or "unset"),
+            )
+
         return {
             "phase": "phase0",
             "design_track": new_track,  # type: ignore[typeddict-item]
             "design_step": 0,
-            "business_spec": spec_update_result.get("updated_business_spec") or business_spec,
+            "business_spec": spec,
             "tradeoff_ledger": state.get("tradeoff_ledger") or "",
             "ready_to_advance": ready,
             "ready_for_design": ready,
             "design_ready_to_approve": False,
             "spec_enhanced": True,
             "pending_user_feedback": "",
-            "pending_assistant_message": spec_update_result.get("assistant_message") or "",
+            "pending_assistant_message": assistant,
             "publish_requested": False,
-            "messages": [{"role": "assistant", "content": spec_update_result.get("assistant_message") or "", "node": "phase0"}],
+            "stay_on_interrupt": False,
+            "messages": [{"role": "assistant", "content": assistant, "node": "phase0"}],
         }
 
     # Original classification logic for when spec is already comprehensive
@@ -194,7 +244,8 @@ def phase0_classify_node(state: DesignGraphState) -> dict[str, Any]:
             "}\n"
             "updated_business_spec: keep/structure the spec; do not empty it.\n"
             "tradeoff_ledger: one line noting the classification assumption.\n"
-            "Escape newlines in strings as \\n."
+            "Escape newlines in strings as \\n.\n"
+            f"{FEEDBACK_RESOLUTION_RULES if pending else ''}"
         ),
         user=(
             f"Current living specification:\n\n{business_spec}\n\n"
@@ -217,6 +268,12 @@ def phase0_classify_node(state: DesignGraphState) -> dict[str, Any]:
             else "I need a bit more detail to classify LLD vs HLD."
         )
     )
+    if pending:
+        assistant = with_resolution_close(
+            str(assistant),
+            changed=new_track != str(state.get("design_track") or "unset")
+            or spec != business_spec,
+        )
 
     return {
         "phase": "phase0",
@@ -231,6 +288,7 @@ def phase0_classify_node(state: DesignGraphState) -> dict[str, Any]:
         "pending_user_feedback": "",
         "pending_assistant_message": assistant,
         "publish_requested": False,
+        "stay_on_interrupt": False,
         "messages": [{"role": "assistant", "content": assistant, "node": "phase0"}],
     }
 
@@ -272,6 +330,7 @@ def phase0_wait_node(state: DesignGraphState) -> dict[str, Any]:
             "ready_to_advance": False,
             "pending_user_feedback": "",
             "pending_assistant_message": enter_msg,
+            "stay_on_interrupt": False,
             "messages": msgs,
         }
 
@@ -280,8 +339,22 @@ def phase0_wait_node(state: DesignGraphState) -> dict[str, Any]:
         return {
             "phase": "done",
             "pending_assistant_message": "Session marked done.",
+            "stay_on_interrupt": False,
             "messages": msgs,
         }
+
+    if user_text and is_informational_query(user_text):
+        return answer_before_approve(
+            state,
+            user_text,
+            node="phase0",
+            base={
+                "phase": "phase0",
+                "design_track": track,
+                "design_step": 0,
+                "ready_to_advance": ready,
+            },
+        )
 
     return {
         "phase": "phase0",
@@ -289,5 +362,6 @@ def phase0_wait_node(state: DesignGraphState) -> dict[str, Any]:
         "design_step": 0,
         "ready_to_advance": False,
         "pending_user_feedback": user_text,
+        "stay_on_interrupt": False,
         "messages": msgs,
     }

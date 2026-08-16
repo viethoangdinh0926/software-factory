@@ -162,6 +162,75 @@ def recover_architecture_payload_from_prose(text: str) -> dict[str, Any] | None:
     return None
 
 
+def recover_api_type_from_prose(text: str) -> dict[str, Any] | None:
+    """Keep API-type research alive when the model writes an essay instead of JSON."""
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return None
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE).strip()
+        cleaned = re.sub(r"\s*```$", "", cleaned).strip()
+    lowered = cleaned.lower()
+    api_type = "REST"
+    if "graphql" in lowered:
+        api_type = "GraphQL"
+    elif "grpc" in lowered:
+        api_type = "gRPC"
+    elif "websocket" in lowered:
+        api_type = "WebSocket"
+    elif "event" in lowered and "driven" in lowered:
+        api_type = "events"
+    rec = "change" if re.search(r"\bchange\b", lowered) and not re.search(r"\bkeep\b", lowered) else "keep"
+    logger.info("Recovered API type %s from non-JSON LLM reply", api_type)
+    return {
+        "architect_api_type": api_type,
+        "recommended_api_type": api_type,
+        "recommendation": rec,
+        "rationale": cleaned[:1200],
+        "assistant_message": cleaned[:2000],
+    }
+
+
+def recover_extract_from_prose(text: str) -> dict[str, Any] | None:
+    """Keep service extraction moving; headings are applied by the heuristic afterward."""
+    cleaned = (text or "").strip()
+    logger.info("Recovered empty extract payload from non-JSON LLM reply")
+    return {
+        "services": [],
+        "assistant_message": (cleaned[:800] if cleaned else "") or "Extracted core microservices.",
+    }
+
+
+def recover_classify_from_prose(text: str) -> dict[str, Any] | None:
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return None
+    if cleaned.lstrip().startswith("{") or cleaned.lstrip().startswith("```json"):
+        return None
+    lowered = cleaned.lower()
+    topology = "distributed"
+    if "stand-alone" in lowered or "standalone" in lowered or "single process" in lowered:
+        if "microservice" not in lowered and "distributed" not in lowered:
+            topology = "standalone"
+    logger.info("Recovered topology %s from non-JSON LLM reply", topology)
+    return {
+        "topology": topology,
+        "certain": True,
+        "rationale": cleaned[:800],
+        "assistant_message": cleaned[:800] or f"Classified topology as **{topology}**.",
+    }
+
+
+def recover_markdown_field_from_prose(text: str, field: str) -> dict[str, Any] | None:
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return None
+    if cleaned.lstrip().startswith("{") or cleaned.lstrip().startswith("```json"):
+        return None
+    logger.info("Recovered %s markdown from non-JSON LLM reply", field)
+    return {field: cleaned, "assistant_message": cleaned[:800]}
+
+
 def _candidate_blobs(cleaned: str) -> list[str]:
     """Build parse candidates: balanced object, truncated tail, control-escaped variants."""
     blobs: list[str] = []

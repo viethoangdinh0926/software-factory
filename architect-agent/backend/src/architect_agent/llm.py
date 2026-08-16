@@ -34,7 +34,9 @@ class StubChatModel(BaseChatModel):
         lower = blob.lower()
         turns = blob.count("User answer:") + blob.count("USER:")
 
-        if "compress a living business specification" in lower or "spec to compress:" in lower:
+        if "this is q&a before they approve this workflow step" in lower:
+            payload = {"assistant_message": _stub_qa(blob)}
+        elif "compress a living business specification" in lower or "spec to compress:" in lower:
             payload = {"updated_business_spec": _compact_spec_stub(blob)}
         elif "compress a system-design justification" in lower or "justification to compress:" in lower:
             payload = {"design_justification": _compact_justification_stub(blob)}
@@ -112,6 +114,39 @@ class StubChatModel(BaseChatModel):
         return ChatResult(
             generations=[ChatGeneration(message=AIMessage(content=json.dumps(payload)))]
         )
+
+
+def _stub_qa(blob: str) -> str:
+    lower = blob.lower()
+    if "endpoint" in lower or " url" in lower or "urls" in lower:
+        found = re.findall(
+            r"\b((?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+/[A-Za-z0-9_{}\-./]*)",
+            blob,
+            re.I,
+        )
+        uniq: list[str] = []
+        seen: set[str] = set()
+        for item in found:
+            key = item.upper()
+            if key in seen:
+                continue
+            seen.add(key)
+            uniq.append(item)
+        if uniq:
+            return "URL endpoints currently recorded in this design:\n" + "\n".join(
+                f"- `{item}`" for item in uniq[:24]
+            )
+    if "grade" in lower:
+        return "The market evaluation grade for this design version is in the report on this step."
+    if "hld" in lower and "lld" in lower:
+        return (
+            "This is HLD because the spec describes a distributed, multi-service system "
+            "rather than a single OS process."
+        )
+    return (
+        "Here is what is currently on this step, based on the artifacts. "
+        "Ask if you want a specific section quoted."
+    )
 
 
 def _stub_phase0(blob: str) -> dict[str, Any]:

@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import re
+import threading
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -62,6 +63,36 @@ def _extract_ui_url(detail: str) -> str | None:
     return None
 
 
+def _run_async(coro_factory):
+    """Run an async A2A send from sync LangGraph/FastAPI code.
+
+    ``asyncio.run()`` raises if FastAPI already has an event loop; hop to a
+    worker thread in that case so the package still goes out.
+    """
+
+    def _call():
+        return asyncio.run(coro_factory())
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return _call()
+    box: dict[str, Any] = {}
+
+    def worker() -> None:
+        try:
+            box["ok"] = _call()
+        except BaseException as exc:  # noqa: BLE001
+            box["err"] = exc
+
+    thread = threading.Thread(target=worker, name="architect-a2a-send", daemon=True)
+    thread.start()
+    thread.join()
+    if "err" in box:
+        raise box["err"]
+    return box["ok"]
+
+
 async def _a2a_send(markdown: str, target_url: str) -> str:
     import httpx
 
@@ -71,7 +102,7 @@ async def _a2a_send(markdown: str, target_url: str) -> str:
     from a2a.types import Role, SendMessageRequest
 
     settings = get_settings()
-    async with httpx.AsyncClient(timeout=60.0, verify=settings.ssl_verify) as httpx_client:
+    async with httpx.AsyncClient(timeout=180.0, verify=settings.ssl_verify) as httpx_client:
         resolver = A2ACardResolver(httpx_client=httpx_client, base_url=target_url.rstrip("/"))
         card = await resolver.get_agent_card()
         client = await create_client(
@@ -91,6 +122,35 @@ async def _a2a_send(markdown: str, target_url: str) -> str:
             return joined
         finally:
             await client.close()
+
+
+def strip_handoff_header(markdown: str) -> str:
+    """Drop the architect handoff HTML comment so a retry does not stack headers."""
+    text = markdown or ""
+    stripped = text.lstrip()
+    if stripped.startswith("<!--") and "architect-agent handoff" in stripped[:200]:
+        end = stripped.find("-->")
+        if end >= 0:
+            return stripped[end + 3 :].lstrip()
+    return text
+
+
+def retry_design_package(
+    *,
+    session_id: str,
+    version: int,
+    saved_path: str | None = None,
+    markdown: str | None = None,
+) -> HandoffResult:
+    """Resend an already-versioned package. Does not allocate a new design version."""
+    body = markdown or ""
+    if saved_path:
+        path = Path(saved_path)
+        if path.is_file():
+            body = strip_handoff_header(path.read_text(encoding="utf-8"))
+    if not body.strip():
+        raise ValueError("No saved design package to retry.")
+    return send_design_package(session_id=session_id, markdown=body, version=version)
 
 
 def send_design_package(
@@ -133,7 +193,7 @@ def send_design_package(
         )
 
     try:
-        response_detail = asyncio.run(_a2a_send(markdown, target))
+        response_detail = _run_async(lambda: _a2a_send(markdown, target))
         logger.info("Sent design handoff %s to %s", handoff_id, target)
         return HandoffResult(
             status="sent",

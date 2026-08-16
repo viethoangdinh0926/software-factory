@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.types import interrupt
 
 from architect_agent.context_budget import (
@@ -10,23 +9,10 @@ from architect_agent.context_budget import (
     maybe_compact_business_spec,
     maybe_compact_design_justification,
 )
+from architect_agent.graph.nodes.common import invoke_json
 from architect_agent.graph.state import DesignGraphState
-from architect_agent.json_util import coerce_diagram_text, parse_llm_json_object
-from architect_agent.llm import get_chat_model
+from architect_agent.json_util import coerce_diagram_text
 from architect_agent.mermaid_sanitize import sanitize_mermaid
-
-
-def _invoke_json(system: str, user: str) -> dict[str, Any]:
-    model = get_chat_model()
-    response = model.invoke(
-        [SystemMessage(content=system), HumanMessage(content=user)],
-    )
-    content = response.content
-    if isinstance(content, list):
-        content = "".join(
-            block.get("text", "") if isinstance(block, dict) else str(block) for block in content
-        )
-    return parse_llm_json_object(str(content))
 
 
 def system_design_node(state: DesignGraphState) -> dict[str, Any]:
@@ -49,7 +35,7 @@ def system_design_node(state: DesignGraphState) -> dict[str, Any]:
         )
     )
 
-    proposal = _invoke_json(
+    proposal = invoke_json(
         system=(
             "You are the Architect agent's system design node.\n"
             "Maintain a living high-level design with a Mermaid diagram and markdown "

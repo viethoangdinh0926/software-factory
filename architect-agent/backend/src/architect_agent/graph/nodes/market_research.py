@@ -4,9 +4,10 @@ from typing import Any
 
 from langgraph.types import interrupt
 
-from architect_agent.graph.nodes.common import approve_label
+from architect_agent.graph.nodes.common import answer_before_approve, approve_label
 from architect_agent.graph.state import DesignGraphState
 from architect_agent.market_research import generate_market_evaluation_report
+from architect_agent.query_intent import is_informational_query
 
 
 def market_research_node(state: DesignGraphState) -> dict[str, Any]:
@@ -56,6 +57,7 @@ def market_research_node(state: DesignGraphState) -> dict[str, Any]:
         "pending_assistant_message": assistant_message,
         "publish_requested": False,
         "resume_after_market": True,
+        "stay_on_interrupt": False,
         "messages": [
             {"role": "assistant", "content": assistant_message, "node": "market_research"}
         ],
@@ -103,8 +105,26 @@ def market_wait_node(state: DesignGraphState) -> dict[str, Any]:
             "phase": "done",
             "pending_assistant_message": "Session marked done.",
             "publish_requested": False,
+            "stay_on_interrupt": False,
             "messages": msgs,
         }
+
+    if action == "chat" and user_text and is_informational_query(user_text):
+        return answer_before_approve(
+            state,
+            user_text,
+            node="market_research",
+            base={
+                "phase": "market_research",
+                "design_track": track if track in {"lld", "hld"} else "hld",
+                "design_step": int(state.get("design_step") or 0),
+                "market_evaluation_done": True,
+                "market_evaluation_report": report,
+                "market_evaluation_grade": grade,
+                "resume_after_market": True,
+                "ready_to_advance": True,
+            },
+        )
 
     # Resume design iteration: HLD → step 4; LLD → step 3 (verify).
     if track == "lld":
@@ -140,5 +160,6 @@ def market_wait_node(state: DesignGraphState) -> dict[str, Any]:
         "design_ready_to_approve": False,
         "pending_user_feedback": user_text if action == "chat" else "",
         "pending_assistant_message": proceed_msg,
+        "stay_on_interrupt": False,
         "messages": msgs,
     }

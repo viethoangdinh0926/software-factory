@@ -85,3 +85,14 @@ Architect the supporting infrastructure and apply distributed systems theory.
   * Active Architecture Diagram Source Code
   * Decisions & Trade-offs Log
 - Allow users to resume any session at any time using their `Session_ID` to modify components or fork the design.
+
+---
+
+## Discussion before Approve
+Until the user clicks Approve on the current step (Phase 0, each HLD/LLD step, or market continue):
+- Answer every question from the **current** artifacts (spec, scale, APIs, diagram, FMEA, market report).
+- Be concrete: numbers, service names, `METHOD /path`, CAP choices, grades.
+- Do not skip the question, leave chat empty, or reply with a recap that only asks them to Approve.
+- If they raised a concern or asked to change something, update this step's artifact first.
+- Before inviting Approve **again**, state **Updates to this proposal** (one bullet per change, or `None` if unchanged). Approve applies to that version, not the one from the previous ask.
+

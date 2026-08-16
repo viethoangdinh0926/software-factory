@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -39,6 +40,30 @@ def _plan_dir() -> Path:
     path = settings.data_dir.parent / "plan_specs"
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def _run_async(coro_factory):
+    def _call():
+        return asyncio.run(coro_factory())
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return _call()
+    box: dict[str, Any] = {}
+
+    def worker() -> None:
+        try:
+            box["ok"] = _call()
+        except BaseException as exc:  # noqa: BLE001
+            box["err"] = exc
+
+    thread = threading.Thread(target=worker, name="orchestrator-a2a-send", daemon=True)
+    thread.start()
+    thread.join()
+    if "err" in box:
+        raise box["err"]
+    return box["ok"]
 
 
 async def _a2a_send(markdown: str, target_url: str) -> str:
@@ -98,7 +123,7 @@ def _deliver(*, markdown: str, filename: str, action: str, design_session_id: st
             microservice_id=microservice_id,
         )
     try:
-        response_detail = asyncio.run(_a2a_send(markdown, target))
+        response_detail = _run_async(lambda: _a2a_send(markdown, target))
         logger.info("Sent engineer handoff %s to %s", handoff_id, target)
         return EngineerHandoff(
             status="sent",

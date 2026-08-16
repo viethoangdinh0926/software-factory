@@ -84,3 +84,5 @@ class DesignGraphState(TypedDict):
     spec_enhanced: NotRequired[bool]
     # After market continue: resume_track + resume_step for handoff loop.
     resume_after_market: Annotated[bool, _replace_bool]
+    # Chat answered a question: loop back to the same wait node without regenerating.
+    stay_on_interrupt: Annotated[bool, _replace_bool]

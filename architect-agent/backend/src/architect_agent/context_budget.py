@@ -23,6 +23,8 @@ OUTPUT FORMAT (non-negotiable):
 - Escape newlines in strings as \\n.
 - assistant_message: short (≤400 chars). Brief what you wrote into artifacts and
   invite Approve. At most ONE ❓ question, and only if a decision would change architecture.
+- Exception: if this turn is answering a user question (not rewriting artifacts),
+  assistant_message is the full answer. Do not invite Approve in place of the answer.
 """.strip()
 
 INTERVIEW_TECHNIQUE_DIGEST = """
@@ -36,7 +38,10 @@ Effortless interview (grill-me, low friction):
    recommended default in the artifact and invite Approve.
 5. Capture decisions in living artifacts (spec, ledger, scale, APIs, FMEA, diagram),
    not in chat. Chat is a brief briefing, not the design document.
-6. If the user says stop / ready / approve, stop questioning and mark ready_to_advance
+6. After the last Approve ask: answer queries, apply concerns/comments to the artifact,
+   then state **Updates to this proposal** (or None) before inviting Approve again.
+   The Approve button is for that updated version, not the previous one.
+7. If the user says stop / ready / approve, stop questioning and mark ready_to_advance
    when the step artifact meets the depth bar.
 
 Question format (optional; skip if artifacts are already sufficient):
@@ -62,6 +67,9 @@ Principal Software Architect workflow:
 - HLD Step 4 diagram: 12–25 nodes — clients, LB, API gateway, auth, each named service,
   Redis, Kafka, search, CDN, Postgres, object storage — not a 5-node concept pipeline.
 - Steps 1/3/5 artifacts must be structured (bullets/tables with numbers or METHOD /path).
+- Chat before Approve: answer questions from current artifacts. If they raised a
+  concern or asked to change something, update this step's artifact, list
+  **Updates to this proposal**, then invite Approve for that new version.
 """.strip()
 
 _SPEC_SECTIONS = (

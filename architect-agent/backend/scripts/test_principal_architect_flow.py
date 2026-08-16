@@ -18,15 +18,19 @@ print("importing…", flush=True)
 from architect_agent.config import get_settings
 from architect_agent.llm import get_chat_model
 from architect_agent.graph import reset_graph
+from architect_agent.query_intent import is_informational_query, is_revision_request
 from architect_agent.sessions import SessionStore, _legacy_map
 
 get_settings.cache_clear()
 get_chat_model.cache_clear()
 reset_graph()
 
-# Point checkpointer at temp as well by patching after import is awkward;
-# use unique thread ids via fresh SessionStore — checkpoints share process DB.
-# For smoke we only need functional flow, not checkpoint isolation.
+assert is_informational_query("Why is this HLD rather than LLD?")
+assert is_informational_query("Show me all URL endpoints we agreed on")
+assert is_revision_request("Please switch to a modular monolith")
+assert is_revision_request("Add a health check endpoint")
+assert is_revision_request("Why is there no rate limiting?")
+assert not is_revision_request("Why is this HLD rather than LLD?")
 
 print("HLD path…", flush=True)
 store = SessionStore()
@@ -41,6 +45,14 @@ print("  start", s.phase, s.design_track, s.design_step, s.to_public()["can_appr
 pub = s.to_public()
 assert s.phase == "phase0", s.phase
 assert pub["can_approve"], pub
+track0 = s.design_track
+s = store.chat(s.session_id, "Why is this HLD rather than LLD?")
+print("  phase0 qa", s.phase, s.design_track, s.to_public()["can_approve"], flush=True)
+assert s.phase == "phase0", s.phase
+assert s.design_track == track0
+assert s.to_public()["can_approve"]
+assert s.messages[-1]["role"] == "assistant"
+assert s.messages[-1]["content"].strip()
 s = store.approve(s.session_id)
 print("  after phase0", s.phase, s.design_track, s.design_step, flush=True)
 assert s.design_track == "hld", s.design_track
@@ -49,6 +61,17 @@ assert s.phase == "hld" and s.design_step == 1, (s.phase, s.design_step)
 for step in range(1, 7):
     assert s.phase == "hld" and s.design_step == step, (s.phase, s.design_step)
     assert s.to_public()["can_approve"], s.to_public()
+    if step == 3:
+        apis = s.api_contracts
+        s = store.chat(s.session_id, "Show me all URL endpoints we agreed on")
+        print("  hld3 qa", s.phase, s.design_step, flush=True)
+        assert s.phase == "hld" and s.design_step == 3
+        assert s.api_contracts == apis
+        assert s.to_public()["can_approve"]
+        last = s.messages[-1]["content"]
+        assert "GET" in last or "POST" in last or "endpoint" in last.lower(), last[:240]
+        assert "Updates to this proposal" in last, last[:400]
+        assert "None" in last, last[:400]
     s = store.approve(s.session_id)
     print(f"  after approve@{step}", s.phase, s.design_step, flush=True)
     if step < 6:
@@ -57,6 +80,12 @@ for step in range(1, 7):
         assert s.phase == "market_research", s.phase
         assert s.market_evaluation_done
         assert s.market_evaluation_report.strip()
+        s = store.chat(s.session_id, "What was the market evaluation grade?")
+        print("  market qa", s.phase, s.to_public()["can_approve"], flush=True)
+        assert s.phase == "market_research", s.phase
+        assert s.to_public()["can_approve"]
+        assert s.messages[-1]["role"] == "assistant"
+        assert s.messages[-1]["content"].strip()
 
 version_before = s.design_version
 s = store.approve(s.session_id)

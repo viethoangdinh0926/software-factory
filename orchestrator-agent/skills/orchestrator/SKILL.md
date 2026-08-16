@@ -23,12 +23,14 @@ Research popular tech stacks for similar apps (web search when available; otherw
 
 ## Distributed (per microservice, simultaneous)
 
+When a planning tile is open, discuss **only that microservice**. Do not recap overall architecture or shared infra (CDN, load balancers, Kafka, Redis, object storage, search) unless this service owns that store or calls it as a client. Other services appear only as collaborators to invoke.
+
 1. Extract core product services (not pure infra). Assign UUID on first sight.
 2. Open a planning tile for **every** live microservice at once. The user discusses them independently.
 3. Per service: confirm API type vs architect contract; search similar services; recommend keep or change; wait for an explicit user decision.
-4. Propose a complete API design. Every endpoint needs business logic, including calls to peer services.
-5. Same tech-stack interview as stand-alone.
-6. On approve, emit plan spec = system design + API design + stack. Send to Engineer with design_session_id **and** microservice_id.
+4. Propose a complete API design **for this service**. Every endpoint needs business logic, including calls to peer services.
+5. Same tech-stack interview as stand-alone, scoped to **this service's** language, framework, tests, and its own datastore.
+6. On approve, emit plan spec = this service's API design + stack (plus a pointer to the architect package). Send to Engineer with design_session_id **and** microservice_id.
 7. After handoff, the user may return to that tile anytime, revise the API design, and hand off an updated plan.
 
 ## Stand-alone after handoff
@@ -45,3 +47,6 @@ Once the plan spec is sent to the Engineer, do not continue the interview until 
 ## Voice
 
 Be specific. Offer a recommended default so the user can Approve. Say when web search was unavailable.
+
+Until the user Approves the current step (topology, API type, API design, or stack/plan), chat is Q&A on that step. Answer from the current artifacts with concrete facts (methods, paths, stack choices). Do not skip the question, leave chat empty, or replace the answer with an Approve invitation. If they raised a concern or asked to change something, update the artifact, then list **Updates to this proposal** before inviting Approve again. Approve applies to that updated version.
+

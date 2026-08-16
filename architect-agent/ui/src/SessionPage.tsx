@@ -8,6 +8,7 @@ import {
   finalDownloadUrl,
   getSession,
   marketEvaluationDownloadUrl,
+  retryHandoff,
   specDownloadUrl,
   trackStepLabel,
   type DesignSession,
@@ -52,6 +53,7 @@ export function SessionPage() {
   const [pendingUserText, setPendingUserText] = useState<string | null>(null);
   const [chatBusy, setChatBusy] = useState(false);
   const [approveBusy, setApproveBusy] = useState(false);
+  const [retryBusy, setRetryBusy] = useState(false);
   const [endConfirm, setEndConfirm] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -90,7 +92,7 @@ export function SessionPage() {
   async function onChat(e: FormEvent) {
     e.preventDefault();
     const text = message.trim();
-    if (!text || chatBusy || approveBusy) return;
+    if (!text || chatBusy || approveBusy || retryBusy) return;
     setEndConfirm(false);
     setChatBusy(true);
     setPendingUserText(text);
@@ -112,12 +114,12 @@ export function SessionPage() {
   function onComposerKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing) return;
     e.preventDefault();
-    if (chatBusy || approveBusy || !message.trim()) return;
+    if (chatBusy || approveBusy || retryBusy || !message.trim()) return;
     e.currentTarget.form?.requestSubmit();
   }
 
   async function onApprove() {
-    if (approveBusy || !session) return;
+    if (approveBusy || retryBusy || !session) return;
     setEndConfirm(false);
     phaseBeforeApprove.current = session.phase;
     kindBeforeApprove.current = session.approve_kind;
@@ -135,8 +137,23 @@ export function SessionPage() {
     }
   }
 
+  async function onRetryHandoff() {
+    if (retryBusy || approveBusy || chatBusy || !session?.can_retry_handoff) return;
+    setEndConfirm(false);
+    setRetryBusy(true);
+    setError(null);
+    try {
+      const data = await retryHandoff(sessionId);
+      setSession(data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRetryBusy(false);
+    }
+  }
+
   async function onEndSession() {
-    if (approveBusy || chatBusy || !endConfirm) return;
+    if (approveBusy || chatBusy || retryBusy || !endConfirm) return;
     setApproveBusy(true);
     setError(null);
     try {
@@ -177,7 +194,9 @@ export function SessionPage() {
     );
   }
 
+  const busy = chatBusy || approveBusy || retryBusy;
   const canApprove = Boolean(session.can_approve) && !session.finalized;
+  const canRetry = Boolean(session.can_retry_handoff) && !session.finalized;
   const approveLabel = approveBusy
     ? kindBeforeApprove.current === "design"
       ? "Researching alternatives…"
@@ -187,13 +206,15 @@ export function SessionPage() {
     : session.approve_label || "Continue";
 
   const thinkingLabel =
-    approveBusy && kindBeforeApprove.current === "design"
-      ? "Researching alternatives and grading the idea…"
-      : approveBusy && phaseBeforeApprove.current === "market_research"
-        ? "Handing off the design package and resuming design…"
-        : approveBusy
-          ? "Advancing the design track…"
-          : "Working on your message…";
+    retryBusy
+      ? "Retrying handoff of this design package to the Orchestrator…"
+      : approveBusy && kindBeforeApprove.current === "design"
+        ? "Researching alternatives and grading the idea…"
+        : approveBusy && phaseBeforeApprove.current === "market_research"
+          ? "Handing off the design package and resuming design…"
+          : approveBusy
+            ? "Advancing the design track…"
+            : "Working on your message…";
 
   const chatPlaceholder = chatBusy
     ? "Wait for the architect to finish…"
@@ -223,9 +244,15 @@ export function SessionPage() {
               <span className="chip accent">Grade {session.market_evaluation_grade}</span>
             ) : null}
             {session.design_version > 0 ? (
-              <span className="chip accent">v{session.design_version} sent</span>
+              <span className={session.last_handoff?.status === "failed" ? "chip" : "chip accent"}>
+                {session.last_handoff?.status === "failed"
+                  ? `v${session.design_version} handoff failed`
+                  : session.last_handoff?.status === "queued"
+                    ? `v${session.design_version} queued`
+                    : `v${session.design_version} sent`}
+              </span>
             ) : null}
-            {chatBusy || approveBusy ? <span className="chip pulse">Thinking</span> : null}
+            {busy ? <span className="chip pulse">Thinking</span> : null}
             <code className="session-id">{session.design_session_id}</code>
           </div>
           {session.last_handoff ? (
@@ -258,7 +285,7 @@ export function SessionPage() {
             <button
               className="btn ghost"
               type="button"
-              disabled={approveBusy || chatBusy}
+              disabled={busy}
               onClick={() => setEndConfirm(true)}
               aria-expanded={endConfirm}
             >
@@ -276,7 +303,7 @@ export function SessionPage() {
           <button
             className="btn ghost"
             type="button"
-            disabled={approveBusy}
+            disabled={busy}
             onClick={() => setEndConfirm(false)}
           >
             Cancel
@@ -284,7 +311,7 @@ export function SessionPage() {
           <button
             className="btn danger"
             type="button"
-            disabled={approveBusy || chatBusy}
+            disabled={approveBusy || chatBusy || retryBusy}
             onClick={onEndSession}
           >
             {approveBusy ? "Ending…" : "Yes, end session"}
@@ -293,10 +320,20 @@ export function SessionPage() {
       ) : null}
 
       <div className="approve-bar">
+        {canRetry ? (
+          <button
+            className="btn primary approve-btn"
+            type="button"
+            disabled={busy}
+            onClick={onRetryHandoff}
+          >
+            {retryBusy ? "Retrying handoff…" : `Retry handoff v${session.design_version}`}
+          </button>
+        ) : null}
         <button
-          className="btn primary approve-btn"
+          className={canRetry ? "btn ghost approve-btn" : "btn primary approve-btn"}
           type="button"
-          disabled={!canApprove || session.finalized || approveBusy || chatBusy}
+          disabled={!canApprove || session.finalized || busy}
           onClick={onApprove}
         >
           {approveLabel}
@@ -327,7 +364,7 @@ export function SessionPage() {
                 <MarkdownView content={pendingUserText} className="bubble-md" />
               </div>
             ) : null}
-            {chatBusy || approveBusy ? (
+            {chatBusy || approveBusy || retryBusy ? (
               <div className="bubble assistant thinking" aria-label="Architect is processing">
                 <span className="who">Architect</span>
                 <div className="thinking-row">
@@ -348,7 +385,7 @@ export function SessionPage() {
                 onChange={(e) => setMessage(e.target.value)}
                 onKeyDown={onComposerKeyDown}
                 placeholder={chatPlaceholder}
-                disabled={chatBusy || approveBusy}
+                disabled={busy}
                 required
                 aria-keyshortcuts="Enter Shift+Enter"
                 title="Enter to send · Shift+Enter for a new line"
@@ -356,7 +393,7 @@ export function SessionPage() {
               <button
                 className="btn primary"
                 type="submit"
-                disabled={chatBusy || approveBusy || !message.trim()}
+                disabled={busy || !message.trim()}
               >
                 {chatBusy ? "Sending…" : "Send"}
               </button>
