@@ -1,0 +1,35 @@
+[project]
+name = "orchestrator-agent"
+version = "0.1.0"
+description = "Software Factory Orchestrator agent (A2A FastAPI + LangGraph planning sessions)"
+readme = "README.md"
+authors = [
+    { name = "Viet Dinh", email = "hoang_viet1985@yahoo.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "a2a-sdk[fastapi]>=1.1.2",
+    "cachetools>=7.1.7",
+    "ddgs>=9.14.4",
+    "fastapi>=0.141.1",
+    "jinja2>=3.1.6",
+    "json-repair>=0.63.1",
+    "langchain-anthropic>=1.5.4",
+    "langchain-core>=1.5.3",
+    "langchain-ollama>=1.1.0",
+    "langchain-openai>=1.4.3",
+    "langgraph>=1.2.10",
+    "langgraph-checkpoint-sqlite>=3.1.1",
+    "pydantic-settings>=2.15.0",
+    "python-dotenv>=1.2.2",
+    "python-multipart>=0.0.32",
+    "requests>=2.32.0",
+    "uvicorn>=0.52.1",
+]
+
+[project.scripts]
+orchestrator-agent = "orchestrator_agent.main:main"
+
+[build-system]
+requires = ["uv_build>=0.12.1,<0.13.0"]
+build-backend = "uv_build"

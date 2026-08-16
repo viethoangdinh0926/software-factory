@@ -533,7 +533,7 @@ def hld_wait_node(state: DesignGraphState) -> dict[str, Any]:
     if action == "approve" and design_approve:
         msg = (
             "Design version queued for market evaluation, then handoff to the "
-            "System Manager. Review the market report when it appears."
+            "Orchestrator. Review the market report when it appears."
         )
         msgs.append({"role": "assistant", "content": msg, "node": "hld"})
         return {

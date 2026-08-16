@@ -14,7 +14,7 @@ After `ui` is built, static files land in `backend/src/architect_agent/static/` 
 
 1. **Phase 0** — classify **LLD** (single-process) vs **HLD** (distributed).
 2. **LLD** steps 1–3 or **HLD** steps 1–6 with a living spec, trade-off ledger, and step artifacts.
-3. **Approve & send design** (design-version approve) → **market evaluation** (fresh report + grade) → continue → handoff to System Manager + resume design (HLD defaults to step 4).
+3. **Approve & send design** (design-version approve) → **market evaluation** (fresh report + grade) → continue → handoff to Orchestrator + resume design (HLD defaults to step 4).
 4. Step advances (1–5) do **not** trigger market research.
 
 ## Deploy (from scratch)
@@ -83,4 +83,4 @@ LLM_PROVIDER=stub uv run python scripts/test_principal_architect_flow.py
 
 - Agent card: `GET /.well-known/agent-card.json`
 - JSON-RPC: `POST /`
-- On each **Continue after market evaluation** (after design-version approve), the architect writes a design-package markdown and delivers it to the Software System Manager via A2A (`SYSTEM_MANAGER_AGENT_URL`). If unset/unreachable, packages are queued under `backend/data/handoffs/`.
+- On each **Continue after market evaluation** (after design-version approve), the architect writes a design-package markdown and delivers it to the Orchestrator via A2A (`ORCHESTRATOR_AGENT_URL`, default `:8090`). If unset/unreachable, packages are queued under `backend/data/handoffs/`. The Orchestrator lives in sibling package `orchestrator-agent/` and reuses the same `design_session_id`.

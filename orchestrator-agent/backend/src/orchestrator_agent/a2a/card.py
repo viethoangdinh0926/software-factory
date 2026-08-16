@@ -7,37 +7,34 @@ from a2a.types import (
     AgentSkill,
 )
 
-from architect_agent.config import get_settings
+from orchestrator_agent.config import get_settings
 
 
 def build_agent_card() -> AgentCard:
     settings = get_settings()
     base = settings.public_base_url.rstrip("/")
     skill = AgentSkill(
-        id="system_design",
-        name="Principal Architect Design",
+        id="orchestrate_delivery",
+        name="Orchestrator Planning",
         description=(
-            "Accept a business-specification markdown, classify LLD vs HLD "
-            "(Principal Architect), run the structured design track with a "
-            "trade-off ledger, re-evaluate the market on every design-version "
-            "approve, then hand off the design package to the Orchestrator."
+            "Accept an architect design-package markdown keyed by design_session_id. "
+            "Classify stand-alone vs distributed, plan tech stacks (and per-service APIs), "
+            "then hand plan specs to the Engineer agent."
         ),
-        tags=["architecture", "design", "principal-architect", "software-factory"],
+        tags=["orchestration", "planning", "software-factory"],
         examples=[
-            "Design a warehouse inventory tracker from this business spec…",
-            "Continue this WIP architecture markdown…",
+            "Here is System Design Package v1 for design session …",
         ],
         input_modes=["text/markdown", "text/plain"],
         output_modes=["text/markdown", "text/plain", "application/json"],
     )
     return AgentCard(
-        name="Architect Agent",
+        name="Orchestrator Agent",
         description=(
-            "Software Factory Principal Architect. "
-            "Starts design sessions from markdown specs via A2A / HTTP "
-            "(Phase 0 → LLD/HLD steps → market eval on design approve)."
+            "Software Factory Orchestrator. Receives architect design packages via A2A, "
+            "plans delivery with a human on a shared UI, and queues work for the Engineer."
         ),
-        version="0.2.0",
+        version="0.1.0",
         default_input_modes=["text/markdown", "text/plain"],
         default_output_modes=["text/markdown", "text/plain", "application/json"],
         capabilities=AgentCapabilities(streaming=False),

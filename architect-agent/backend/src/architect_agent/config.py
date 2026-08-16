@@ -63,12 +63,18 @@ class Settings(BaseSettings):
     # Disabled automatically for LLM_PROVIDER=stub; set false to force offline stubs.
     market_research_web_enabled: bool = True
 
-    # Downstream A2A peer (Software System Manager) — optional until that agent exists
+    # Downstream A2A peer (Orchestrator) — optional until that agent exists
+    orchestrator_agent_url: str | None = None
+    # Deprecated alias for orchestrator_agent_url
     system_manager_agent_url: str | None = None
 
 
 @lru_cache
 def get_settings() -> Settings:
     settings = Settings()
+    if not (settings.orchestrator_agent_url or "").strip():
+        alias = (settings.system_manager_agent_url or "").strip()
+        if alias:
+            settings.orchestrator_agent_url = alias
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     return settings

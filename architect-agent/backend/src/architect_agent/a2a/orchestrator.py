@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import re
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -11,6 +13,8 @@ from typing import Any
 from architect_agent.config import get_settings
 
 logger = logging.getLogger(__name__)
+
+_UI_URL_RE = re.compile(r"https?://[^\s\"']+/sessions/[0-9a-fA-F-]{36}")
 
 
 @dataclass
@@ -37,6 +41,27 @@ def _handoff_dir() -> Path:
     return path
 
 
+def _extract_ui_url(detail: str) -> str | None:
+    """Pull orchestrator UI URL from A2A response chunks when present."""
+    if not detail:
+        return None
+    match = _UI_URL_RE.search(detail)
+    if match:
+        return match.group(0)
+    try:
+        start = detail.find("{")
+        if start < 0:
+            return None
+        parsed = json.JSONDecoder().raw_decode(detail[start:])[0]
+        if isinstance(parsed, dict):
+            url = parsed.get("ui_url")
+            if isinstance(url, str) and url.strip():
+                return url.strip()
+    except (json.JSONDecodeError, ValueError, TypeError):
+        return None
+    return None
+
+
 async def _a2a_send(markdown: str, target_url: str) -> str:
     import httpx
 
@@ -59,7 +84,11 @@ async def _a2a_send(markdown: str, target_url: str) -> str:
             chunks: list[str] = []
             async for chunk in client.send_message(request):
                 chunks.append(str(chunk))
-            return " | ".join(chunks) if chunks else "A2A send completed (empty response stream)."
+            joined = " | ".join(chunks) if chunks else "A2A send completed (empty response stream)."
+            ui_url = _extract_ui_url(joined)
+            if ui_url:
+                return f"Orchestrator UI: {ui_url}. {joined}"
+            return joined
         finally:
             await client.close()
 
@@ -70,11 +99,11 @@ def send_design_package(
     markdown: str,
     version: int,
 ) -> HandoffResult:
-    """Persist the approved design package and deliver it to the System Manager agent via A2A.
+    """Persist the approved design package and deliver it to the Orchestrator agent via A2A.
 
-    When SYSTEM_MANAGER_AGENT_URL is unset or the peer is unreachable, the package is still
+    When ORCHESTRATOR_AGENT_URL is unset or the peer is unreachable, the package is still
     written under data/handoffs/ with status ``queued`` / ``failed`` so delivery can be retried
-    once the System Manager agent exists.
+    once the Orchestrator agent exists.
     """
     settings = get_settings()
     handoff_id = str(uuid.uuid4())
@@ -87,11 +116,11 @@ def send_design_package(
     )
     path.write_text(header + markdown, encoding="utf-8")
 
-    target = (settings.system_manager_agent_url or "").strip() or None
+    target = (settings.orchestrator_agent_url or "").strip() or None
     if not target:
         detail = (
-            "SYSTEM_MANAGER_AGENT_URL is not set. Design package queued locally; "
-            "will be deliverable once the System Manager agent is deployed."
+            "ORCHESTRATOR_AGENT_URL is not set. Design package queued locally; "
+            "will be deliverable once the Orchestrator agent is deployed."
         )
         logger.info("Queued design handoff %s at %s", handoff_id, path)
         return HandoffResult(
@@ -115,7 +144,7 @@ def send_design_package(
             at=_now(),
         )
     except Exception as exc:
-        detail = f"A2A delivery to System Manager failed: {exc}"
+        detail = f"A2A delivery to Orchestrator failed: {exc}"
         logger.exception("Failed design handoff %s to %s", handoff_id, target)
         return HandoffResult(
             status="failed",

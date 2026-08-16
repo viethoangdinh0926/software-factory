@@ -10,7 +10,7 @@ from typing import Any
 
 from langgraph.types import Command
 
-from architect_agent.a2a.system_manager import HandoffResult, send_design_package
+from architect_agent.a2a.orchestrator import HandoffResult, send_design_package
 from architect_agent.config import get_settings
 from architect_agent.graph import build_graph, initial_state
 from architect_agent.graph.nodes.common import approve_label
@@ -484,11 +484,11 @@ class SessionStore:
         self._apply_graph_result(session, result, user_text=text or None, action=action)
 
         if handoff_after_market:
-            self._publish_design_to_system_manager(session)
+            self._publish_design_to_orchestrator(session)
 
         return session
 
-    def _publish_design_to_system_manager(self, session: DesignSession) -> HandoffResult:
+    def _publish_design_to_orchestrator(self, session: DesignSession) -> HandoffResult:
         session.design_version += 1
         markdown = self.final_design_markdown(session.session_id)
         handoff = send_design_package(
@@ -499,7 +499,7 @@ class SessionStore:
         session.last_handoff = handoff.to_public()
         session.design_approved = True
         status_line = (
-            f"Handoff v{session.design_version} → System Manager: {handoff.status}. "
+            f"Handoff v{session.design_version} → Orchestrator: {handoff.status}. "
             f"{handoff.detail}"
         )
         node = "hld" if session.design_track == "hld" else "lld"

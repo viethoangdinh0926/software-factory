@@ -143,7 +143,7 @@ def design_wait_node(state: DesignGraphState) -> dict[str, Any]:
     if action == "approve":
         publish_msg = (
             "Design version approved. Sending the design package (spec + diagram + "
-            "justification) to the Software System Manager agent. You can keep chatting "
+            "justification) to the Orchestrator agent. You can keep chatting "
             "to refine and approve again anytime."
         )
         msgs: list[dict[str, Any]] = []

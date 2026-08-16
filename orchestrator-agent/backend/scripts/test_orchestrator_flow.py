@@ -1,0 +1,166 @@
+#!/usr/bin/env python3
+"""Smoke: ingest HLD package → plan one service → v2 rename/drop → LLD track change."""
+from __future__ import annotations
+
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+os.environ["LLM_PROVIDER"] = "stub"
+
+tmp = Path(tempfile.mkdtemp(prefix="orchestrator-smoke-"))
+os.environ["DATA_DIR"] = str(tmp / "sessions")
+
+print("importing…", flush=True)
+from orchestrator_agent.config import get_settings
+from orchestrator_agent.graph import reset_graph
+from orchestrator_agent.llm import get_chat_model
+from orchestrator_agent.sessions import SessionStore, reset_store
+
+get_settings.cache_clear()
+get_chat_model.cache_clear()
+reset_graph()
+reset_store()
+
+print("reject package without design session id…", flush=True)
+try:
+    SessionStore().ingest("# System Design Package\n\nNo session id here.\n")
+    raise AssertionError("expected missing design session ID")
+except ValueError as exc:
+    assert "design session ID" in str(exc).lower() or "session" in str(exc).lower()
+
+SESSION = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+
+
+def _package(*, version: int, track: str, body: str) -> str:
+    return (
+        f"<!-- architect-agent handoff id=h1 session={SESSION} version={version} at=2026-08-16T00:00:00+00:00 -->\n\n"
+        f"# System Design Package\n\n"
+        f"Design session: `{SESSION}`\n"
+        f"Design version: `{version}`\n"
+        f"Track: `{track}` step `6`\n\n"
+        f"{body}\n"
+    )
+
+
+hld_v1 = _package(
+    version=1,
+    track="hld",
+    body=(
+        "## Business Specification\n\n"
+        "Distributed video platform with microservices.\n\n"
+        "## API Contracts\n\n"
+        "### IdentityService\nPOST /v1/auth/login\n\n"
+        "### VideoCatalogService\nGET /v1/videos/{id}\n\n"
+        "## Design Diagram\n\n"
+        "```mermaid\nflowchart LR\n  IdentityService --> VideoCatalogService\n```\n"
+    ),
+)
+
+print("HLD v1 ingest…", flush=True)
+store = SessionStore()
+s = store.ingest(hld_v1)
+pub = s.to_public()
+print("  ", s.topology, s.phase, s.wait_kind, len(s.services), pub["can_approve"], flush=True)
+assert s.design_session_id == SESSION
+assert s.topology == "distributed", s.topology
+assert s.architect_track == "hld"
+live = [x for x in pub["services"] if x.get("status") != "suspended"]
+assert len(live) == 2, live
+assert all(x.get("status") == "awaiting_api_type" for x in live), [x.get("status") for x in live]
+assert all(x.get("can_approve") for x in live)
+assert not pub["can_approve"]
+assert pub["wait_kind"] == "distributed", pub["wait_kind"]
+first_ids = {
+    (x.get("names") or [""])[-1]: x["microservice_id"]
+    for x in live
+}
+assert "IdentityService" in first_ids and "VideoCatalogService" in first_ids
+catalog_id = first_ids["VideoCatalogService"]
+identity_id = first_ids["IdentityService"]
+
+s = store.approve(SESSION, service_id=identity_id)
+ident = next(x for x in s.to_public()["services"] if x["microservice_id"] == identity_id)
+cat = next(x for x in s.to_public()["services"] if x["microservice_id"] == catalog_id)
+print("  after identity api type", ident["status"], cat["status"], flush=True)
+assert ident["approve_kind"] == "approve_api_design"
+assert cat["status"] == "awaiting_api_type", "other service must stay on its own tile"
+s = store.approve(SESSION, service_id=identity_id)
+ident = next(x for x in s.to_public()["services"] if x["microservice_id"] == identity_id)
+assert ident["approve_kind"] == "approve_plan"
+s = store.approve(SESSION, service_id=identity_id)
+print("  after identity plan", [x.get("status") for x in s.services], flush=True)
+ident = next(x for x in s.services if x["microservice_id"] == identity_id)
+cat = next(x for x in s.services if x["microservice_id"] == catalog_id)
+assert ident.get("status") == "sent"
+assert cat.get("status") == "awaiting_api_type"
+assert s.engineer_handoffs[-1]["action"] == "plan"
+assert s.engineer_handoffs[-1]["microservice_id"] == identity_id
+
+print("  revise sent identity…", flush=True)
+s = store.chat(SESSION, "Add a health check endpoint.", service_id=identity_id)
+ident = next(x for x in s.to_public()["services"] if x["microservice_id"] == identity_id)
+assert ident["status"] == "awaiting_api_design", ident["status"]
+
+hld_v2 = _package(
+    version=2,
+    track="hld",
+    body=(
+        "## Business Specification\n\n"
+        "Distributed video platform with microservices.\n\n"
+        "## API Contracts\n\n"
+        "### CatalogService\nGET /v1/videos/{id}\n\n"
+        "### PlaybackService\nGET /v1/playback/{id}\n\n"
+        "## Design Diagram\n\n"
+        "```mermaid\nflowchart LR\n  CatalogService --> PlaybackService\n```\n"
+    ),
+)
+
+print("HLD v2 update (rename catalog, drop identity, add playback)…", flush=True)
+s = store.ingest(hld_v2)
+live = [x for x in s.services if x.get("status") != "suspended"]
+suspended = [x for x in s.services if x.get("status") == "suspended"]
+print("  live", [(x.get("names"), x.get("status")) for x in live], flush=True)
+print("  suspended", [x.get("microservice_id") for x in suspended], flush=True)
+assert any(identity_id == x.get("microservice_id") for x in suspended), "identity should be suspended"
+assert any(catalog_id == x.get("microservice_id") for x in live), "renamed catalog must keep UUID"
+names = {(x.get("names") or [""])[-1] for x in live}
+assert "CatalogService" in names
+assert "PlaybackService" in names
+assert any(h["action"] == "suspend" and h["microservice_id"] == identity_id for h in s.engineer_handoffs)
+
+lld = _package(
+    version=3,
+    track="lld",
+    body=(
+        "## Business Specification\n\n"
+        "Single process library for quote calculation. No network services.\n\n"
+        "## Design Diagram\n\n"
+        "```mermaid\nclassDiagram\n  class PricingLib\n```\n"
+    ),
+)
+
+print("LLD v3 track change…", flush=True)
+s = store.ingest(lld)
+print("  ", s.topology, s.architect_track, s.wait_kind, s.app_status, flush=True)
+assert s.architect_track == "lld"
+assert s.topology == "standalone", s.topology
+assert s.to_public()["approve_kind"] == "approve_plan", s.to_public()["approve_kind"]
+assert any(h["action"] == "suspend" for h in s.engineer_handoffs)
+s = store.approve(SESSION)
+print("  after standalone plan", s.app_status, s.plan_spec[:40], flush=True)
+assert s.app_status == "sent"
+assert s.plan_spec.strip()
+assert s.engineer_handoffs[-1]["action"] == "plan"
+assert s.engineer_handoffs[-1]["microservice_id"] in (None, "")
+assert s.to_public()["discussion_locked"]
+try:
+    store.chat(SESSION, "Switch the stack to Java.")
+    raise AssertionError("standalone chat should lock after engineer handoff")
+except PermissionError:
+    pass
+assert store.get(SESSION).tech_stack == s.tech_stack
+
+print("OK", flush=True)
+sys.exit(0)

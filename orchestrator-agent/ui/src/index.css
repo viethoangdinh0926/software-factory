@@ -1,0 +1,50 @@
+@import url("https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap");
+
+:root {
+  --bg: #07111f;
+  --bg-elevated: #0d1a2c;
+  --ink: #e8eef8;
+  --muted: #8fa0b8;
+  --panel: rgba(14, 28, 48, 0.78);
+  --panel-solid: #102038;
+  --line: rgba(140, 170, 210, 0.22);
+  --line-strong: rgba(120, 190, 255, 0.35);
+  --accent: #3db8ff;
+  --accent-deep: #1a7fd4;
+  --accent-ink: #041018;
+  --user-bubble: rgba(61, 184, 255, 0.14);
+  --assistant-bubble: rgba(255, 255, 255, 0.05);
+  --danger: #ff7b7b;
+  --glow: rgba(61, 184, 255, 0.28);
+  --font-display: "Bricolage Grotesque", "Avenir Next", sans-serif;
+  --font-body: "IBM Plex Sans", "Helvetica Neue", sans-serif;
+  --font-mono: "IBM Plex Mono", "SFMono-Regular", Menlo, monospace;
+  color: var(--ink);
+  background: var(--bg);
+  font-family: var(--font-body);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+a {
+  color: inherit;
+}
+
+button,
+textarea {
+  font: inherit;
+}
