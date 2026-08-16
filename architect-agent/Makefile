@@ -15,6 +15,9 @@ ENV_FILE   := $(AGENT_ROOT)/.env
 # Read SSL_VERIFY from .env file (default to true for secure mode)
 SSL_VERIFY ?= true
 
+# Add local bin to PATH for uv and other local tools
+export PATH := $(HOME)/.local/bin:$(PATH)
+
 .PHONY: all deploy install install-ui install-backend build run stop clean env help ensure-uv
 
 all: deploy
