@@ -15,7 +15,7 @@ ENV_FILE   := $(AGENT_ROOT)/.env
 # Read SSL_VERIFY from .env file (default to true for secure mode)
 SSL_VERIFY ?= true
 
-.PHONY: all deploy install install-ui install-backend build run stop clean env help
+.PHONY: all deploy install install-ui install-backend build run stop clean env help ensure-uv
 
 all: deploy
 
@@ -31,7 +31,7 @@ help:
 	@echo "Options:"
 	@echo "  SSL_VERIFY=false  Ignore SSL certificate verification (set in .env or env var)"
 
-deploy: env install build run
+deploy: env ensure-uv install build run
 
 env:
 	@if [ ! -f "$(ENV_FILE)" ]; then \
@@ -48,35 +48,30 @@ env:
 		fi; \
 	fi
 
-install: install-ui install-backend
+install: ensure-uv install-ui install-backend
+
+ensure-uv:
+	@command -v uv >/dev/null 2>&1 || { \
+		echo "uv not found, installing..."; \
+		curl -LsSf https://astral.sh/uv/install.sh | sh; \
+		echo "uv installed successfully"; \
+	}
 
 install-ui:
 	cd "$(UI_DIR)" && npm install
 
 install-backend:
 	@if [ "$(SSL_VERIFY)" = "false" ]; then \
-		if command -v uv >/dev/null 2>&1; then \
-			cd "$(BACKEND_DIR)" && uv sync --allow-insecure-host files.pythonhosted.org; \
-		else \
-			cd "$(BACKEND_DIR)" && pip install -e .; \
-		fi; \
+		cd "$(BACKEND_DIR)" && uv sync --allow-insecure-host files.pythonhosted.org; \
 	else \
-		if command -v uv >/dev/null 2>&1; then \
-			cd "$(BACKEND_DIR)" && uv sync; \
-		else \
-			cd "$(BACKEND_DIR)" && pip install -e .; \
-		fi; \
+		cd "$(BACKEND_DIR)" && uv sync; \
 	fi
 
 build:
 	cd "$(UI_DIR)" && npm run build
 
 run:
-	@if command -v uv >/dev/null 2>&1; then \
-		cd "$(BACKEND_DIR)" && uv run architect-agent; \
-	else \
-		cd "$(BACKEND_DIR)" && python -m architect_agent.main; \
-	fi
+	cd "$(BACKEND_DIR)" && uv run architect-agent
 
 clean:
 	rm -rf "$(UI_DIR)/node_modules" "$(UI_DIR)/dist"
