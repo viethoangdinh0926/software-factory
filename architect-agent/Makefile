@@ -55,16 +55,28 @@ install-ui:
 
 install-backend:
 	@if [ "$(SSL_VERIFY)" = "false" ]; then \
-		cd "$(BACKEND_DIR)" && uv sync --allow-insecure-host files.pythonhosted.org; \
+		if command -v uv >/dev/null 2>&1; then \
+			cd "$(BACKEND_DIR)" && uv sync --allow-insecure-host files.pythonhosted.org; \
+		else \
+			cd "$(BACKEND_DIR)" && pip install -e .; \
+		fi; \
 	else \
-		cd "$(BACKEND_DIR)" && uv sync; \
+		if command -v uv >/dev/null 2>&1; then \
+			cd "$(BACKEND_DIR)" && uv sync; \
+		else \
+			cd "$(BACKEND_DIR)" && pip install -e .; \
+		fi; \
 	fi
 
 build:
 	cd "$(UI_DIR)" && npm run build
 
 run:
-	cd "$(BACKEND_DIR)" && uv run architect-agent
+	@if command -v uv >/dev/null 2>&1; then \
+		cd "$(BACKEND_DIR)" && uv run architect-agent; \
+	else \
+		cd "$(BACKEND_DIR)" && python -m architect_agent.main; \
+	fi
 
 clean:
 	rm -rf "$(UI_DIR)/node_modules" "$(UI_DIR)/dist"
