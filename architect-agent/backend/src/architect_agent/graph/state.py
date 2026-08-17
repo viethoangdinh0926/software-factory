@@ -86,3 +86,9 @@ class DesignGraphState(TypedDict):
     resume_after_market: Annotated[bool, _replace_bool]
     # Chat answered a question: loop back to the same wait node without regenerating.
     stay_on_interrupt: Annotated[bool, _replace_bool]
+    # Phase 0 interview state
+    interview_questions: NotRequired[list[dict[str, Any]]]  # List of questions to ask
+    interview_answers: NotRequired[dict[str, str]]  # Map of question_id to answer
+    current_question_index: NotRequired[int]  # Index of current question being asked
+    interview_complete: NotRequired[bool]  # Whether all questions have been answered
+    spec_compiled: NotRequired[bool]  # Whether the spec has been compiled from answers
