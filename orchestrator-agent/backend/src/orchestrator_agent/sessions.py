@@ -265,6 +265,28 @@ class SessionStore:
         if existing.finalized:
             return existing
 
+        # If the existing session has ingest errors, clear them and notify about new package
+        has_ingest_errors = any(
+            msg.get("role") == "system" and "encountered an error" in msg.get("content", "")
+            for msg in existing.messages
+        )
+        
+        if has_ingest_errors:
+            # Clear previous error messages
+            existing.messages = [
+                msg for msg in existing.messages
+                if not (msg.get("role") == "system" and "encountered an error" in msg.get("content", ""))
+            ]
+            # Add notification about new package
+            existing.messages.append({
+                "role": "system",
+                "content": "A new design package was received. Previous failed ingest has been replaced.",
+                "node": "ingest"
+            })
+            # Update the package markdown to the new version
+            existing.package_markdown = markdown
+            self._persist(existing)
+
         try:
             result = self._graph.invoke(
                 Command(resume={"action": "ingest", "text": markdown}),

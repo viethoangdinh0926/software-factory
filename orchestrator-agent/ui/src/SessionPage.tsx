@@ -297,6 +297,11 @@ export function SessionPage() {
     msg => msg.role === "system" && msg.content.includes("encountered an error")
   );
 
+  // Check if session has a new package notification
+  const hasNewPackageNotification = session.messages.some(
+    msg => msg.role === "system" && msg.content.includes("new design package was received")
+  );
+
   const distributed = session.topology === "distributed";
   const locked = session.discussion_locked;
   const liveServices = session.services.filter((s) => s.status !== "suspended");
@@ -358,6 +363,14 @@ export function SessionPage() {
       ) : null}
 
       {error ? <p className="error banner">{error}</p> : null}
+
+      {hasNewPackageNotification ? (
+        <div className="info banner" role="status">
+          <p>
+            A new design package was received. Previous failed ingest has been replaced.
+          </p>
+        </div>
+      ) : null}
 
       {hasIngestError ? (
         <div className="error banner" role="alert">
