@@ -7,6 +7,7 @@ from functools import lru_cache
 from typing import Any
 
 import httpx
+import os
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
@@ -351,34 +352,78 @@ def get_chat_model() -> BaseChatModel:
         from langchain_openai import ChatOpenAI
 
         if settings.openai_api_key:
-            http_client = httpx.Client(verify=settings.ssl_verify)
-            http_async_client = httpx.AsyncClient(verify=settings.ssl_verify)
-            return ChatOpenAI(
-                model=model,
-                api_key=settings.openai_api_key,
-                temperature=temperature,
-                http_client=http_client,
-                http_async_client=http_async_client,
-            )
-        if settings.aia_gateway_client_id and settings.aia_gateway_client_secret and settings.aia_gateway_base_url:
-            from orchestrator_agent.utils.auth import build_http_clients
+            # Apply SSL verification settings
+            original_ssl_verify = os.environ.get("PYTHONHTTPSVERIFY")
+            if not settings.ssl_verify:
+                os.environ["PYTHONHTTPSVERIFY"] = "0"
 
-            http_client, http_async_client = build_http_clients(
-                settings.aia_gateway_client_id,
-                settings.aia_gateway_client_secret,
-                verify=settings.ssl_verify,
-            )
-            return ChatOpenAI(
-                model=model,
-                base_url=settings.aia_gateway_base_url,
-                temperature=temperature,
-                request_timeout=120,
-                http_client=http_client,
-                http_async_client=http_async_client,
-            )
+            try:
+                http_client = httpx.Client(verify=settings.ssl_verify)
+                http_async_client = httpx.AsyncClient(verify=settings.ssl_verify)
+                return ChatOpenAI(
+                    model=model,
+                    api_key=settings.openai_api_key,
+                    temperature=temperature,
+                    http_client=http_client,
+                    http_async_client=http_async_client,
+                )
+            finally:
+                # Restore original SSL verification setting
+                if original_ssl_verify is not None:
+                    os.environ["PYTHONHTTPSVERIFY"] = original_ssl_verify
+                elif "PYTHONHTTPSVERIFY" in os.environ:
+                    del os.environ["PYTHONHTTPSVERIFY"]
+        if settings.aia_gateway_client_id and settings.aia_gateway_client_secret and settings.aia_gateway_base_url:
+            # Apply SSL verification settings
+            original_ssl_verify = os.environ.get("PYTHONHTTPSVERIFY")
+            if not settings.ssl_verify:
+                os.environ["PYTHONHTTPSVERIFY"] = "0"
+
+            try:
+                from orchestrator_agent.utils.auth import build_http_clients
+
+                http_client, http_async_client = build_http_clients(
+                    settings.aia_gateway_client_id,
+                    settings.aia_gateway_client_secret,
+                    verify=settings.ssl_verify,
+                )
+                return ChatOpenAI(
+                    model=model,
+                    base_url=settings.aia_gateway_base_url,
+                    temperature=temperature,
+                    request_timeout=120,
+                    http_client=http_client,
+                    http_async_client=http_async_client,
+                )
+            finally:
+                # Restore original SSL verification setting
+                if original_ssl_verify is not None:
+                    os.environ["PYTHONHTTPSVERIFY"] = original_ssl_verify
+                elif "PYTHONHTTPSVERIFY" in os.environ:
+                    del os.environ["PYTHONHTTPSVERIFY"]
         if settings.reallm_base_url and settings.reallm_api_key:
-            http_client = httpx.Client(verify=settings.ssl_verify)
-            http_async_client = httpx.AsyncClient(verify=settings.ssl_verify)
+            # Apply SSL verification settings
+            original_ssl_verify = os.environ.get("PYTHONHTTPSVERIFY")
+            if not settings.ssl_verify:
+                os.environ["PYTHONHTTPSVERIFY"] = "0"
+
+            try:
+                http_client = httpx.Client(verify=settings.ssl_verify)
+                http_async_client = httpx.AsyncClient(verify=settings.ssl_verify)
+                return ChatOpenAI(
+                    model=model,
+                    base_url=settings.reallm_base_url,
+                    api_key=settings.reallm_api_key,
+                    temperature=temperature,
+                    http_client=http_client,
+                    http_async_client=http_async_client,
+                )
+            finally:
+                # Restore original SSL verification setting
+                if original_ssl_verify is not None:
+                    os.environ["PYTHONHTTPSVERIFY"] = original_ssl_verify
+                elif "PYTHONHTTPSVERIFY" in os.environ:
+                    del os.environ["PYTHONHTTPSVERIFY"]
             return ChatOpenAI(
                 model=model,
                 base_url=settings.reallm_base_url,

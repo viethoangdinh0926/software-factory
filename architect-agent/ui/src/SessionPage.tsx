@@ -16,6 +16,12 @@ import {
 import { MarkdownView } from "./MarkdownView";
 import { MermaidDiagram } from "./MermaidDiagram";
 
+// Generic error message handler - provides user-friendly messages without exposing backend details
+function getUserFriendlyError(_err: unknown): string {
+  // Always return a generic message regardless of the actual error
+  return "Something went wrong. Please try again.";
+}
+
 mermaid.initialize({
   startOnLoad: false,
   securityLevel: "loose",
@@ -66,7 +72,7 @@ export function SessionPage() {
   }, [sessionId]);
 
   useEffect(() => {
-    load().catch((err) => setError(err instanceof Error ? err.message : String(err)));
+    load().catch((err) => setError(getUserFriendlyError(err)));
     setEndConfirm(false);
   }, [load]);
 
@@ -103,7 +109,7 @@ export function SessionPage() {
       setSession(data);
       setPendingUserText(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(getUserFriendlyError(err));
       setMessage(text);
       setPendingUserText(null);
     } finally {
@@ -129,7 +135,7 @@ export function SessionPage() {
       const data = await approve(sessionId);
       setSession(data);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(getUserFriendlyError(err));
     } finally {
       setApproveBusy(false);
       phaseBeforeApprove.current = null;
@@ -146,7 +152,7 @@ export function SessionPage() {
       const data = await retryHandoff(sessionId);
       setSession(data);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(getUserFriendlyError(err));
     } finally {
       setRetryBusy(false);
     }
@@ -161,7 +167,7 @@ export function SessionPage() {
       setSession(data);
       setEndConfirm(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(getUserFriendlyError(err));
     } finally {
       setApproveBusy(false);
     }

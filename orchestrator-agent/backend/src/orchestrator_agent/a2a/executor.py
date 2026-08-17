@@ -18,13 +18,21 @@ from a2a.types import TaskState
 from orchestrator_agent.config import get_settings
 from orchestrator_agent.package_parse import parse_design_package
 from orchestrator_agent.sessions import get_store
+from orchestrator_agent.utils.auth import configure_ssl_verification, restore_ssl_verification
 
 logger = logging.getLogger(__name__)
 
 
 def _ingest_later(markdown: str) -> None:
     try:
-        get_store().ingest(markdown)
+        # Apply SSL verification settings for background thread
+        original_ssl_verify = configure_ssl_verification()
+
+        try:
+            get_store().ingest(markdown)
+        finally:
+            # Restore original SSL verification setting
+            restore_ssl_verification(original_ssl_verify)
     except Exception:
         logger.exception("Background ingest of architect package failed")
 

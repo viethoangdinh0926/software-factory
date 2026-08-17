@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import math
+import os
 import time
 import uuid
 from collections.abc import Mapping
@@ -13,6 +14,8 @@ from threading import Lock
 import httpx
 import requests
 from cachetools import TTLCache
+
+from orchestrator_agent.config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +37,31 @@ def get_default_headers(extra: Mapping[str, str] | None = None) -> dict[str, str
     if extra:
         base.update(dict(extra))
     return base
+
+
+def configure_ssl_verification() -> str | None:
+    """
+    Configure SSL verification based on settings.
+    Returns the original SSL verification value if it was changed.
+    """
+    settings = get_settings()
+    original_ssl_verify = None
+
+    if not settings.ssl_verify:
+        original_ssl_verify = os.environ.get("PYTHONHTTPSVERIFY")
+        os.environ["PYTHONHTTPSVERIFY"] = "0"
+
+    return original_ssl_verify
+
+
+def restore_ssl_verification(original_ssl_verify: str | None) -> None:
+    """
+    Restore SSL verification to its original value.
+    """
+    if original_ssl_verify is not None:
+        os.environ["PYTHONHTTPSVERIFY"] = original_ssl_verify
+    elif "PYTHONHTTPSVERIFY" in os.environ:
+        del os.environ["PYTHONHTTPSVERIFY"]
 
 
 def _log_response_status(response: httpx.Response) -> None:

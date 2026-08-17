@@ -14,6 +14,12 @@ import {
 import { MarkdownView } from "./MarkdownView";
 import { MermaidDiagram } from "./MermaidDiagram";
 
+// Generic error message handler - provides user-friendly messages without exposing backend details
+function getUserFriendlyError(_err: unknown): string {
+  // Always return a generic message regardless of the actual error
+  return "Something went wrong. Please try again.";
+}
+
 mermaid.initialize({
   startOnLoad: false,
   securityLevel: "loose",
@@ -67,7 +73,7 @@ function ServiceTile({
     try {
       onUpdate(await chat(sessionId, text, svc.microservice_id));
     } catch (err) {
-      onError(err instanceof Error ? err.message : String(err));
+      onError(getUserFriendlyError(err));
     } finally {
       setPending(null);
       onBusy(null);
@@ -80,7 +86,7 @@ function ServiceTile({
     try {
       onUpdate(await approve(sessionId, svc.microservice_id));
     } catch (err) {
-      onError(err instanceof Error ? err.message : String(err));
+      onError(getUserFriendlyError(err));
     } finally {
       onBusy(null);
     }
@@ -190,7 +196,7 @@ export function SessionPage() {
   }, [sessionId]);
 
   useEffect(() => {
-    load().catch((err) => setError(err instanceof Error ? err.message : String(err)));
+    load().catch((err) => setError(getUserFriendlyError(err)));
     setEndConfirm(false);
   }, [load]);
 
@@ -213,7 +219,7 @@ export function SessionPage() {
     try {
       setSession(await chat(session.design_session_id, text));
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(getUserFriendlyError(err));
     } finally {
       setPendingUserText(null);
       setBusyId(null);
@@ -227,7 +233,7 @@ export function SessionPage() {
     try {
       setSession(await approve(session.design_session_id));
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(getUserFriendlyError(err));
     } finally {
       setBusyId(null);
     }
@@ -240,7 +246,7 @@ export function SessionPage() {
       setSession(await endSession(session.design_session_id));
       setEndConfirm(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(getUserFriendlyError(err));
     } finally {
       setBusyId(null);
     }

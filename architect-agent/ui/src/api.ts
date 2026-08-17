@@ -53,14 +53,9 @@ export type DesignStartResponse = {
   message: string | null;
 };
 
-async function readError(res: Response): Promise<string> {
-  const text = await res.text();
-  try {
-    const json = JSON.parse(text) as { detail?: string };
-    return json.detail ?? text;
-  } catch {
-    return text || res.statusText;
-  }
+async function readError(_res: Response): Promise<string> {
+  // Always return a generic error message to avoid exposing backend details
+  return "Something went wrong. Please try again.";
 }
 
 export async function startDesign(markdown: string): Promise<DesignStartResponse> {
