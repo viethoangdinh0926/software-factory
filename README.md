@@ -137,6 +137,6 @@ make status      # pid + /healthz
 make logs        # tail .run/*.log
 ```
 
-`make deploy` sets `ORCHESTRATOR_AGENT_URL=http://127.0.0.1:8090` so the architect can reach the orchestrator. Copy each agent's `.env.example` to `.env` (done automatically if missing) and set `LLM_PROVIDER` / keys there.
+Copy each agent's `.env.example` to `.env` and set `LLM_PROVIDER` / keys there. Set `ORCHESTRATOR_AGENT_URL` in `architect-agent/.env` to point to the orchestrator (default `http://127.0.0.1:8090`).
 
 Single-agent foreground run: `make -C architect-agent deploy` or `make -C orchestrator-agent deploy`.

@@ -16,7 +16,7 @@ SSL_VERIFY ?= true
 
 export PATH := $(HOME)/.local/bin:$(PATH)
 
-.PHONY: all deploy install install-ui install-backend build run stop clean env help ensure-uv
+.PHONY: all deploy install install-ui install-backend build run stop clean check-env help ensure-uv
 
 all: deploy
 
@@ -26,18 +26,17 @@ help:
 	@echo "  make install  Install UI (npm) and backend (uv) dependencies"
 	@echo "  make build    Build React UI into backend static/"
 	@echo "  make run      Start the backend service"
-	@echo "  make env      Create .env from .env.example if missing"
+	@echo "  make check-env  Check that .env exists (required for deploy)"
 	@echo "  make clean    Remove UI/backend build artifacts"
 
-deploy: env ensure-uv install build run
+deploy: check-env ensure-uv install build run
 
-env:
+check-env:
 	@if [ ! -f "$(ENV_FILE)" ]; then \
-		cp "$(AGENT_ROOT)/.env.example" "$(ENV_FILE)"; \
-		echo "Created $(ENV_FILE) from .env.example"; \
-	else \
-		echo "Using existing $(ENV_FILE)"; \
+		echo "Error: $(ENV_FILE) does not exist. Please copy .env.example to .env and configure it." >&2; \
+		exit 1; \
 	fi
+	@echo "Using existing $(ENV_FILE)"
 
 install: ensure-uv install-ui install-backend
 

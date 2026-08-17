@@ -32,21 +32,22 @@ orchestrator-agent_HOST ?= 127.0.0.1
 orchestrator-agent_PORT ?= 8090
 
 # Architect delivers design packages to the orchestrator when the factory is up.
-export ORCHESTRATOR_AGENT_URL ?= http://127.0.0.1:$(orchestrator-agent_PORT)
+# This is set in architect-agent/.env - don't override it here
 
-.PHONY: all deploy teardown down stop start restart status logs help env install build clean
+.PHONY: all deploy teardown down stop start restart status logs help check-env env install build clean
 
 all: deploy
 
 help:
 	@echo "Software Factory"
 	@echo ""
-	@echo "  make deploy     Create .env files, install, build UIs, start all agents"
+	@echo "  make deploy     Check .env files, install, build UIs, start all agents"
 	@echo "  make teardown   Stop all agents (aliases: stop, down)"
 	@echo "  make start      Start agents in the background (skip if already healthy)"
 	@echo "  make restart    Tear down, then start"
 	@echo "  make status     Pid and /healthz for each agent"
 	@echo "  make logs       Tail logs under .run/"
+	@echo "  make check-env  Check that .env files exist for all agents"
 	@echo "  make install    Install UI + Python deps for every agent"
 	@echo "  make build      Build every agent UI into its backend static/"
 	@echo "  make clean      Tear down, then remove agent build artifacts"
@@ -55,12 +56,22 @@ help:
 	@echo "  architect-agent     http://127.0.0.1:$(architect-agent_PORT)/"
 	@echo "  orchestrator-agent  http://127.0.0.1:$(orchestrator-agent_PORT)/"
 
-deploy: env install build start
+deploy: check-env install build start
 
 teardown: stop
 down: stop
 
 restart: stop start
+
+check-env:
+	@for agent in $(AGENTS); do \
+		env_file="$(FACTORY_ROOT)/$$agent/.env"; \
+		if [ ! -f "$$env_file" ]; then \
+			echo "Error: $$env_file does not exist. Please copy $$agent/.env.example to .env and configure it." >&2; \
+			exit 1; \
+		fi; \
+	done
+	@echo "All .env files found."
 
 env:
 	@for agent in $(AGENTS); do \
