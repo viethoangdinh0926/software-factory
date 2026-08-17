@@ -18,6 +18,8 @@ from orchestrator_agent.package_parse import ParsedPackage, parse_design_package
 
 logger = logging.getLogger(__name__)
 
+logger = logging.getLogger(__name__)
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -234,25 +236,54 @@ class SessionStore:
                 package_markdown=markdown,
             )
             self._cache[session_id] = session
-            result = self._graph.invoke(
-                initial_state(session_id, markdown),
-                config=self._config(session_id),
-            )
-            self._apply_graph_result(session, result)
-            self._flush_engineer_actions(session)
+            
+            # Persist the session immediately to prevent data loss
             self._persist(session)
+            
+            try:
+                result = self._graph.invoke(
+                    initial_state(session_id, markdown),
+                    config=self._config(session_id),
+                )
+                self._apply_graph_result(session, result)
+                self._flush_engineer_actions(session)
+                self._persist(session)
+            except Exception as exc:
+                logger.exception("Graph invocation failed during ingest for session %s", session_id)
+                # Session is already persisted with basic info, so it's not lost
+                # Add error message to session messages
+                session.messages.append({
+                    "role": "system",
+                    "content": f"Ingest encountered an error: {str(exc)}. The package has been saved and can be retried.",
+                    "node": "ingest"
+                })
+                self._persist(session)
+                raise
+            
             return session
 
         if existing.finalized:
             return existing
 
-        result = self._graph.invoke(
-            Command(resume={"action": "ingest", "text": markdown}),
-            config=self._config(session_id),
-        )
-        self._apply_graph_result(existing, result, user_text=None, action="ingest")
-        self._flush_engineer_actions(existing)
-        self._persist(existing)
+        try:
+            result = self._graph.invoke(
+                Command(resume={"action": "ingest", "text": markdown}),
+                config=self._config(session_id),
+            )
+            self._apply_graph_result(existing, result, user_text=None, action="ingest")
+            self._flush_engineer_actions(existing)
+            self._persist(existing)
+        except Exception as exc:
+            logger.exception("Graph invocation failed during resume for session %s", session_id)
+            # Add error message to session messages
+            existing.messages.append({
+                "role": "system",
+                "content": f"Resume encountered an error: {str(exc)}. The package has been saved and can be retried.",
+                "node": "ingest"
+            })
+            self._persist(existing)
+            raise
+            
         return existing
 
     def resume(

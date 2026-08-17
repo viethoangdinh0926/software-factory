@@ -260,11 +260,27 @@ export function SessionPage() {
           <p className="brand">Orchestrator Agent</p>
           <h1>Loading workflow…</h1>
           <div className="loading-line" />
-          {error ? <p className="error">{error}</p> : null}
+          {error ? (
+            <div>
+              <p className="error">{error}</p>
+              <button 
+                className="btn ghost" 
+                onClick={() => window.location.reload()}
+                type="button"
+              >
+                Retry
+              </button>
+            </div>
+          ) : null}
         </div>
       </div>
     );
   }
+
+  // Check if session has ingest errors
+  const hasIngestError = session.messages.some(
+    msg => msg.role === "system" && msg.content.includes("encountered an error")
+  );
 
   const distributed = session.topology === "distributed";
   const locked = session.discussion_locked;
@@ -327,6 +343,21 @@ export function SessionPage() {
       ) : null}
 
       {error ? <p className="error banner">{error}</p> : null}
+
+      {hasIngestError ? (
+        <div className="error banner" role="alert">
+          <p>
+            This session encountered an error during ingest. The package has been saved and can be retried.
+          </p>
+          <button 
+            className="btn ghost" 
+            onClick={() => window.location.reload()}
+            type="button"
+          >
+            Retry
+          </button>
+        </div>
+      ) : null}
 
       {distributed ? (
         <>

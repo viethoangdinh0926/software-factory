@@ -2,6 +2,12 @@ import { useEffect, useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { ingestPackage, listSessions, type WorkflowSummary } from "./api";
 
+// Generic error message handler - provides user-friendly messages without exposing backend details
+function getUserFriendlyError(_err: unknown): string {
+  // Always return a generic message regardless of the actual error
+  return "Something went wrong. Please try again.";
+}
+
 export function HomePage() {
   const navigate = useNavigate();
   const [sessions, setSessions] = useState<WorkflowSummary[]>([]);
@@ -14,7 +20,7 @@ export function HomePage() {
   useEffect(() => {
     listSessions()
       .then(setSessions)
-      .catch((err) => setError(err instanceof Error ? err.message : String(err)));
+      .catch((err) => setError(getUserFriendlyError(err)));
   }, []);
 
   async function onSubmit(e: FormEvent) {
@@ -25,7 +31,7 @@ export function HomePage() {
       const result = await ingestPackage(markdown);
       navigate(`/sessions/${result.design_session_id}`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(getUserFriendlyError(err));
     } finally {
       setBusy(false);
     }
@@ -44,6 +50,19 @@ export function HomePage() {
           </p>
         </div>
       </header>
+
+      {error ? (
+        <div className="error banner" role="alert">
+          <p>{error}</p>
+          <button 
+            className="btn ghost" 
+            onClick={() => setError(null)}
+            type="button"
+          >
+            Dismiss
+          </button>
+        </div>
+      ) : null}
 
       {sessions.length ? (
         <section className="workflow-list">
@@ -72,7 +91,6 @@ export function HomePage() {
           required
           disabled={busy}
         />
-        {error ? <p className="error">{error}</p> : null}
         <button className="btn primary" type="submit" disabled={busy}>
           {busy ? "Ingesting…" : "Ingest design package"}
         </button>
