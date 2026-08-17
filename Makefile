@@ -34,7 +34,7 @@ orchestrator-agent_PORT ?= 8090
 # Architect delivers design packages to the orchestrator when the factory is up.
 # This is set in architect-agent/.env - don't override it here
 
-.PHONY: all deploy teardown down stop start restart status logs help check-env env install build clean
+.PHONY: all deploy teardown down stop start restart status logs help check-env install build clean
 
 all: deploy
 
@@ -73,11 +73,6 @@ check-env:
 	done
 	@echo "All .env files found."
 
-env:
-	@for agent in $(AGENTS); do \
-		$(MAKE) --no-print-directory -C "$(FACTORY_ROOT)/$$agent" env; \
-	done
-
 install:
 	@for agent in $(AGENTS); do \
 		$(MAKE) --no-print-directory -C "$(FACTORY_ROOT)/$$agent" install; \
@@ -88,7 +83,7 @@ build:
 		$(MAKE) --no-print-directory -C "$(FACTORY_ROOT)/$$agent" build; \
 	done
 
-start: env
+start: check-env
 	@mkdir -p "$(RUN_DIR)"
 	@for agent in $(START_ORDER); do \
 		$(MAKE) --no-print-directory -C "$(FACTORY_ROOT)" _start AGENT="$$agent" || exit 1; \

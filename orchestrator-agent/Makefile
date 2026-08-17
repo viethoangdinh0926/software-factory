@@ -12,6 +12,8 @@ AGENT_ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 UI_DIR     := $(AGENT_ROOT)/ui
 BACKEND_DIR := $(AGENT_ROOT)/backend
 ENV_FILE   := $(AGENT_ROOT)/.env
+# Read SSL_VERIFY from .env file (default to true for secure mode)
+SSL_VERIFY ?= $(shell grep "^SSL_VERIFY=" "$(ENV_FILE)" 2>/dev/null | cut -d'=' -f2)
 SSL_VERIFY ?= true
 
 export PATH := $(HOME)/.local/bin:$(PATH)
@@ -28,6 +30,9 @@ help:
 	@echo "  make run      Start the backend service"
 	@echo "  make check-env  Check that .env exists (required for deploy)"
 	@echo "  make clean    Remove UI/backend build artifacts"
+	@echo ""
+	@echo "Options:"
+	@echo "  SSL_VERIFY=false  Ignore SSL certificate verification (set in .env or env var)"
 
 deploy: check-env ensure-uv install build run
 

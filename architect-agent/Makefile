@@ -13,6 +13,7 @@ UI_DIR     := $(AGENT_ROOT)/ui
 BACKEND_DIR := $(AGENT_ROOT)/backend
 ENV_FILE   := $(AGENT_ROOT)/.env
 # Read SSL_VERIFY from .env file (default to true for secure mode)
+SSL_VERIFY ?= $(shell grep "^SSL_VERIFY=" "$(ENV_FILE)" 2>/dev/null | cut -d'=' -f2)
 SSL_VERIFY ?= true
 
 # Add local bin to PATH for uv and other local tools
@@ -42,13 +43,6 @@ check-env:
 		exit 1; \
 	fi
 	@echo "Using existing $(ENV_FILE)"
-	@# Read SSL_VERIFY from .env file if it exists
-	@if [ -f "$(ENV_FILE)" ]; then \
-		SSL_VERIFY=$$(grep "^SSL_VERIFY=" "$(ENV_FILE)" | cut -d'=' -f2); \
-		if [ -n "$$SSL_VERIFY" ]; then \
-			export SSL_VERIFY; \
-		fi; \
-	fi
 
 install: ensure-uv install-ui install-backend
 
