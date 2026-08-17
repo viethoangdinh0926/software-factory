@@ -134,6 +134,12 @@ export async function endSession(sessionId: string): Promise<WorkflowSession> {
   return res.json() as Promise<WorkflowSession>;
 }
 
+export async function retryIngest(sessionId: string): Promise<WorkflowSession> {
+  const res = await fetch(`/api/sessions/${sessionId}/retry-ingest`, { method: "POST" });
+  if (!res.ok) throw new Error(await readError(res));
+  return res.json() as Promise<WorkflowSession>;
+}
+
 export function planDownloadUrl(sessionId: string): string {
   return `/api/sessions/${sessionId}/download/plan`;
 }

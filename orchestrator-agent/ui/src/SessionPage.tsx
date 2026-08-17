@@ -7,6 +7,7 @@ import {
   endSession,
   getSession,
   planDownloadUrl,
+  retryIngest,
   serviceLabel,
   type MicroservicePlan,
   type WorkflowSession,
@@ -187,6 +188,7 @@ export function SessionPage() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [endConfirm, setEndConfirm] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [retryingIngest, setRetryingIngest] = useState(false);
   const chatBusy = busyId === "session";
   const anyBusy = Boolean(busyId);
 
@@ -249,6 +251,19 @@ export function SessionPage() {
       setError(getUserFriendlyError(err));
     } finally {
       setBusyId(null);
+    }
+  }
+
+  async function onRetryIngest() {
+    if (!session || anyBusy) return;
+    setRetryingIngest(true);
+    setError(null);
+    try {
+      setSession(await retryIngest(session.design_session_id));
+    } catch (err) {
+      setError(getUserFriendlyError(err));
+    } finally {
+      setRetryingIngest(false);
     }
   }
 
@@ -351,10 +366,11 @@ export function SessionPage() {
           </p>
           <button 
             className="btn ghost" 
-            onClick={() => window.location.reload()}
+            onClick={onRetryIngest}
+            disabled={retryingIngest || anyBusy}
             type="button"
           >
-            Retry
+            {retryingIngest ? "Retrying…" : "Retry"}
           </button>
         </div>
       ) : null}

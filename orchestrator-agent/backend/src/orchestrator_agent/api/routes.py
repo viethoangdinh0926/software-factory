@@ -106,6 +106,25 @@ async def end_session(session_id: str) -> dict:
     return session.to_public()
 
 
+@router.post("/api/sessions/{session_id}/retry-ingest")
+async def retry_ingest(session_id: str) -> dict:
+    try:
+        session = get_store().get(session_id)
+        # Remove error messages from the session
+        session.messages = [
+            msg for msg in session.messages 
+            if not (msg.get("role") == "system" and "encountered an error" in msg.get("content", ""))
+        ]
+        # Re-run the ingest process with the saved package using resume
+        session = get_store().resume(session_id, "ingest", session.package_markdown)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Unknown design session") from exc
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Failed to retry ingest for session %s", session_id)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return session.to_public()
+
+
 @router.get("/api/sessions/{session_id}/download/plan")
 async def download_plan(session_id: str) -> PlainTextResponse:
     try:
