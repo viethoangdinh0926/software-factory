@@ -8,7 +8,6 @@ from pathlib import Path
 
 os.environ["LLM_PROVIDER"] = "stub"
 os.environ["ORCHESTRATOR_AGENT_URL"] = ""
-os.environ.pop("SYSTEM_MANAGER_AGENT_URL", None)
 
 tmp = Path(tempfile.mkdtemp(prefix="architect-handoff-retry-"))
 os.environ["DATA_DIR"] = str(tmp / "sessions")

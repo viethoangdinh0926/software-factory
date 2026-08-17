@@ -65,16 +65,10 @@ class Settings(BaseSettings):
 
     # Downstream A2A peer (Orchestrator) — optional until that agent exists
     orchestrator_agent_url: str | None = None
-    # Deprecated alias for orchestrator_agent_url
-    system_manager_agent_url: str | None = None
 
 
 @lru_cache
 def get_settings() -> Settings:
     settings = Settings()
-    if not (settings.orchestrator_agent_url or "").strip():
-        alias = (settings.system_manager_agent_url or "").strip()
-        if alias:
-            settings.orchestrator_agent_url = alias
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     return settings
