@@ -18,8 +18,37 @@ logger = logging.getLogger(__name__)
 
 _RETRY_HINT = (
     "CRITICAL FORMAT ERROR. Your previous reply was NOT valid JSON.\n"
-    "Respond with ONE JSON object. FIRST non-whitespace character must be `{`."
+    "Respond with ONE JSON object. FIRST non-whitespace character must be `{`.\n"
+    "Keep assistant_message's full elaborated justification; escape its newlines as \\n."
 )
+
+# Appended to skill_digest() so every orchestrator prompt inherits the same depth bar:
+# user-visible messages must justify decisions, not just announce them.
+EXPLANATION_DEPTH_DIGEST = """
+CHAT DEPTH (assistant_message) — write like a Staff Engineer briefing the team:
+- Target 200-500 words of substance. NEVER a bare status line such as "Plan updated.",
+  "Tech stack selected." or "Extracted the services." A recap with no reasoning is a
+  FAILED turn.
+- Every recommendation you surface (topology, API type, API design, tech stack, plan spec,
+  service split) must justify itself by covering:
+  1. WHAT you decided, naming concrete elements — service names, METHOD /path endpoints,
+     libraries with their role, data stores — not "the stack" or "the design".
+  2. WHY it fits THIS service/system: the driving forces from the architect package
+     (contract shape, traffic profile, latency budget, consistency need, team skills).
+  3. ALTERNATIVES considered and the explicit reason each was rejected (e.g. "gRPC
+     rejected: this is a browser-facing edge API, so REST+JSON avoids a proxy layer").
+  4. TRADE-OFFS accepted — operational cost, added latency, lock-in, learning curve —
+     and why they are acceptable here.
+  5. ASSUMPTIONS made where the package was silent, each labeled with your default.
+  6. IMPLICATIONS for the downstream engineer implementing this.
+- Teach while you decide: name the pattern or principle you are applying (idempotency
+  keys, outbox, saga, circuit breaker, CQRS, backpressure, twelve-factor) and say in one
+  clause what it buys here. Prefer concrete versions/numbers over vague adjectives.
+- Use tight markdown structure (bold lead-ins, short bullets) so it stays scannable.
+  Depth means information density, NOT padding — no filler, no restating the question.
+- Still invite Approve once the artifact is ready. Elaboration replaces terseness; it
+  does not replace the approve flow.
+""".strip()
 
 APPROVE_LABELS = {
     "confirm_topology": "Confirm topology",
@@ -216,6 +245,11 @@ def answer_current_artifacts(
             f"{extra}"
             "Answer with concrete facts from the artifacts. Quote METHOD /path, stack "
             "choices, and names when relevant.\n"
+            f"{EXPLANATION_DEPTH_DIGEST}\n"
+            "Since this turn is an answer (not an artifact rewrite): explain the reasoning "
+            "behind whatever they asked about — why it is shaped that way, what the "
+            "alternatives were, and what it costs — so they learn the architecture, not "
+            "just its current values.\n"
             "Do not invite Approve. Do not say you finalized or updated anything.\n"
             'Respond ONLY with JSON: {"assistant_message": string}'
         ),
@@ -243,10 +277,10 @@ def skill_digest() -> str:
 
     path = get_settings().skill_path
     try:
-        text = path.read_text(encoding="utf-8")
+        text = path.read_text(encoding="utf-8")[:4000]
     except OSError:
-        return "You are the Software Factory Orchestrator."
-    return text[:4000]
+        text = "You are the Software Factory Orchestrator."
+    return f"{text}\n\n{EXPLANATION_DEPTH_DIGEST}"
 
 
 def service_focus_system(name: str) -> str:

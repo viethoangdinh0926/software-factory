@@ -8,6 +8,7 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from architect_agent.context_budget import EXPLANATION_DEPTH_DIGEST
 from architect_agent.json_util import (
     parse_llm_json_object,
     recover_architecture_payload_from_prose,
@@ -30,7 +31,8 @@ _RETRY_HINT = (
     "No markdown, no ``` fences, no bare Mermaid.\n"
     "Fill THIS STEP's primary artifact in full (never empty). Other large fields \"\".\n"
     "Mermaid only in design_diagram_lines as short strings.\n"
-    "assistant_message ≤400 chars. Invite Approve."
+    "assistant_message: keep the full elaborated justification (what changed, why, "
+    "alternatives rejected, trade-offs accepted); escape its newlines as \\n. Invite Approve."
 )
 
 _QA_RETRY_HINT = (
@@ -163,6 +165,11 @@ def answer_open_query(state: dict[str, Any], question: str, *, node: str) -> str
             "before they approve this workflow step.\n"
             f"Current node: {node}.\n"
             "Use concrete facts (numbers, service names, METHOD /path, CAP choices).\n"
+            f"{EXPLANATION_DEPTH_DIGEST}\n"
+            "This turn is an ANSWER, not an artifact rewrite: go beyond stating the current "
+            "value. Explain the reasoning behind it — the forces that drove it, the "
+            "alternatives rejected, the trade-offs accepted — and name the relevant pattern "
+            "or principle so the user leaves understanding the architecture.\n"
             "Do not invite Approve. Do not say you finalized or updated the design.\n"
             "Do not rewrite artifacts. assistant_message is the full answer.\n"
             'Respond ONLY with JSON: {"assistant_message": string}'

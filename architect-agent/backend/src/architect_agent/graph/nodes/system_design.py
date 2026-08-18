@@ -5,6 +5,7 @@ from typing import Any
 from langgraph.types import interrupt
 
 from architect_agent.context_budget import (
+    EXPLANATION_DEPTH_DIGEST,
     format_history_tail,
     maybe_compact_business_spec,
     maybe_compact_design_justification,
@@ -42,6 +43,11 @@ def system_design_node(state: DesignGraphState) -> dict[str, Any]:
             "justification for every component.\n"
             "Keep design_justification concise: one short section per component.\n"
             "On every turn after the first draft, treat user chat as design change requests.\n"
+            f"{EXPLANATION_DEPTH_DIGEST}\n"
+            "For this diagram step, assistant_message must walk the user through the design: "
+            "the topology you chose and why, what each major node is responsible for, the "
+            "critical data/request paths through the diagram, the alternatives you rejected, "
+            "and the trade-offs the shape accepts. Do not just say the diagram is ready.\n"
             "Respond ONLY with a single JSON object (no markdown fences).\n"
             "Prefer design_diagram_lines (array of Mermaid lines) to avoid broken JSON.\n"
             "If you use design_diagram as one string, escape newlines as \\n and quotes as \\\".\n"
