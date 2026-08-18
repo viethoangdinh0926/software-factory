@@ -45,6 +45,8 @@ class StubChatModel(BaseChatModel):
             payload = _stub_match(blob)
         elif "orchestrator service extractor" in lower:
             payload = _stub_extract(blob)
+        elif "orchestrator feature advisor" in lower:
+            payload = _stub_features(blob)
         elif "orchestrator api type advisor" in lower:
             payload = _stub_api_type(blob)
         elif "orchestrator api design proposer" in lower:
@@ -63,7 +65,12 @@ class StubChatModel(BaseChatModel):
 
 def _stub_qa(blob: str) -> str:
     lower = blob.lower()
-    if "endpoint" in lower or " url" in lower or "urls" in lower:
+    ask = lower
+    if "user question:" in lower:
+        ask = lower.split("user question:", 1)[-1]
+    elif "latest user message:" in lower:
+        ask = lower.split("latest user message:", 1)[-1]
+    if "endpoint" in ask or " url" in ask or "urls" in ask:
         found = re.findall(
             r"\b((?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+/[A-Za-z0-9_{}\-./]*)",
             blob,
@@ -79,14 +86,19 @@ def _stub_qa(blob: str) -> str:
             uniq.append(item)
         if uniq:
             return "Agreed URL endpoints:\n" + "\n".join(f"- `{item}`" for item in uniq[:24])
-    if "rest" in lower or "grpc" in lower or "graphql" in lower:
+    if "feature" in ask or "capabilit" in ask:
+        return (
+            "The current v1 feature list on this step is unchanged. I can walk through "
+            "each capability, who it is for, and what is out of v1 if you want a specific line."
+        )
+    if "rest" in ask or "grpc" in ask or "graphql" in ask:
         return (
             "The current recommendation on this tile is taken from the architect contract "
             "and similar services of this role. I have not changed the API type."
         )
-    if "stack" in lower or "python" in lower or "java" in lower:
+    if "stack" in ask or "python" in ask or "java" in ask:
         return "The current tech stack on this step is unchanged. I can quote language, framework, and datastore if you want a specific line."
-    if "standalone" in lower or "distributed" in lower or "topology" in lower:
+    if "standalone" in ask or "distributed" in ask or "topology" in ask:
         return "The proposed topology is based on the architect track and package. I have not changed the classification."
     return "Answered from the current artifacts on this step. Ask about a specific detail if you want more."
 
@@ -119,8 +131,8 @@ def _stub_topology(blob: str) -> dict[str, Any]:
                 "certain": True,
                 "rationale": "LLD / single-process signals a standalone application.",
                 "assistant_message": (
-                    "This looks like a **stand-alone application**. I will research a tech stack "
-                    "next. Approve if that topology is right, or chat to correct it."
+                    "This looks like a **stand-alone application**. I will discuss features "
+                    "next, then the tech stack. Approve if that topology is right, or chat to correct it."
                 ),
             }
     return {
@@ -237,6 +249,46 @@ def _stub_match(blob: str) -> dict[str, Any]:
         and prev.get("status") != "suspended"
     ]
     return {"matches": matches, "removed_microservice_ids": removed}
+
+
+def _stub_features(blob: str) -> dict[str, Any]:
+    name = "application"
+    focus = re.search(r"Focus microservice:\s*([A-Za-z0-9]+)", blob)
+    if focus:
+        name = focus.group(1)
+    else:
+        found = re.findall(r"\b([A-Z][A-Za-z0-9]+Service)\b", blob)
+        if found:
+            name = found[0]
+    spec = (
+        f"## v1 capabilities for {name}\n\n"
+        "- Authenticate callers: issue and validate credentials; reject expired or revoked "
+        "tokens with a clear error and do not leak whether the account exists.\n"
+        "- Create the primary resource: validate input, persist the system of record, and "
+        "return the created identity so callers can follow up.\n"
+        "- Read the primary resource by id: return 404 when missing; include ownership and "
+        "status fields the UI or peer services need.\n"
+        "- Update mutable fields: enforce ownership; do not silently clobber concurrent writes "
+        "(etag or version check).\n"
+        "- Soft-delete or deactivate: keep an audit trail and notify collaborators that the "
+        "record is gone.\n\n"
+        "## Out of v1\n\n"
+        "- Multi-region replication, cross-tenant analytics, and unrelated product surfaces.\n\n"
+        "## Collaborators\n\n"
+        "- Name peer services only when this unit must invoke them; do not design their internals.\n\n"
+        "## Assumptions\n\n"
+        "- The architect package is a sketch. v1 covers that sketch plus the usual lifecycle "
+        "around the primary resource.\n"
+    )
+    return {
+        "feature_spec": spec,
+        "ready_for_features": True,
+        "assistant_message": (
+            f"Here is a thorough v1 feature list for **{name}**. The architect package was only "
+            "a sketch — walk through each capability with me, then Approve features when it is "
+            "complete."
+        ),
+    }
 
 
 def _stub_api_type(blob: str) -> dict[str, Any]:

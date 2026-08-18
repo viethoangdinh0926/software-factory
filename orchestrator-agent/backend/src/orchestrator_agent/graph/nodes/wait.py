@@ -24,7 +24,7 @@ def wait_node(state: dict[str, Any]) -> dict[str, Any]:
     wait_kind = str(state.get("wait_kind") or "idle")
     topology = str(state.get("topology") or "unset")
     assistant = state.get("pending_assistant_message") or ""
-    session_can_approve = wait_kind not in {"", "idle", "distributed"}
+    session_can_approve = wait_kind not in {"", "idle", "distributed", "discuss_features"}
     resume = interrupt(
         {
             "phase": state.get("phase") or wait_kind,
@@ -104,7 +104,9 @@ def wait_node(state: dict[str, Any]) -> dict[str, Any]:
 
         if action == "chat":
             chat_route = {
-                "planning": "api_type_research",
+                "planning": "feature_discuss",
+                "discussing_features": "feature_discuss",
+                "awaiting_features": "feature_discuss",
                 "awaiting_api_type": "api_type_research",
                 "awaiting_api_design": "api_design_propose",
                 "awaiting_stack": "stack_research",
@@ -121,6 +123,14 @@ def wait_node(state: dict[str, Any]) -> dict[str, Any]:
             }
 
         if action == "approve":
+            if status == "awaiting_features":
+                return {
+                    "services": services,
+                    "active_service_id": service_id,
+                    "route": "api_type_research",
+                    "wait_kind": "distributed",
+                    "messages": msgs,
+                }
             if status == "awaiting_api_type":
                 updated = dict(svc)
                 updated["api_type"] = updated.get("proposed_api_type") or updated.get("api_type") or "REST"
@@ -186,6 +196,8 @@ def wait_node(state: dict[str, Any]) -> dict[str, Any]:
             }
         chat_route = {
             "confirm_topology": "classify",
+            "approve_features": "feature_discuss",
+            "discuss_features": "feature_discuss",
             "decide_api_type": "api_type_research",
             "approve_api_design": "api_design_propose",
             "approve_plan": "stack_research",
@@ -204,6 +216,8 @@ def wait_node(state: dict[str, Any]) -> dict[str, Any]:
                 "wait_kind": "",
                 "messages": msgs,
             }
+        if wait_kind == "approve_features":
+            return {"route": "stack_research", "wait_kind": "", "messages": msgs}
         if wait_kind == "approve_plan":
             return {"route": "emit_plan", "wait_kind": "", "messages": msgs}
 

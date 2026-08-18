@@ -143,6 +143,7 @@ def api_type_research_node(state: dict[str, Any]) -> dict[str, Any]:
                 f"Architect contract:\n{svc.get('architect_api_contract') or '(none)'}\n"
                 f"Proposed API type: {existing_type}\n"
                 f"Recommendation: {svc.get('api_type_recommendation') or '(none)'}\n"
+                f"Agreed features:\n{(svc.get('feature_spec') or '')[:4000]}\n"
                 f"Search notes:\n{(svc.get('search_notes') or '')[:1500]}"
             ),
             system_extra=service_focus_system(name),
@@ -246,7 +247,8 @@ def api_design_propose_node(state: dict[str, Any]) -> dict[str, Any]:
             "You are the orchestrator API design proposer.\n"
             f"{skill_digest()}\n\n"
             f"{service_focus_system(name)}\n\n"
-            "Propose a complete API design for THIS microservice only. Every endpoint MUST include "
+            "Propose a complete API design for THIS microservice only. Cover the agreed "
+            "features / functionality. Every endpoint MUST include "
             "specific business logic. When this service must call a peer, name the peer and the "
             "reason; do not specify the peer's implementation.\n"
             "assistant_message must list the HTTP method and path for every endpoint in this design.\n"
@@ -263,6 +265,7 @@ def api_design_propose_node(state: dict[str, Any]) -> dict[str, Any]:
             pending=pending,
             extra=(
                 f"Locked API type: {api_type}\n"
+                f"Agreed features (must be covered):\n{(svc.get('feature_spec') or '(none)')[:6000]}\n"
                 f"Prior API design for this service:\n{existing[:8000] or '(none)'}"
             ),
         ),

@@ -106,8 +106,9 @@ assert s.topology == "distributed", s.topology
 assert s.architect_track == "hld"
 live = [x for x in pub["services"] if x.get("status") != "suspended"]
 assert len(live) == 2, live
-assert all(x.get("status") == "awaiting_api_type" for x in live), [x.get("status") for x in live]
+assert all(x.get("status") == "awaiting_features" for x in live), [x.get("status") for x in live]
 assert all(x.get("can_approve") for x in live)
+assert all((x.get("feature_spec") or "").strip() for x in live)
 assert not pub["can_approve"]
 assert pub["wait_kind"] == "distributed", pub["wait_kind"]
 first_ids = {
@@ -118,8 +119,24 @@ assert "IdentityService" in first_ids and "VideoCatalogService" in first_ids
 catalog_id = first_ids["VideoCatalogService"]
 identity_id = first_ids["IdentityService"]
 
+print("  identity features qa…", flush=True)
+s = store.chat(SESSION, "What features are in v1?", service_id=identity_id)
+ident = next(x for x in s.to_public()["services"] if x["microservice_id"] == identity_id)
+assert ident["status"] == "awaiting_features", ident["status"]
+assert ident["can_approve"]
+assert ident["messages"][-1]["content"].strip()
+assert "Updates to this proposal" in ident["messages"][-1]["content"]
+assert "None" in ident["messages"][-1]["content"]
+
+s = store.approve(SESSION, service_id=identity_id)
+ident = next(x for x in s.to_public()["services"] if x["microservice_id"] == identity_id)
+cat = next(x for x in s.to_public()["services"] if x["microservice_id"] == catalog_id)
+print("  after identity features", ident["status"], cat["status"], flush=True)
+assert ident["approve_kind"] == "decide_api_type", ident["approve_kind"]
+assert cat["status"] == "awaiting_features", "other service must stay on its own tile"
+
 print("  identity api-type qa…", flush=True)
-proposed = next(x for x in live if x["microservice_id"] == identity_id).get("proposed_api_type")
+proposed = ident.get("proposed_api_type")
 s = store.chat(SESSION, "Why is REST recommended?", service_id=identity_id)
 ident = next(x for x in s.to_public()["services"] if x["microservice_id"] == identity_id)
 assert ident["status"] == "awaiting_api_type", ident["status"]
@@ -134,7 +151,7 @@ ident = next(x for x in s.to_public()["services"] if x["microservice_id"] == ide
 cat = next(x for x in s.to_public()["services"] if x["microservice_id"] == catalog_id)
 print("  after identity api type", ident["status"], cat["status"], flush=True)
 assert ident["approve_kind"] == "approve_api_design"
-assert cat["status"] == "awaiting_api_type", "other service must stay on its own tile"
+assert cat["status"] == "awaiting_features", "other service must stay on its own tile"
 s = store.approve(SESSION, service_id=identity_id)
 ident = next(x for x in s.to_public()["services"] if x["microservice_id"] == identity_id)
 assert ident["approve_kind"] == "approve_plan"
@@ -143,7 +160,9 @@ print("  after identity plan", [x.get("status") for x in s.services], flush=True
 ident = next(x for x in s.services if x["microservice_id"] == identity_id)
 cat = next(x for x in s.services if x["microservice_id"] == catalog_id)
 assert ident.get("status") == "sent"
-assert cat.get("status") == "awaiting_api_type"
+assert cat.get("status") == "awaiting_features"
+assert "## Features / functionality" in (ident.get("plan_spec") or "")
+assert (ident.get("feature_spec") or "").strip()
 assert s.engineer_handoffs[-1]["action"] == "plan"
 assert s.engineer_handoffs[-1]["microservice_id"] == identity_id
 
@@ -195,12 +214,17 @@ s = store.ingest(lld)
 print("  ", s.topology, s.architect_track, s.wait_kind, s.app_status, flush=True)
 assert s.architect_track == "lld"
 assert s.topology == "standalone", s.topology
-assert s.to_public()["approve_kind"] == "approve_plan", s.to_public()["approve_kind"]
+assert s.to_public()["approve_kind"] == "approve_features", s.to_public()["approve_kind"]
+assert (s.feature_spec or "").strip()
 assert any(h["action"] == "suspend" for h in s.engineer_handoffs)
+s = store.approve(SESSION)
+print("  after standalone features", s.wait_kind, s.app_status, flush=True)
+assert s.to_public()["approve_kind"] == "approve_plan", s.to_public()["approve_kind"]
 s = store.approve(SESSION)
 print("  after standalone plan", s.app_status, s.plan_spec[:40], flush=True)
 assert s.app_status == "sent"
 assert s.plan_spec.strip()
+assert "## Features / functionality" in s.plan_spec
 assert s.engineer_handoffs[-1]["action"] == "plan"
 assert s.engineer_handoffs[-1]["microservice_id"] in (None, "")
 assert s.to_public()["discussion_locked"]

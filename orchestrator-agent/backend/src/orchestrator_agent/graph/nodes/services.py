@@ -221,32 +221,45 @@ def extract_services_node(state: dict[str, Any]) -> dict[str, Any]:
 
 
 def prime_all_services_node(state: dict[str, Any]) -> dict[str, Any]:
-    """Prime every live microservice so they can be discussed in parallel tiles."""
-    from orchestrator_agent.graph.nodes.api import research_api_type_for
+    """Prime every live microservice with a feature interview before API type."""
+    from orchestrator_agent.graph.nodes.features import discuss_features_for
 
+    skip = {
+        "suspended",
+        "sent",
+        "discussing_features",
+        "awaiting_features",
+        "awaiting_api_type",
+        "awaiting_api_design",
+        "awaiting_stack",
+    }
     services = list(state.get("services") or [])
     out = list(services)
     for svc in services:
-        if svc.get("status") in {"suspended", "sent", "awaiting_api_type", "awaiting_api_design", "awaiting_stack"}:
+        if svc.get("status") in skip:
             continue
+        name = (svc.get("names") or ["service"])[-1]
         try:
-            updated = research_api_type_for(state, svc, pending="")
+            updated = discuss_features_for(state, svc, pending="")
         except Exception:
-            name = (svc.get("names") or ["service"])[-1]
-            logger.exception("API type research failed for %s; defaulting to REST", name)
+            logger.exception("Feature discussion failed for %s; using a fallback sketch", name)
+            from orchestrator_agent.graph.nodes.features import _fallback_feature_spec
+
             updated = dict(svc)
-            updated["proposed_api_type"] = updated.get("proposed_api_type") or "REST"
-            updated["api_type_recommendation"] = updated.get("api_type_recommendation") or "keep"
-            updated["status"] = "awaiting_api_type"
+            updated["feature_spec"] = updated.get("feature_spec") or _fallback_feature_spec(
+                name, str(svc.get("architect_api_contract") or "")
+            )
+            updated["status"] = "awaiting_features"
             msgs = list(updated.get("messages") or [])
             msgs.append(
                 {
                     "role": "assistant",
                     "content": (
-                        "Could not parse an API-type recommendation from the model; "
-                        "defaulting to REST. Discuss this tile to change it."
+                        f"Could not parse a feature list from the model; starting from a v1 "
+                        f"sketch for **{name}**. Walk through each capability, then approve "
+                        "features when it is complete."
                     ),
-                    "node": "api_type",
+                    "node": "features",
                 }
             )
             updated["messages"] = msgs
@@ -255,7 +268,8 @@ def prime_all_services_node(state: dict[str, Any]) -> dict[str, Any]:
     names = ", ".join((s.get("names") or ["service"])[-1] for s in live) or "none"
     notice = (
         f"Opened planning tiles for {len(live)} microservice(s) at once: {names}. "
-        "Discuss any tile independently; each can hand off to the engineer when you approve its plan."
+        "Discuss every feature for a service on its tile before API type, API design, or stack. "
+        "Each tile can hand off independently once that interview is complete."
     )
     return {
         "services": out,

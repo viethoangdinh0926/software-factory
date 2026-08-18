@@ -129,6 +129,14 @@ function ServiceTile({
             </div>
           ) : null}
         </div>
+        {svc.feature_spec ? (
+          <article className="artifact">
+            <h3>Features</h3>
+            <div className="doc">
+              <MarkdownView content={svc.feature_spec} />
+            </div>
+          </article>
+        ) : null}
         {apiType ? (
           <article className="artifact">
             <h3>API type</h3>
@@ -495,6 +503,14 @@ export function SessionPage() {
                 <h2>Plan artifacts</h2>
                 <span className="panel-kicker">{session.app_status || "draft"}</span>
               </div>
+              {session.feature_spec ? (
+                <article className="artifact">
+                  <h3>Features</h3>
+                  <div className="doc">
+                    <MarkdownView content={session.feature_spec} />
+                  </div>
+                </article>
+              ) : null}
               {session.tech_stack ? (
                 <article className="artifact">
                   <h3>Tech stack</h3>

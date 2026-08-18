@@ -96,9 +96,9 @@ def handle_update_node(state: dict[str, Any]) -> dict[str, Any]:
     msgs: list[dict[str, Any]] = []
 
     if ingest_kind != "update":
-        route = "stack_research" if topology == "standalone" else "extract_services"
+        route = "feature_discuss" if topology == "standalone" else "extract_services"
         return {
-            "phase": "stack" if topology == "standalone" else "extract",
+            "phase": "features" if topology == "standalone" else "extract",
             "route": route,
             "app_status": "planning" if topology == "standalone" else "",
             "pending_engineer_actions": [],
@@ -136,19 +136,20 @@ def handle_update_node(state: dict[str, Any]) -> dict[str, Any]:
                 "node": "ingest",
             }
         )
-        route = "stack_research" if topology == "standalone" else "extract_services"
+        route = "feature_discuss" if topology == "standalone" else "extract_services"
         return {
             "ingest_kind": "first",
             "services": [],
             "active_service_id": "",
             "tech_stack": "",
+            "feature_spec": "",
             "plan_spec": "",
             "api_type": "",
             "api_design": "",
             "app_status": "planning" if topology == "standalone" else "",
             "previous_services": [],
             "pending_engineer_actions": actions,
-            "phase": "stack" if topology == "standalone" else "extract",
+            "phase": "features" if topology == "standalone" else "extract",
             "route": route,
             "messages": msgs,
         }
@@ -158,8 +159,8 @@ def handle_update_node(state: dict[str, Any]) -> dict[str, Any]:
             {
                 "role": "system",
                 "content": (
-                    f"Updated stand-alone design v{version}. Re-planning the tech stack. "
-                    "The engineer will adjust implementation."
+                    f"Updated stand-alone design v{version}. Re-discussing features, then "
+                    "the tech stack. The engineer will adjust implementation."
                 ),
                 "node": "ingest",
             }
@@ -169,8 +170,8 @@ def handle_update_node(state: dict[str, Any]) -> dict[str, Any]:
             "plan_spec": "",
             "app_status": "planning",
             "pending_engineer_actions": [],
-            "phase": "stack",
-            "route": "stack_research",
+            "phase": "features",
+            "route": "feature_discuss",
             "messages": msgs,
         }
 
@@ -180,7 +181,7 @@ def handle_update_node(state: dict[str, Any]) -> dict[str, Any]:
             "role": "system",
             "content": (
                 f"Updated distributed design v{version}. Matching microservices by role "
-                "(name changes are not removals), then re-planning each service."
+                "(name changes are not removals), then re-discussing features for each service."
             ),
             "node": "ingest",
         }

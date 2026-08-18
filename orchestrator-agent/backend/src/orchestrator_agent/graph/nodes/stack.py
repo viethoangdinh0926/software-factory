@@ -34,6 +34,7 @@ def stack_research_node(state: dict[str, Any]) -> dict[str, Any]:
                 artifacts=(
                     f"Service: {name}\n"
                     f"API type: {svc.get('api_type') or svc.get('proposed_api_type') or ''}\n"
+                    f"Agreed features:\n{(svc.get('feature_spec') or '')[:3000]}\n"
                     f"API design:\n{(svc.get('api_design') or '')[:4000]}\n"
                     f"Current tech stack:\n{existing_stack[:6000]}"
                 ),
@@ -65,6 +66,7 @@ def stack_research_node(state: dict[str, Any]) -> dict[str, Any]:
                 question=pending,
                 artifacts=(
                     f"Standalone application\n"
+                    f"Agreed features:\n{(state.get('feature_spec') or '')[:4000]}\n"
                     f"Current tech stack:\n{existing_stack[:6000]}\n"
                     f"Package excerpt:\n{(state.get('package_markdown') or '')[:4000]}"
                 ),
@@ -108,6 +110,7 @@ def stack_research_node(state: dict[str, Any]) -> dict[str, Any]:
             pending=pending,
             extra=(
                 f"Prior stack for this service:\n{(svc.get('tech_stack') or '(none)')[:1500]}\n\n"
+                f"Agreed features:\n{(svc.get('feature_spec') or '(none)')[:4000]}\n\n"
                 f"Web search ({'live' if live else 'unavailable / stub'}):\n{search_text}"
             ),
         )
@@ -130,6 +133,7 @@ def stack_research_node(state: dict[str, Any]) -> dict[str, Any]:
         user = (
             f"Subject: {subject}\n"
             f"User feedback:\n{pending or '(none)'}\n"
+            f"Agreed features:\n{state.get('feature_spec') or '(none)'}\n"
             f"Prior stack:\n{state.get('tech_stack') or '(none)'}\n"
             f"Web search ({'live' if live else 'unavailable / stub'}):\n{search_text}\n"
             f"Package excerpt:\n{(state.get('package_markdown') or '')[:8000]}\n"
@@ -217,6 +221,7 @@ def emit_plan_node(state: dict[str, Any]) -> dict[str, Any]:
             f"- design_version: `{version}`\n"
             f"- microservice_id: `{mid}`\n"
             f"- microservice_name: `{name}`\n\n"
+            f"## Features / functionality\n\n{svc.get('feature_spec') or ''}\n\n"
             f"## API type\n\n{svc.get('api_type') or ''}\n\n"
             f"## API design\n\n{svc.get('api_design') or ''}\n\n"
             f"## Tech stack\n\n{svc.get('tech_stack') or ''}\n\n"
@@ -254,6 +259,7 @@ def emit_plan_node(state: dict[str, Any]) -> dict[str, Any]:
         f"- action: `plan`\n"
         f"- design_session_id: `{session_id}`\n"
         f"- design_version: `{version}`\n\n"
+        f"## Features / functionality\n\n{state.get('feature_spec') or ''}\n\n"
         f"## Tech stack\n\n{state.get('tech_stack') or ''}\n\n"
         f"## System design (architect package)\n\n{package}\n"
     )

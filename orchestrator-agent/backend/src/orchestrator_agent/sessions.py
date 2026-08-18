@@ -41,6 +41,7 @@ class WorkflowSession:
     plan_spec: str = ""
     api_type: str = ""
     api_design: str = ""
+    feature_spec: str = ""
     app_status: str = ""
     search_notes: str = ""
     services: list[dict[str, Any]] = field(default_factory=list)
@@ -86,6 +87,7 @@ class WorkflowSession:
             "plan_spec": self.plan_spec,
             "api_type": self.api_type,
             "api_design": self.api_design,
+            "feature_spec": self.feature_spec,
             "app_status": self.app_status,
             "search_notes": self.search_notes,
             "services": services,
@@ -117,6 +119,7 @@ class WorkflowSession:
             plan_spec=str(data.get("plan_spec") or ""),
             api_type=str(data.get("api_type") or ""),
             api_design=str(data.get("api_design") or ""),
+            feature_spec=str(data.get("feature_spec") or ""),
             app_status=str(data.get("app_status") or ""),
             search_notes=str(data.get("search_notes") or ""),
             services=list(data.get("services") or []),
@@ -404,6 +407,7 @@ class SessionStore:
         session.phase = str(values.get("phase") or session.phase)
         session.wait_kind = str(values.get("wait_kind") or session.wait_kind)
         session.tech_stack = str(values.get("tech_stack") or "")
+        session.feature_spec = str(values.get("feature_spec") or session.feature_spec or "")
         session.plan_spec = str(values.get("plan_spec") or "")
         session.api_type = str(values.get("api_type") or "")
         session.api_design = str(values.get("api_design") or "")

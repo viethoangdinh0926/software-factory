@@ -11,6 +11,7 @@ from langgraph.graph.state import CompiledStateGraph
 from orchestrator_agent.config import BACKEND_ROOT
 from orchestrator_agent.graph.nodes.api import api_design_propose_node, api_type_research_node
 from orchestrator_agent.graph.nodes.classify import classify_node
+from orchestrator_agent.graph.nodes.features import feature_discuss_node
 from orchestrator_agent.graph.nodes.ingest import handle_update_node, ingest_node
 from orchestrator_agent.graph.nodes.services import extract_services_node, prime_all_services_node
 from orchestrator_agent.graph.nodes.stack import emit_plan_node, stack_research_node
@@ -49,6 +50,7 @@ _WAIT_MAP: dict[str, Any] = {
     "handle_update": "handle_update",
     "extract_services": "extract_services",
     "prime_all": "prime_all",
+    "feature_discuss": "feature_discuss",
     "api_type_research": "api_type_research",
     "api_design_propose": "api_design_propose",
     "stack_research": "stack_research",
@@ -70,6 +72,7 @@ def build_graph() -> CompiledStateGraph:
     graph.add_node("handle_update", handle_update_node)
     graph.add_node("extract_services", extract_services_node)
     graph.add_node("prime_all", prime_all_services_node)
+    graph.add_node("feature_discuss", feature_discuss_node)
     graph.add_node("api_type_research", api_type_research_node)
     graph.add_node("api_design_propose", api_design_propose_node)
     graph.add_node("stack_research", stack_research_node)
@@ -87,6 +90,7 @@ def build_graph() -> CompiledStateGraph:
         "handle_update",
         _route,
         {
+            "feature_discuss": "feature_discuss",
             "stack_research": "stack_research",
             "extract_services": "extract_services",
             "wait": "wait",
@@ -95,6 +99,7 @@ def build_graph() -> CompiledStateGraph:
     )
     graph.add_edge("extract_services", "prime_all")
     graph.add_edge("prime_all", "wait")
+    graph.add_edge("feature_discuss", "wait")
     graph.add_edge("api_type_research", "wait")
     graph.add_edge("api_design_propose", "wait")
     graph.add_edge("stack_research", "wait")
@@ -133,6 +138,7 @@ def initial_state(session_id: str, markdown: str) -> dict[str, Any]:
         "services": [],
         "active_service_id": "",
         "tech_stack": "",
+        "feature_spec": "",
         "plan_spec": "",
         "api_type": "",
         "api_design": "",

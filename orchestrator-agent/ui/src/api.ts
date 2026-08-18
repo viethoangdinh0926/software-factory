@@ -22,6 +22,7 @@ export type MicroservicePlan = {
   names: string[];
   role_key: string;
   architect_api_contract: string;
+  feature_spec: string;
   api_type: string;
   api_type_recommendation: string;
   proposed_api_type: string;
@@ -50,6 +51,7 @@ export type WorkflowSession = {
   package_markdown: string;
   design_diagram: string;
   tech_stack: string;
+  feature_spec: string;
   plan_spec: string;
   api_type: string;
   api_design: string;

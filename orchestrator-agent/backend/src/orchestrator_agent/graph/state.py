@@ -28,6 +28,7 @@ class OrchestratorGraphState(TypedDict):
     services: list[dict[str, Any]]
     active_service_id: str
     tech_stack: str
+    feature_spec: str
     plan_spec: str
     api_type: str
     api_design: str

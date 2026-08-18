@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Callable
 from typing import Any
 
@@ -29,8 +30,8 @@ CHAT DEPTH (assistant_message) — write like a Staff Engineer briefing the team
 - Target 200-500 words of substance. NEVER a bare status line such as "Plan updated.",
   "Tech stack selected." or "Extracted the services." A recap with no reasoning is a
   FAILED turn.
-- Every recommendation you surface (topology, API type, API design, tech stack, plan spec,
-  service split) must justify itself by covering:
+- Every recommendation you surface (topology, features, API type, API design, tech stack,
+  plan spec, service split) must justify itself by covering:
   1. WHAT you decided, naming concrete elements — service names, METHOD /path endpoints,
      libraries with their role, data stores — not "the stack" or "the design".
   2. WHY it fits THIS service/system: the driving forces from the architect package
@@ -52,16 +53,28 @@ CHAT DEPTH (assistant_message) — write like a Staff Engineer briefing the team
 
 APPROVE_LABELS = {
     "confirm_topology": "Confirm topology",
+    "approve_features": "Approve features",
     "decide_api_type": "Accept API type",
     "approve_api_design": "Approve API design",
     "approve_plan": "Approve plan",
 }
 
 STATUS_APPROVE_KIND = {
+    "awaiting_features": "approve_features",
     "awaiting_api_type": "decide_api_type",
     "awaiting_api_design": "approve_api_design",
     "awaiting_stack": "approve_plan",
 }
+
+
+def features_are_concrete(text: str) -> bool:
+    """Require a real v1 feature list, not a one-line sketch."""
+    body = (text or "").strip()
+    if len(body) < 280:
+        return False
+    bullets = len(re.findall(r"(?m)^\s*[-*]", body))
+    numbered = len(re.findall(r"(?m)^\s*\d+\.", body))
+    return (bullets + numbered) >= 4
 
 
 def approve_label(kind: str) -> str:
@@ -79,6 +92,8 @@ def decorate_service(svc: dict[str, Any], *, finalized: bool = False) -> dict[st
     open_disc = (not finalized) and (not suspended)
     out = dict(svc)
     out["can_approve"] = bool(kind) and open_disc
+    if status == "awaiting_features" and not features_are_concrete(out.get("feature_spec") or ""):
+        out["can_approve"] = False
     out["approve_kind"] = kind if out["can_approve"] else ""
     out["approve_label"] = approve_label(kind) if out["can_approve"] else ""
     out["discussion_open"] = open_disc
@@ -166,6 +181,7 @@ def empty_service(
         "names": names or [name],
         "role_key": role_key,
         "architect_api_contract": contract,
+        "feature_spec": "",
         "api_type": "",
         "api_type_recommendation": "",
         "proposed_api_type": "",
@@ -287,7 +303,7 @@ def service_focus_system(name: str) -> str:
     """System prefix so a planning tile stays on one microservice."""
     return (
         f"You are planning ONE microservice: {name}. This tile is not the platform design.\n"
-        f"Stay on {name}'s API, behavior, and its own data/runtime.\n"
+        f"Stay on {name}'s features, API, behavior, and its own data/runtime.\n"
         "Do not restate overall architecture. Do not design other microservices.\n"
         "Do not prescribe shared infra (CDN, load balancers, Kafka, Redis, object storage, "
         "search clusters) unless this service itself owns that store or must call it as a client.\n"
@@ -317,6 +333,7 @@ def service_focus_user_block(
         if s.get("status") != "suspended" and s.get("microservice_id") != svc.get("microservice_id")
     ]
     contract = str(svc.get("architect_api_contract") or "").strip()
+    features = str(svc.get("feature_spec") or "").strip()
     section = service_contract_section(str(state.get("package_markdown") or ""), names) or contract
     history_lines: list[str] = []
     for msg in list(svc.get("messages") or [])[-6:]:
@@ -330,7 +347,8 @@ def service_focus_user_block(
         f"Focus microservice: {name}",
         f"Role: {svc.get('role_key') or ''}",
         f"Peer microservices (call them; do not plan them): {', '.join(peers) or '(none)'}",
-        f"Architect contract for {name} only:\n{section or '(none)'}",
+        f"Architect sketch for {name} only:\n{section or '(none)'}",
+        f"Agreed features / functionality:\n{features or '(not yet agreed)'}",
         "Recent tile conversation:\n" + ("\n".join(history_lines) if history_lines else "(none)"),
         f"Latest user message:\n{pending or '(none)'}",
     ]
