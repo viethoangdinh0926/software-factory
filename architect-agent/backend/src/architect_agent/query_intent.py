@@ -201,6 +201,86 @@ def wants_endpoint_list(text: str) -> bool:
     return any(h in t for h in _ENDPOINT_ASK_HINTS) and any(h in t for h in _SHOW_HINTS)
 
 
+_APPROVAL_EXACT = {
+    "approve",
+    "approved",
+    "i approve",
+    "i approve this",
+    "i approve it",
+    "approve this",
+    "approve it",
+    "approve this version",
+    "approve the plan",
+    "approve the design",
+    "approve the spec",
+    "approve the features",
+    "approve features",
+    "approve the stack",
+    "please approve",
+    "yes, approve",
+    "yes approve",
+    "ok, approve",
+    "okay, approve",
+    "lgtm",
+    "looks good",
+    "looks great",
+    "looks right",
+    "looks correct",
+    "sounds good",
+    "sounds great",
+    "that's good",
+    "thats good",
+    "that's fine",
+    "thats fine",
+    "good to go",
+    "ship it",
+    "go ahead",
+    "please go ahead",
+    "proceed",
+    "let's proceed",
+    "lets proceed",
+    "let's go",
+    "lets go",
+    "i accept",
+    "accept",
+    "lock it in",
+    "ready to approve",
+}
+
+_APPROVAL_PREFIX_RE = re.compile(
+    r"^(?:yes|yep|yeah|ok|okay|please)[,.]?\s+"
+    r"(?:i\s+)?(?:would like to\s+)?(?:approve|proceed|go ahead)\b",
+    re.I,
+)
+_APPROVAL_DIRECT_RE = re.compile(
+    r"^(?:i(?:'m| am) )?(?:happy to |ready to )?approve\b",
+    re.I,
+)
+
+
+def is_step_approval_message(text: str) -> bool:
+    """True when chat is an approval to advance the current step (same as the Approve button)."""
+    raw = (text or "").strip()
+    if not raw or "?" in raw:
+        return False
+    compact = re.sub(r"\s+", " ", raw.lower()).rstrip(".!")
+    if not compact:
+        return False
+    if any(hint in compact for hint in _REVISION_HINTS):
+        return False
+    if any(hint in compact for hint in _CONCERN_HINTS):
+        return False
+    if compact in _APPROVAL_EXACT:
+        return True
+    return bool(_APPROVAL_PREFIX_RE.match(compact) or _APPROVAL_DIRECT_RE.match(compact))
+
+
+def promote_chat_to_approve(action: str, text: str, *, can_approve: bool) -> str:
+    if action == "chat" and can_approve and is_step_approval_message(text):
+        return "approve"
+    return action
+
+
 def extract_http_endpoints(*texts: str) -> list[tuple[str, str]]:
     seen: list[tuple[str, str]] = []
     found: set[tuple[str, str]] = set()

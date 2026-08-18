@@ -15,6 +15,7 @@ from orchestrator_agent.config import get_settings
 from orchestrator_agent.graph import build_graph, initial_state
 from orchestrator_agent.graph.nodes.common import decorate_service
 from orchestrator_agent.package_parse import ParsedPackage, parse_design_package
+from orchestrator_agent.query_intent import is_step_approval_message
 
 logger = logging.getLogger(__name__)
 
@@ -336,6 +337,24 @@ class SessionStore:
         return session
 
     def chat(self, session_id: str, text: str, service_id: str | None = None) -> WorkflowSession:
+        session = self.get(session_id)
+        can_approve = False
+        if service_id:
+            svc = next(
+                (
+                    item
+                    for item in session.services
+                    if str(item.get("microservice_id") or "") == service_id
+                ),
+                None,
+            )
+            can_approve = bool(
+                svc and decorate_service(svc, finalized=session.finalized).get("can_approve")
+            )
+        else:
+            can_approve = bool(session.to_public().get("can_approve"))
+        if can_approve and is_step_approval_message(text):
+            return self.resume(session_id, action="approve", text=text, service_id=service_id)
         return self.resume(session_id, action="chat", text=text, service_id=service_id)
 
     def approve(self, session_id: str, service_id: str | None = None) -> WorkflowSession:

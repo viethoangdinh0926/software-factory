@@ -1,4 +1,13 @@
-import { useCallback, useEffect, useState, type FormEvent, type KeyboardEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useState,
+  type FormEvent,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
+import { createPortal } from "react-dom";
 import { Link, useParams } from "react-router-dom";
 import mermaid from "mermaid";
 import {
@@ -45,6 +54,132 @@ function onComposerKey(e: KeyboardEvent<HTMLTextAreaElement>) {
   }
 }
 
+function SpecIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false">
+      <path
+        fill="currentColor"
+        d="M7 3.5h7.2L19.5 9v11.5A1.5 1.5 0 0 1 18 22H7a1.5 1.5 0 0 1-1.5-1.5v-16A1.5 1.5 0 0 1 7 3.5Zm6.5 1.2v5.3h5.1l-5.1-5.3ZM8.5 12.25h7v1.4h-7v-1.4Zm0 3.1h7v1.4h-7v-1.4Zm0 3.1h4.5v1.4H8.5v-1.4Z"
+      />
+    </svg>
+  );
+}
+
+function InterviewResultsModal({
+  title,
+  open,
+  onClose,
+  children,
+}: {
+  title: string;
+  open: boolean;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  const headingId = useId();
+
+  useEffect(() => {
+    if (!open) return;
+    function onKey(e: globalThis.KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    document.addEventListener("keydown", onKey);
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [open, onClose]);
+
+  if (!open) return null;
+
+  return createPortal(
+    <div
+      className="spec-modal-backdrop"
+      role="presentation"
+      onClick={onClose}
+    >
+      <div
+        className="spec-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={headingId}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <header className="spec-modal-head">
+          <div>
+            <p className="brand">Interview results</p>
+            <h2 id={headingId}>{title}</h2>
+          </div>
+          <button className="btn ghost" type="button" onClick={onClose}>
+            Close
+          </button>
+        </header>
+        <div className="spec-modal-body">{children}</div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+function ServiceInterviewArtifacts({ svc }: { svc: MicroservicePlan }) {
+  const apiType = svc.api_type || svc.proposed_api_type;
+  const hasAny = Boolean(
+    svc.feature_spec || apiType || svc.api_design || svc.tech_stack || svc.plan_spec,
+  );
+  if (!hasAny) {
+    return (
+      <p className="lede">
+        No interview results yet. Discuss this service to agree features, API type, design, and
+        stack.
+      </p>
+    );
+  }
+  return (
+    <>
+      {svc.feature_spec ? (
+        <article className="artifact">
+          <h3>Features</h3>
+          <div className="doc">
+            <MarkdownView content={svc.feature_spec} />
+          </div>
+        </article>
+      ) : null}
+      {apiType ? (
+        <article className="artifact">
+          <h3>API type</h3>
+          <p>{apiType}</p>
+        </article>
+      ) : null}
+      {svc.api_design ? (
+        <article className="artifact">
+          <h3>API design</h3>
+          <div className="doc">
+            <MarkdownView content={svc.api_design} />
+          </div>
+        </article>
+      ) : null}
+      {svc.tech_stack ? (
+        <article className="artifact">
+          <h3>Tech stack</h3>
+          <div className="doc">
+            <MarkdownView content={svc.tech_stack} />
+          </div>
+        </article>
+      ) : null}
+      {svc.plan_spec ? (
+        <article className="artifact">
+          <h3>Plan spec</h3>
+          <div className="doc">
+            <MarkdownView content={svc.plan_spec} />
+          </div>
+        </article>
+      ) : null}
+    </>
+  );
+}
+
 function ServiceTile({
   sessionId,
   svc,
@@ -62,7 +197,13 @@ function ServiceTile({
 }) {
   const [message, setMessage] = useState("");
   const [pending, setPending] = useState<string | null>(null);
+  const [specOpen, setSpecOpen] = useState(false);
   const open = svc.discussion_open && svc.status !== "suspended";
+  const apiType = svc.api_type || svc.proposed_api_type;
+  const hasResults = Boolean(
+    svc.feature_spec || apiType || svc.api_design || svc.tech_stack || svc.plan_spec,
+  );
+  const closeSpec = useCallback(() => setSpecOpen(false), []);
 
   async function onChat(e: FormEvent) {
     e.preventDefault();
@@ -93,13 +234,22 @@ function ServiceTile({
     }
   }
 
-  const apiType = svc.api_type || svc.proposed_api_type;
-
   return (
     <section className={`panel service-tile${svc.status === "suspended" ? " suspended" : ""}`}>
       <div className="panel-head">
         <h2>{serviceLabel(svc)}</h2>
-        <span className="panel-kicker">{svc.status}</span>
+        <div className="tile-head-actions">
+          <span className="panel-kicker">{svc.status}</span>
+          <button
+            className={`btn ghost icon-btn${hasResults ? " has-results" : ""}`}
+            type="button"
+            title="Interview results"
+            aria-label={`View interview results for ${serviceLabel(svc)}`}
+            onClick={() => setSpecOpen(true)}
+          >
+            <SpecIcon />
+          </button>
+        </div>
       </div>
       <p className="mono tile-id">{svc.microservice_id}</p>
       <div className="tile-body">
@@ -129,37 +279,10 @@ function ServiceTile({
             </div>
           ) : null}
         </div>
-        {svc.feature_spec ? (
-          <article className="artifact">
-            <h3>Features</h3>
-            <div className="doc">
-              <MarkdownView content={svc.feature_spec} />
-            </div>
-          </article>
-        ) : null}
-        {apiType ? (
-          <article className="artifact">
-            <h3>API type</h3>
-            <p>{apiType}</p>
-          </article>
-        ) : null}
-        {svc.api_design ? (
-          <article className="artifact">
-            <h3>API design</h3>
-            <div className="doc">
-              <MarkdownView content={svc.api_design} />
-            </div>
-          </article>
-        ) : null}
-        {svc.tech_stack ? (
-          <article className="artifact">
-            <h3>Tech stack</h3>
-            <div className="doc">
-              <MarkdownView content={svc.tech_stack} />
-            </div>
-          </article>
-        ) : null}
       </div>
+      <InterviewResultsModal title={serviceLabel(svc)} open={specOpen} onClose={closeSpec}>
+        <ServiceInterviewArtifacts svc={svc} />
+      </InterviewResultsModal>
       <div className="tile-footer">
         {svc.can_approve ? (
           <button className="btn primary" type="button" disabled={busy} onClick={onApprove}>

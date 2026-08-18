@@ -18,7 +18,11 @@ print("importing…", flush=True)
 from architect_agent.config import get_settings
 from architect_agent.llm import get_chat_model
 from architect_agent.graph import reset_graph
-from architect_agent.query_intent import is_informational_query, is_revision_request
+from architect_agent.query_intent import (
+    is_informational_query,
+    is_revision_request,
+    is_step_approval_message,
+)
 from architect_agent.sessions import SessionStore, _legacy_map
 
 get_settings.cache_clear()
@@ -31,6 +35,11 @@ assert is_revision_request("Please switch to a modular monolith")
 assert is_revision_request("Add a health check endpoint")
 assert is_revision_request("Why is there no rate limiting?")
 assert not is_revision_request("Why is this HLD rather than LLD?")
+assert is_step_approval_message("Approve")
+assert is_step_approval_message("Looks good")
+assert is_step_approval_message("lgtm")
+assert not is_step_approval_message("Why should I approve REST?")
+assert not is_step_approval_message("Looks good, add a health check")
 
 print("HLD path…", flush=True)
 store = SessionStore()
@@ -53,7 +62,7 @@ assert s.design_track == track0
 assert s.to_public()["can_approve"]
 assert s.messages[-1]["role"] == "assistant"
 assert s.messages[-1]["content"].strip()
-s = store.approve(s.session_id)
+s = store.chat(s.session_id, "Looks good")
 print("  after phase0", s.phase, s.design_track, s.design_step, flush=True)
 assert s.design_track == "hld", s.design_track
 assert s.phase == "hld" and s.design_step == 1, (s.phase, s.design_step)

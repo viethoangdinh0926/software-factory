@@ -18,7 +18,7 @@ from orchestrator_agent.graph import reset_graph
 from orchestrator_agent.graph.nodes.common import pick_assistant_message, service_focus_user_block
 from orchestrator_agent.llm import get_chat_model
 from orchestrator_agent.package_parse import extract_http_endpoints, format_agreed_endpoints, service_contract_section
-from orchestrator_agent.query_intent import is_revision_request, wants_endpoint_list
+from orchestrator_agent.query_intent import is_revision_request, is_step_approval_message, wants_endpoint_list
 from orchestrator_agent.sessions import SessionStore, reset_store
 
 get_settings.cache_clear()
@@ -89,6 +89,10 @@ assert wants_endpoint_list("Show me all URL enpoints we aggreed on")
 assert not is_revision_request("Show me all URL endpoints we agreed on")
 assert is_revision_request("Add a health check endpoint")
 assert is_revision_request("Why is there no rate limiting?")
+assert is_step_approval_message("Approve")
+assert is_step_approval_message("Looks good.")
+assert not is_step_approval_message("Why should I approve REST?")
+assert not is_step_approval_message("Looks good, add a health check")
 eps = extract_http_endpoints(
     "## Endpoint: POST /v1/auth/register\nGET /v1/users/{id}\n`PATCH /v1/users/me`"
 )
@@ -128,7 +132,7 @@ assert ident["messages"][-1]["content"].strip()
 assert "Updates to this proposal" in ident["messages"][-1]["content"]
 assert "None" in ident["messages"][-1]["content"]
 
-s = store.approve(SESSION, service_id=identity_id)
+s = store.chat(SESSION, "Approve", service_id=identity_id)
 ident = next(x for x in s.to_public()["services"] if x["microservice_id"] == identity_id)
 cat = next(x for x in s.to_public()["services"] if x["microservice_id"] == catalog_id)
 print("  after identity features", ident["status"], cat["status"], flush=True)

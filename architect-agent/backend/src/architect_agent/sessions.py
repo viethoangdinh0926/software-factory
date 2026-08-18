@@ -15,6 +15,7 @@ from architect_agent.config import get_settings
 from architect_agent.graph import build_graph, initial_state
 from architect_agent.graph.nodes.common import approve_label
 from architect_agent.mermaid_sanitize import sanitize_mermaid
+from architect_agent.query_intent import is_step_approval_message
 
 logger = logging.getLogger(__name__)
 
@@ -387,7 +388,7 @@ class SessionStore:
         # This applies whether called via API or UI, making the chat history complete
         if action == "approve":
             node = self._active_message_node(session)
-            approve_message = "Approved to advance to next step"
+            approve_message = (user_text or "").strip() or "Approved to advance to next step"
             last = session.messages[-1] if session.messages else None
             # Only add if the last message isn't already the same approve message
             if not last or last.get("role") != "user" or last.get("content") != approve_message:
@@ -549,6 +550,9 @@ class SessionStore:
         return session
 
     def chat(self, session_id: str, text: str) -> DesignSession:
+        session = self.get(session_id)
+        if session.to_public().get("can_approve") and is_step_approval_message(text):
+            return self.resume(session_id, action="approve", text=text)
         return self.resume(session_id, action="chat", text=text)
 
     def approve(self, session_id: str) -> DesignSession:

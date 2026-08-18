@@ -17,6 +17,7 @@ from architect_agent.graph.state import DesignGraphState
 from architect_agent.query_intent import (
     FEEDBACK_RESOLUTION_RULES,
     is_informational_query,
+    promote_chat_to_approve,
     with_resolution_close,
 )
 from architect_agent.web_search import perform_web_search
@@ -526,6 +527,7 @@ def phase0_wait_node(state: DesignGraphState) -> dict[str, Any]:
 
     action = (resume or {}).get("action", "chat")
     user_text = ((resume or {}).get("text") or "").strip()
+    action = promote_chat_to_approve(action, user_text, can_approve=ready)
     msgs: list[dict[str, Any]] = []
     if user_text:
         msgs.append({"role": "user", "content": user_text, "node": "phase0"})

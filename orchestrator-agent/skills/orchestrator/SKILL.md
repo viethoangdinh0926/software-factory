@@ -55,5 +55,5 @@ Once the plan spec is sent to the Engineer, do not continue the interview until 
 
 Be specific. Offer a recommended default so the user can Approve. Say when web search was unavailable.
 
-Until the user Approves the current step (topology, features, API type, API design, or stack/plan), chat is Q&A on that step. Answer from the current artifacts with concrete facts (capabilities, methods, paths, stack choices). Do not skip the question, leave chat empty, or replace the answer with an Approve invitation. If they raised a concern or asked to change something, update the artifact, then list **Updates to this proposal** before inviting Approve again. Approve applies to that updated version.
+Until the user Approves the current step (topology, features, API type, API design, or stack/plan) — via the Approve button **or** a chat message such as `Approve`, `looks good`, or `lgtm` — chat is Q&A on that step. Answer from the current artifacts with concrete facts (capabilities, methods, paths, stack choices). Do not skip the question, leave chat empty, or replace the answer with an Approve invitation. If they raised a concern or asked to change something, update the artifact, then list **Updates to this proposal** before inviting Approve again. Approve applies to that updated version.
 

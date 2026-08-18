@@ -4,7 +4,13 @@ from typing import Any
 
 from langgraph.types import interrupt
 
-from orchestrator_agent.graph.nodes.common import active_service, approve_label, replace_service
+from orchestrator_agent.graph.nodes.common import (
+    active_service,
+    approve_label,
+    decorate_service,
+    replace_service,
+)
+from orchestrator_agent.query_intent import promote_chat_to_approve
 
 
 def _append_service_user(state: dict[str, Any], service_id: str, content: str) -> list[dict[str, Any]]:
@@ -82,10 +88,18 @@ def wait_node(state: dict[str, Any]) -> dict[str, Any]:
                 }
             return {"route": "wait", "wait_kind": "distributed", "can_approve": False, "messages": msgs}
 
+        patched_preview = dict(state)
+        patched_preview["active_service_id"] = service_id
+        preview = active_service(patched_preview)
+        tile_can_approve = bool(
+            preview and decorate_service(preview).get("can_approve")
+        )
+        action = promote_chat_to_approve(action, user_text, can_approve=tile_can_approve)
+
         if user_text and action == "chat":
             services = _append_service_user(state, service_id, user_text)
         elif action == "approve":
-            services = _append_service_user(state, service_id, "Approved")
+            services = _append_service_user(state, service_id, user_text or "Approved")
 
         patched = dict(state)
         patched["services"] = services
@@ -175,10 +189,12 @@ def wait_node(state: dict[str, Any]) -> dict[str, Any]:
             "messages": msgs,
         }
 
+    action = promote_chat_to_approve(action, user_text, can_approve=session_can_approve)
+
     if user_text and action == "chat":
         msgs.append({"role": "user", "content": user_text, "node": wait_kind or "chat"})
     if action == "approve":
-        msgs.append({"role": "user", "content": "Approved", "node": wait_kind or "approve"})
+        msgs.append({"role": "user", "content": user_text or "Approved", "node": wait_kind or "approve"})
 
     if action == "chat":
         if wait_kind == "idle":

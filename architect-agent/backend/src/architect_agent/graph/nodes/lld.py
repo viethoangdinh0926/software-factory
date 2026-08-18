@@ -21,7 +21,12 @@ from architect_agent.graph.nodes.common import (
 from architect_agent.graph.state import DesignGraphState
 from architect_agent.json_util import coerce_diagram_text
 from architect_agent.mermaid_sanitize import sanitize_mermaid
-from architect_agent.query_intent import FEEDBACK_RESOLUTION_RULES, is_informational_query, with_resolution_close
+from architect_agent.query_intent import (
+    FEEDBACK_RESOLUTION_RULES,
+    is_informational_query,
+    promote_chat_to_approve,
+    with_resolution_close,
+)
 
 _STEP_TITLES = {
     1: "Information gathering",
@@ -148,6 +153,9 @@ def lld_wait_node(state: DesignGraphState) -> dict[str, Any]:
 
     action = (resume or {}).get("action", "chat")
     user_text = ((resume or {}).get("text") or "").strip()
+    action = promote_chat_to_approve(
+        action, user_text, can_approve=ready or design_approve
+    )
     msgs: list[dict[str, Any]] = []
     if user_text:
         msgs.append({"role": "user", "content": user_text, "node": "lld"})

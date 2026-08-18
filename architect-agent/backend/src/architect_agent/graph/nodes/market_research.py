@@ -7,7 +7,7 @@ from langgraph.types import interrupt
 from architect_agent.graph.nodes.common import answer_before_approve, approve_label
 from architect_agent.graph.state import DesignGraphState
 from architect_agent.market_research import generate_market_evaluation_report
-from architect_agent.query_intent import is_informational_query
+from architect_agent.query_intent import is_informational_query, promote_chat_to_approve
 
 
 def market_research_node(state: DesignGraphState) -> dict[str, Any]:
@@ -93,6 +93,7 @@ def market_wait_node(state: DesignGraphState) -> dict[str, Any]:
 
     action = (resume or {}).get("action", "approve")
     user_text = ((resume or {}).get("text") or "").strip()
+    action = promote_chat_to_approve(action, user_text, can_approve=True)
     msgs: list[dict[str, Any]] = []
     if action == "chat" and user_text:
         msgs.append({"role": "user", "content": user_text, "node": "market_research"})

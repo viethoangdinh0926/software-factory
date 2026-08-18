@@ -89,7 +89,7 @@ Architect the supporting infrastructure and apply distributed systems theory.
 ---
 
 ## Discussion before Approve
-Until the user clicks Approve on the current step (Phase 0, each HLD/LLD step, or market continue):
+Until the user Approves the current step (Phase 0, each HLD/LLD step, or market continue) — via the Approve button **or** a chat message such as `Approve`, `looks good`, or `lgtm`:
 - Answer every question from the **current** artifacts (spec, scale, APIs, diagram, FMEA, market report).
 - Be concrete: numbers, service names, `METHOD /path`, CAP choices, grades.
 - Do not skip the question, leave chat empty, or reply with a recap that only asks them to Approve.
