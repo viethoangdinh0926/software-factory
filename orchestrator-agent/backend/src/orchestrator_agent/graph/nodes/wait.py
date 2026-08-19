@@ -138,7 +138,12 @@ def wait_node(state: dict[str, Any]) -> dict[str, Any]:
             }
 
         if action == "approve":
-            if status in {"awaiting_comms", "awaiting_api_type", "awaiting_api_design"}:
+            if status in {
+                "planning",
+                "awaiting_comms",
+                "awaiting_api_type",
+                "awaiting_api_design",
+            }:
                 updated = dict(svc)
                 updated["api_type"] = (
                     updated.get("proposed_api_type") or updated.get("api_type") or "REST"
@@ -151,7 +156,7 @@ def wait_node(state: dict[str, Any]) -> dict[str, Any]:
                     "wait_kind": "distributed",
                     "messages": msgs,
                 }
-            if status == "awaiting_features":
+            if status in {"discussing_features", "awaiting_features"}:
                 return {
                     "services": services,
                     "active_service_id": service_id,
@@ -230,7 +235,7 @@ def wait_node(state: dict[str, Any]) -> dict[str, Any]:
                 "wait_kind": "",
                 "messages": msgs,
             }
-        if wait_kind == "approve_features":
+        if wait_kind == "approve_features" or wait_kind == "discuss_features":
             return {"route": "stack_research", "wait_kind": "", "messages": msgs}
         if wait_kind == "approve_plan":
             return {"route": "emit_plan", "wait_kind": "", "messages": msgs}

@@ -16,6 +16,7 @@ from architect_agent.graph.nodes.common import answer_before_approve, approve_la
 from architect_agent.graph.state import DesignGraphState
 from architect_agent.query_intent import (
     FEEDBACK_RESOLUTION_RULES,
+    is_advance_request,
     is_informational_query,
     promote_chat_to_approve,
     with_resolution_close,
@@ -527,13 +528,18 @@ def phase0_wait_node(state: DesignGraphState) -> dict[str, Any]:
 
     action = (resume or {}).get("action", "chat")
     user_text = ((resume or {}).get("text") or "").strip()
+    advance_now = is_advance_request(user_text)
     action = promote_chat_to_approve(action, user_text, can_approve=ready)
     msgs: list[dict[str, Any]] = []
     if user_text:
         msgs.append({"role": "user", "content": user_text, "node": "phase0"})
 
-    if action == "approve" and ready and track in {"lld", "hld"}:
-        enter_msg = f"Starting **{track.upper()}** track."
+    if action == "approve" and (ready or advance_now) and track in {"lld", "hld"}:
+        enter_msg = (
+            f"Wrapping up discovery and moving on. Starting **{track.upper()}** track."
+            if advance_now
+            else f"Starting **{track.upper()}** track."
+        )
         msgs.append({"role": "assistant", "content": enter_msg, "node": "phase0"})
         return {
             "phase": track,  # type: ignore[typeddict-item]

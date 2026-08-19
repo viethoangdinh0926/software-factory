@@ -15,7 +15,7 @@ from orchestrator_agent.config import get_settings
 from orchestrator_agent.graph import build_graph, initial_state
 from orchestrator_agent.graph.nodes.common import decorate_service
 from orchestrator_agent.package_parse import ParsedPackage, parse_design_package
-from orchestrator_agent.query_intent import is_step_approval_message
+from orchestrator_agent.query_intent import is_advance_request, is_step_approval_message
 
 logger = logging.getLogger(__name__)
 
@@ -353,7 +353,7 @@ class SessionStore:
             )
         else:
             can_approve = bool(session.to_public().get("can_approve"))
-        if can_approve and is_step_approval_message(text):
+        if is_advance_request(text) or (can_approve and is_step_approval_message(text)):
             return self.resume(session_id, action="approve", text=text, service_id=service_id)
         return self.resume(session_id, action="chat", text=text, service_id=service_id)
 

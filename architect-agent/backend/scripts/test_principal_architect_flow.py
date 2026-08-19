@@ -19,6 +19,7 @@ from architect_agent.config import get_settings
 from architect_agent.llm import get_chat_model
 from architect_agent.graph import reset_graph
 from architect_agent.query_intent import (
+    is_advance_request,
     is_informational_query,
     is_revision_request,
     is_step_approval_message,
@@ -39,8 +40,15 @@ assert not is_revision_request("Why is this HLD rather than LLD?")
 assert is_step_approval_message("Approve")
 assert is_step_approval_message("Looks good")
 assert is_step_approval_message("lgtm")
+assert is_step_approval_message("next step")
+assert is_step_approval_message("Let's move on")
+assert is_step_approval_message("wrap up this step")
+assert is_advance_request("next step")
+assert is_advance_request("we need to move on")
+assert not is_advance_request("What's the next step?")
 assert not is_step_approval_message("Why should I approve REST?")
 assert not is_step_approval_message("Looks good, add a health check")
+assert not is_step_approval_message("next step, add a health check")
 
 latex_json = r'{"assistant_message": "DAU $\text{assumed}$ is $\approx$ 5k"}'
 latex_msg = parse_llm_json_object(latex_json)["assistant_message"]
@@ -77,6 +85,11 @@ assert s.phase == "hld" and s.design_step == 1, (s.phase, s.design_step)
 for step in range(1, 7):
     assert s.phase == "hld" and s.design_step == step, (s.phase, s.design_step)
     assert s.to_public()["can_approve"], s.to_public()
+    if step == 1:
+        s = store.chat(s.session_id, "next step")
+        print(f"  after next-step chat@{step}", s.phase, s.design_step, flush=True)
+        assert s.phase == "hld" and s.design_step == 2
+        continue
     if step == 3:
         assert s.to_public()["design_step_title"] == "Core microservices"
         apis = s.api_contracts

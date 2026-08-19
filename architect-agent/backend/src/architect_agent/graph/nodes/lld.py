@@ -24,6 +24,7 @@ from architect_agent.json_util import coerce_diagram_text
 from architect_agent.mermaid_sanitize import sanitize_mermaid
 from architect_agent.query_intent import (
     FEEDBACK_RESOLUTION_RULES,
+    is_advance_request,
     is_informational_query,
     promote_chat_to_approve,
     with_resolution_close,
@@ -150,6 +151,7 @@ def lld_wait_node(state: DesignGraphState) -> dict[str, Any]:
 
     action = (resume or {}).get("action", "chat")
     user_text = ((resume or {}).get("text") or "").strip()
+    advance_now = is_advance_request(user_text)
     action = promote_chat_to_approve(
         action, user_text, can_approve=ready or design_approve
     )
@@ -157,10 +159,18 @@ def lld_wait_node(state: DesignGraphState) -> dict[str, Any]:
     if user_text:
         msgs.append({"role": "user", "content": user_text, "node": "lld"})
 
-    if action == "approve" and design_approve:
+    if action == "approve" and (
+        design_approve or (advance_now and is_design_approve_step("lld", step))
+    ):
         msg = (
+            "Wrapping up this step and moving on. "
             "Design version queued for market evaluation, then handoff to the "
             "Orchestrator. Review the market report when it appears."
+            if advance_now
+            else (
+                "Design version queued for market evaluation, then handoff to the "
+                "Orchestrator. Review the market report when it appears."
+            )
         )
         msgs.append({"role": "assistant", "content": msg, "node": "lld"})
         return {
@@ -176,9 +186,14 @@ def lld_wait_node(state: DesignGraphState) -> dict[str, Any]:
             "messages": msgs,
         }
 
-    if action == "approve" and ready and step < 3:
+    if action == "approve" and (ready or advance_now) and step < 3:
         next_step = step + 1
-        msg = f"Advancing to LLD step {next_step}: {_STEP_TITLES.get(next_step, '')}."
+        title = _STEP_TITLES.get(next_step, "")
+        msg = (
+            f"Wrapping up this step and moving on. Next: LLD step {next_step} — {title}."
+            if advance_now
+            else f"Advancing to LLD step {next_step}: {title}."
+        )
         msgs.append({"role": "assistant", "content": msg, "node": "lld"})
         return {
             "phase": "lld",

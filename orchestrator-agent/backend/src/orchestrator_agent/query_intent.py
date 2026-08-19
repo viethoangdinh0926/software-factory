@@ -222,6 +222,38 @@ _APPROVAL_DIRECT_RE = re.compile(
     r"^(?:i(?:'m| am) )?(?:happy to |ready to )?approve\b",
     re.I,
 )
+_ADVANCE_RE = re.compile(
+    r"(?i)(?:"
+    r"\bnext(?:\s+the)?\s+step\b|"
+    r"\bnext\s+phase\b|"
+    r"\bmove\s+on\b|"
+    r"\bmove\s+(?:ahead|forward|to\s+the\s+next)\b|"
+    r"\bgo\s+(?:on\s+to|to\s+the\s+next)\b|"
+    r"\bcontinue\s+(?:on|to\s+the\s+next)\b|"
+    r"\bwrap(?:ping)?\s+(?:it|this|the\s+step)?\s*up\b|"
+    r"\bwrap\s+up\b|"
+    r"\bthat'?s\s+(?:enough|all)\b|"
+    r"\benough\s+for\s+(?:this|now|the\s+step)\b|"
+    r"\bdone\s+with\s+this\s+step\b|"
+    r"\bfinish\s+(?:this|the)\s+step\b|"
+    r"\bskip\s+(?:this\s+step|to\s+the\s+next)\b|"
+    r"\blet'?s\s+continue\b|"
+    r"\bonward\b"
+    r")"
+)
+
+
+def is_advance_request(text: str) -> bool:
+    """True when chat asks to wrap up this step and go to the next one immediately."""
+    raw = (text or "").strip()
+    if not raw or "?" in raw:
+        return False
+    compact = re.sub(r"\s+", " ", raw.lower()).rstrip(".!")
+    if not compact:
+        return False
+    if any(hint in compact for hint in _REVISION_HINTS):
+        return False
+    return bool(_ADVANCE_RE.search(compact))
 
 
 def is_step_approval_message(text: str) -> bool:
@@ -234,6 +266,8 @@ def is_step_approval_message(text: str) -> bool:
         return False
     if any(hint in compact for hint in _REVISION_HINTS):
         return False
+    if is_advance_request(raw):
+        return True
     if any(hint in compact for hint in _CONCERN_HINTS):
         return False
     if compact in _APPROVAL_EXACT:
@@ -242,7 +276,11 @@ def is_step_approval_message(text: str) -> bool:
 
 
 def promote_chat_to_approve(action: str, text: str, *, can_approve: bool) -> str:
-    if action == "chat" and can_approve and is_step_approval_message(text):
+    if action != "chat":
+        return action
+    if is_advance_request(text):
+        return "approve"
+    if can_approve and is_step_approval_message(text):
         return "approve"
     return action
 

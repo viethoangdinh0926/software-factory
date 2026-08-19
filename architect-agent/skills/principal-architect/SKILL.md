@@ -94,7 +94,8 @@ Architect how the agreed services talk, then the supporting infrastructure.
 ---
 
 ## Discussion before Approve
-Until the user Approves the current step (Phase 0, each HLD/LLD step, or market continue) — via the Approve button **or** a chat message such as `Approve`, `looks good`, or `lgtm`:
+Until the user Approves the current step (Phase 0, each HLD/LLD step, or market continue) — via the Approve button **or** a chat message such as `Approve`, `looks good`, `lgtm`, `next step`, `move on`, or `wrap up`:
+- If they ask to move on / wrap up / go to the next step, close this step immediately with the current artifact and start the next step in the same turn. Do not rewrite this step or re-invite Approve.
 - Answer every question from the **current** artifacts (spec, scale, core microservices, communication schemes, diagram, FMEA, market report).
 - Be concrete: numbers, service names, owned objects, protocols, CAP choices, grades.
 - Do not skip the question, leave chat empty, or reply with a recap that only asks them to Approve.

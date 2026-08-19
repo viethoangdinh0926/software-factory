@@ -15,7 +15,7 @@ from architect_agent.config import get_settings
 from architect_agent.graph import build_graph, initial_state
 from architect_agent.graph.nodes.common import approve_label, design_step_title
 from architect_agent.mermaid_sanitize import sanitize_mermaid
-from architect_agent.query_intent import is_step_approval_message
+from architect_agent.query_intent import is_advance_request, is_step_approval_message
 
 logger = logging.getLogger(__name__)
 
@@ -560,7 +560,9 @@ class SessionStore:
 
     def chat(self, session_id: str, text: str) -> DesignSession:
         session = self.get(session_id)
-        if session.to_public().get("can_approve") and is_step_approval_message(text):
+        if is_advance_request(text) or (
+            session.to_public().get("can_approve") and is_step_approval_message(text)
+        ):
             return self.resume(session_id, action="approve", text=text)
         return self.resume(session_id, action="chat", text=text)
 
