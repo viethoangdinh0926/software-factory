@@ -138,7 +138,8 @@ def _artifacts_for_qa(state: dict[str, Any]) -> str:
         f"Business spec:\n{(state.get('business_spec') or '')[:6000]}",
         f"Trade-off ledger:\n{(state.get('tradeoff_ledger') or '')[:2500]}",
         f"Scale estimates:\n{(state.get('scale_estimates') or '')[:2500]}",
-        f"API contracts:\n{(state.get('api_contracts') or '')[:6000]}",
+        f"Core microservices:\n{(state.get('api_contracts') or '')[:6000]}",
+        f"Communication schemes:\n{(state.get('communication_schemes') or '')[:4000]}",
         f"FMEA notes:\n{(state.get('fmea_notes') or '')[:2500]}",
         f"Design diagram:\n{(state.get('design_diagram') or '')[:3000]}",
         f"Design justification:\n{(state.get('design_justification') or '')[:2500]}",
@@ -164,7 +165,8 @@ def answer_open_query(state: dict[str, Any], question: str, *, node: str) -> str
             "Answer the user's question from the current artifacts. This is Q&A "
             "before they approve this workflow step.\n"
             f"Current node: {node}.\n"
-            "Use concrete facts (numbers, service names, METHOD /path, CAP choices).\n"
+            "Use concrete facts (numbers, service names, owned objects, communication "
+            "schemes/protocols, CAP choices).\n"
             f"{EXPLANATION_DEPTH_DIGEST}\n"
             "This turn is an ANSWER, not an artifact rewrite: go beyond stating the current "
             "value. Explain the reasoning behind it — the forces that drove it, the "
@@ -216,9 +218,9 @@ APPROVE_LABELS = {
     ("lld", 2): "Confirm blueprint → verification",
     ("lld", 3): "Approve & send design",
     ("hld", 1): "Confirm requirements → domain model",
-    ("hld", 2): "Confirm domain → APIs",
-    ("hld", 3): "Confirm APIs → infrastructure",
-    ("hld", 4): "Confirm infrastructure → FMEA",
+    ("hld", 2): "Confirm domain → microservices",
+    ("hld", 3): "Confirm services → communication & diagram",
+    ("hld", 4): "Confirm diagram → FMEA",
     ("hld", 5): "Confirm FMEA → synthesis",
     ("hld", 6): "Approve & send design",
     ("market_research", 0): "Continue after market evaluation",

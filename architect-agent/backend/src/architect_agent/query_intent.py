@@ -300,8 +300,9 @@ def extract_http_endpoints(*texts: str) -> list[tuple[str, str]]:
 def format_agreed_endpoints(endpoints: list[tuple[str, str]]) -> str:
     if not endpoints:
         return (
-            "No URL endpoints are recorded in the current API contracts yet. "
-            "I can add them if you tell me which paths to include, or you can Approve "
+            "No URL endpoints are recorded yet. The architect agrees core microservices "
+            "and communication schemes; HTTP/gRPC path specs are completed later with "
+            "the orchestrator. Ask about service ownership or protocols, or Approve "
             "once this step's artifact is complete."
         )
     lines = ["URL endpoints currently recorded in this design:", ""]

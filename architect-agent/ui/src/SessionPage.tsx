@@ -234,6 +234,7 @@ export function SessionPage() {
   const showLedger = Boolean(session.tradeoff_ledger?.trim());
   const showScale = Boolean(session.scale_estimates?.trim());
   const showApis = Boolean(session.api_contracts?.trim());
+  const showComms = Boolean(session.communication_schemes?.trim());
   const showFmea = Boolean(session.fmea_notes?.trim());
 
   return (
@@ -438,10 +439,19 @@ export function SessionPage() {
           {showApis ? (
             <div className="artifact">
               <div className="panel-head">
-                <h2>API contracts</h2>
-                <span className="panel-kicker">Interfaces</span>
+                <h2>Core microservices</h2>
+                <span className="panel-kicker">Ownership</span>
               </div>
               <MarkdownView content={session.api_contracts} className="doc" />
+            </div>
+          ) : null}
+          {showComms ? (
+            <div className="artifact">
+              <div className="panel-head">
+                <h2>Communication schemes</h2>
+                <span className="panel-kicker">Protocols</span>
+              </div>
+              <MarkdownView content={session.communication_schemes} className="doc" />
             </div>
           ) : null}
           {showFmea ? (

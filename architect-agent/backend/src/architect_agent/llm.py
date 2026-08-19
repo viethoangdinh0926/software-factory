@@ -118,7 +118,10 @@ class StubChatModel(BaseChatModel):
 
 def _stub_qa(blob: str) -> str:
     lower = blob.lower()
-    if "endpoint" in lower or " url" in lower or "urls" in lower:
+    ask = lower
+    if "user question:" in lower:
+        ask = lower.split("user question:", 1)[-1]
+    if "endpoint" in ask or " url" in ask or "urls" in ask:
         found = re.findall(
             r"\b((?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+/[A-Za-z0-9_{}\-./]*)",
             blob,
@@ -136,6 +139,16 @@ def _stub_qa(blob: str) -> str:
             return "URL endpoints currently recorded in this design:\n" + "\n".join(
                 f"- `{item}`" for item in uniq[:24]
             )
+        return (
+            "No URL endpoints are recorded yet. Core microservices and communication "
+            "schemes are agreed first; HTTP/gRPC path specs are completed later with "
+            "the orchestrator."
+        )
+    if "own" in ask or "domain object" in ask or "identityservice" in ask:
+        return (
+            "IdentityService owns User, Session, and Credential in the current core "
+            "microservices artifact. Other headed services own their own domain objects."
+        )
     if "grade" in lower:
         return "The market evaluation grade for this design version is in the report on this step."
     if "hld" in lower and "lld" in lower:
@@ -294,22 +307,44 @@ def _stub_hld(blob: str) -> dict[str, Any]:
         ),
         "api_contracts": (
             "### IdentityService\n"
-            "- POST /v1/auth/login — email/password → session token (200/401)\n"
-            "- POST /v1/auth/token/refresh — refresh → access token (200/401)\n"
-            "- GET /v1/users/{id} — public profile (200/404)\n"
+            "Owns User, Session, Credential. Bounded context: authentication and profile identity.\n"
+            "- Operations: register, login, refresh session, read/update profile, revoke credentials.\n"
+            "- Collaborators: called by the API gateway and peer services for authz checks.\n"
             "### ChannelService\n"
-            "- POST /v1/channels — create channel (201)\n"
-            "- GET /v1/channels/{id} — channel metadata (200/404)\n"
+            "Owns Channel, ChannelMembership.\n"
+            "- Operations: create channel, read metadata, update branding, manage memberships.\n"
+            "- Collaborators: invoked by VideoCatalogService when attaching a video to a channel.\n"
             "### VideoCatalogService\n"
-            "- POST /v1/videos — register upload intent (201)\n"
-            "- GET /v1/videos/{id} — catalog metadata (200/404)\n"
-            "- PATCH /v1/videos/{id} — update title/visibility (200/403)\n"
+            "Owns Video, VideoMetadata, VisibilityPolicy.\n"
+            "- Operations: register a video, read catalog metadata, update title/visibility, list by channel.\n"
+            "- Collaborators: consumes upload-complete events; called by PlaybackService for authz metadata.\n"
             "### UploadService\n"
-            "- POST /v1/uploads — initiate multipart upload; returns signed URLs (201)\n"
-            "- POST /v1/uploads/{id}/complete — finalize parts (200)\n"
+            "Owns UploadSession, UploadPart.\n"
+            "- Operations: initiate multipart upload, complete parts, abort upload.\n"
+            "- Collaborators: notifies VideoCatalogService when an original is stored.\n"
             "### PlaybackService\n"
-            "- GET /v1/playback/{videoId} — signed manifest + CDN URLs (200/403)\n"
+            "Owns PlaybackSession (ephemeral), ManifestGrant.\n"
+            "- Operations: authorize playback, issue time-limited CDN grants, record start-of-play.\n"
+            "- Collaborators: reads VideoCatalogService metadata; media bytes live on CDN/object storage.\n"
             if step >= 3
+            else ""
+        ),
+        "communication_schemes": (
+            "### User ↔ system\n"
+            "- Browser/mobile clients use HTTPS request/response through the API Gateway (REST/JSON at the edge).\n"
+            "- Video playback is stream-based: CDN byte-range and HLS/DASH manifests, not origin request/response for every segment.\n"
+            "- Interactive notifications may use WebSocket streams from the gateway.\n"
+            "### Core microservice ↔ core microservice\n"
+            "- Sync request/response: IdentityService authz checks and VideoCatalogService metadata reads "
+            "(gRPC preferred inside the mesh; REST acceptable).\n"
+            "- Async pub/sub: Kafka topics VideoRegistered, UploadCompleted, TranscodeComplete, VisibilityChanged.\n"
+            "### Core microservice ↔ infrastructure\n"
+            "- Postgres: request/response SQL from services that own that data.\n"
+            "- Redis: request/response cache/session lookups.\n"
+            "- Object storage: signed URL PUT/GET (request/response).\n"
+            "- CDN: pull-through cache plus cache-invalidation events.\n"
+            "- Message broker: pub/sub for domain events; no shared DB writes across services.\n"
+            if step >= 4
             else ""
         ),
         "fmea_notes": (

@@ -118,14 +118,15 @@ def wait_node(state: dict[str, Any]) -> dict[str, Any]:
 
         if action == "chat":
             chat_route = {
-                "planning": "feature_discuss",
+                "planning": "comms_spec",
+                "awaiting_comms": "comms_spec",
+                "awaiting_api_type": "comms_spec",
+                "awaiting_api_design": "comms_spec",
                 "discussing_features": "feature_discuss",
                 "awaiting_features": "feature_discuss",
-                "awaiting_api_type": "api_type_research",
-                "awaiting_api_design": "api_design_propose",
                 "awaiting_stack": "stack_research",
-                "sent": "api_design_propose",
-                "approved": "api_design_propose",
+                "sent": "comms_spec",
+                "approved": "comms_spec",
             }.get(status, "wait")
             return {
                 "services": services,
@@ -137,26 +138,20 @@ def wait_node(state: dict[str, Any]) -> dict[str, Any]:
             }
 
         if action == "approve":
-            if status == "awaiting_features":
-                return {
-                    "services": services,
-                    "active_service_id": service_id,
-                    "route": "api_type_research",
-                    "wait_kind": "distributed",
-                    "messages": msgs,
-                }
-            if status == "awaiting_api_type":
+            if status in {"awaiting_comms", "awaiting_api_type", "awaiting_api_design"}:
                 updated = dict(svc)
-                updated["api_type"] = updated.get("proposed_api_type") or updated.get("api_type") or "REST"
+                updated["api_type"] = (
+                    updated.get("proposed_api_type") or updated.get("api_type") or "REST"
+                )
                 updated["status"] = "planning"
                 return {
                     "services": replace_service(services, updated),
                     "active_service_id": service_id,
-                    "route": "api_design_propose",
+                    "route": "feature_discuss",
                     "wait_kind": "distributed",
                     "messages": msgs,
                 }
-            if status == "awaiting_api_design":
+            if status == "awaiting_features":
                 return {
                     "services": services,
                     "active_service_id": service_id,
@@ -172,7 +167,10 @@ def wait_node(state: dict[str, Any]) -> dict[str, Any]:
                     "wait_kind": "distributed",
                     "messages": msgs,
                 }
-            note = "Chat on this tile to revise the API design, then approve through a new engineer handoff."
+            note = (
+                "Chat on this tile to revise the communication spec, then approve through "
+                "a new engineer handoff."
+            )
             return {
                 "services": services,
                 "active_service_id": service_id,

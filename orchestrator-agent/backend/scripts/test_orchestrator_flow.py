@@ -53,9 +53,18 @@ hld_v1 = _package(
     body=(
         "## Business Specification\n\n"
         "Distributed video platform with microservices.\n\n"
-        "## API Contracts\n\n"
-        "### IdentityService\nPOST /v1/auth/login\n\n"
-        "### VideoCatalogService\nGET /v1/videos/{id}\n\n"
+        "## Core Microservices\n\n"
+        "### IdentityService\n"
+        "Owns User, Session, Credential. Operations: register, login, refresh.\n\n"
+        "### VideoCatalogService\n"
+        "Owns Video, VisibilityPolicy. Operations: register, read metadata, update visibility.\n\n"
+        "## Communication Schemes\n\n"
+        "### User ↔ system\n"
+        "HTTPS request/response via API Gateway (REST/JSON at the edge).\n\n"
+        "### Core microservice ↔ core microservice\n"
+        "Sync gRPC for authz; Kafka pub/sub for VideoPublished.\n\n"
+        "### Core microservice ↔ infrastructure\n"
+        "Postgres request/response SQL; CDN stream for playback.\n\n"
         "## Design Diagram\n\n"
         "```mermaid\nflowchart LR\n  IdentityService --> VideoCatalogService\n```\n"
     ),
@@ -63,7 +72,7 @@ hld_v1 = _package(
 
 print("service-scoped package excerpt…", flush=True)
 ident_only = service_contract_section(hld_v1, ["IdentityService"])
-assert "POST /v1/auth/login" in ident_only
+assert "Owns User" in ident_only
 assert "VideoCatalogService" not in ident_only
 assert "Business Specification" not in ident_only
 focus = service_focus_user_block(
@@ -71,14 +80,14 @@ focus = service_focus_user_block(
     {
         "names": ["IdentityService"],
         "role_key": "identity",
-        "architect_api_contract": "POST /v1/auth/login",
+        "architect_api_contract": "Owns User, Session, Credential.",
         "microservice_id": "id-1",
         "messages": [],
     },
 )
 assert "Focus microservice: IdentityService" in focus
 assert "Package excerpt" not in focus
-assert "Kafka" not in focus
+assert "Architect communication schemes:" in focus
 assert pick_assistant_message({"assistant_message": ""}, fallback="Hi") == "Hi"
 assert "POST /login" in pick_assistant_message(
     {"assistant_message": "  ", "api_design": "POST /login"},
@@ -110,9 +119,9 @@ assert s.topology == "distributed", s.topology
 assert s.architect_track == "hld"
 live = [x for x in pub["services"] if x.get("status") != "suspended"]
 assert len(live) == 2, live
-assert all(x.get("status") == "awaiting_features" for x in live), [x.get("status") for x in live]
+assert all(x.get("status") == "awaiting_comms" for x in live), [x.get("status") for x in live]
 assert all(x.get("can_approve") for x in live)
-assert all((x.get("feature_spec") or "").strip() for x in live)
+assert all((x.get("api_design") or "").strip() for x in live)
 assert not pub["can_approve"]
 assert pub["wait_kind"] == "distributed", pub["wait_kind"]
 first_ids = {
@@ -123,6 +132,22 @@ assert "IdentityService" in first_ids and "VideoCatalogService" in first_ids
 catalog_id = first_ids["VideoCatalogService"]
 identity_id = first_ids["IdentityService"]
 
+print("  identity comms qa…", flush=True)
+s = store.chat(SESSION, "Why is REST the locked protocol?", service_id=identity_id)
+ident = next(x for x in s.to_public()["services"] if x["microservice_id"] == identity_id)
+assert ident["status"] == "awaiting_comms", ident["status"]
+assert ident["can_approve"]
+assert ident["messages"][-1]["content"].strip()
+assert "Updates to this proposal" in ident["messages"][-1]["content"]
+assert "None" in ident["messages"][-1]["content"]
+
+s = store.chat(SESSION, "Approve", service_id=identity_id)
+ident = next(x for x in s.to_public()["services"] if x["microservice_id"] == identity_id)
+cat = next(x for x in s.to_public()["services"] if x["microservice_id"] == catalog_id)
+print("  after identity comms", ident["status"], cat["status"], flush=True)
+assert ident["approve_kind"] == "approve_features", ident["approve_kind"]
+assert cat["status"] == "awaiting_comms", "other service must stay on its own tile"
+
 print("  identity features qa…", flush=True)
 s = store.chat(SESSION, "What features are in v1?", service_id=identity_id)
 ident = next(x for x in s.to_public()["services"] if x["microservice_id"] == identity_id)
@@ -132,39 +157,19 @@ assert ident["messages"][-1]["content"].strip()
 assert "Updates to this proposal" in ident["messages"][-1]["content"]
 assert "None" in ident["messages"][-1]["content"]
 
-s = store.chat(SESSION, "Approve", service_id=identity_id)
+s = store.approve(SESSION, service_id=identity_id)
 ident = next(x for x in s.to_public()["services"] if x["microservice_id"] == identity_id)
 cat = next(x for x in s.to_public()["services"] if x["microservice_id"] == catalog_id)
 print("  after identity features", ident["status"], cat["status"], flush=True)
-assert ident["approve_kind"] == "decide_api_type", ident["approve_kind"]
-assert cat["status"] == "awaiting_features", "other service must stay on its own tile"
-
-print("  identity api-type qa…", flush=True)
-proposed = ident.get("proposed_api_type")
-s = store.chat(SESSION, "Why is REST recommended?", service_id=identity_id)
-ident = next(x for x in s.to_public()["services"] if x["microservice_id"] == identity_id)
-assert ident["status"] == "awaiting_api_type", ident["status"]
-assert ident["can_approve"]
-assert ident.get("proposed_api_type") == proposed
-assert ident["messages"][-1]["content"].strip()
-assert "Updates to this proposal" in ident["messages"][-1]["content"]
-assert "None" in ident["messages"][-1]["content"]
-
-s = store.approve(SESSION, service_id=identity_id)
-ident = next(x for x in s.to_public()["services"] if x["microservice_id"] == identity_id)
-cat = next(x for x in s.to_public()["services"] if x["microservice_id"] == catalog_id)
-print("  after identity api type", ident["status"], cat["status"], flush=True)
-assert ident["approve_kind"] == "approve_api_design"
-assert cat["status"] == "awaiting_features", "other service must stay on its own tile"
-s = store.approve(SESSION, service_id=identity_id)
-ident = next(x for x in s.to_public()["services"] if x["microservice_id"] == identity_id)
 assert ident["approve_kind"] == "approve_plan"
+assert cat["status"] == "awaiting_comms", "other service must stay on its own tile"
 s = store.approve(SESSION, service_id=identity_id)
 print("  after identity plan", [x.get("status") for x in s.services], flush=True)
 ident = next(x for x in s.services if x["microservice_id"] == identity_id)
 cat = next(x for x in s.services if x["microservice_id"] == catalog_id)
 assert ident.get("status") == "sent"
-assert cat.get("status") == "awaiting_features"
+assert cat.get("status") == "awaiting_comms"
+assert "## Communication spec" in (ident.get("plan_spec") or "")
 assert "## Features / functionality" in (ident.get("plan_spec") or "")
 assert (ident.get("feature_spec") or "").strip()
 assert s.engineer_handoffs[-1]["action"] == "plan"
@@ -173,7 +178,7 @@ assert s.engineer_handoffs[-1]["microservice_id"] == identity_id
 print("  revise sent identity…", flush=True)
 s = store.chat(SESSION, "Add a health check endpoint.", service_id=identity_id)
 ident = next(x for x in s.to_public()["services"] if x["microservice_id"] == identity_id)
-assert ident["status"] == "awaiting_api_design", ident["status"]
+assert ident["status"] == "awaiting_comms", ident["status"]
 
 hld_v2 = _package(
     version=2,
@@ -181,9 +186,11 @@ hld_v2 = _package(
     body=(
         "## Business Specification\n\n"
         "Distributed video platform with microservices.\n\n"
-        "## API Contracts\n\n"
-        "### CatalogService\nGET /v1/videos/{id}\n\n"
-        "### PlaybackService\nGET /v1/playback/{id}\n\n"
+        "## Core Microservices\n\n"
+        "### CatalogService\nOwns Video. Operations: read catalog metadata.\n\n"
+        "### PlaybackService\nOwns PlaybackSession. Operations: authorize playback.\n\n"
+        "## Communication Schemes\n\n"
+        "HTTPS request/response via API Gateway (REST/JSON). Kafka pub/sub for playback events.\n\n"
         "## Design Diagram\n\n"
         "```mermaid\nflowchart LR\n  CatalogService --> PlaybackService\n```\n"
     ),

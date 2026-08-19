@@ -80,6 +80,7 @@ class DesignGraphState(TypedDict):
     tradeoff_ledger: Annotated[str, _replace_str]
     scale_estimates: Annotated[str, _replace_str]
     api_contracts: Annotated[str, _replace_str]
+    communication_schemes: Annotated[str, _replace_str]
     fmea_notes: Annotated[str, _replace_str]
     spec_enhanced: NotRequired[bool]
     # After market continue: resume_track + resume_step for handoff loop.

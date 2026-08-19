@@ -33,9 +33,9 @@ def stack_research_node(state: dict[str, Any]) -> dict[str, Any]:
                 question=pending,
                 artifacts=(
                     f"Service: {name}\n"
-                    f"API type: {svc.get('api_type') or svc.get('proposed_api_type') or ''}\n"
+                    f"Locked protocol(s): {svc.get('api_type') or svc.get('proposed_api_type') or ''}\n"
+                    f"Communication spec:\n{(svc.get('api_design') or '')[:4000]}\n"
                     f"Agreed features:\n{(svc.get('feature_spec') or '')[:3000]}\n"
-                    f"API design:\n{(svc.get('api_design') or '')[:4000]}\n"
                     f"Current tech stack:\n{existing_stack[:6000]}"
                 ),
                 system_extra=service_focus_system(name),
@@ -110,6 +110,8 @@ def stack_research_node(state: dict[str, Any]) -> dict[str, Any]:
             pending=pending,
             extra=(
                 f"Prior stack for this service:\n{(svc.get('tech_stack') or '(none)')[:1500]}\n\n"
+                f"Locked protocol(s): {svc.get('api_type') or svc.get('proposed_api_type') or ''}\n"
+                f"Communication spec:\n{(svc.get('api_design') or '')[:4000]}\n\n"
                 f"Agreed features:\n{(svc.get('feature_spec') or '(none)')[:4000]}\n\n"
                 f"Web search ({'live' if live else 'unavailable / stub'}):\n{search_text}"
             ),
@@ -221,9 +223,10 @@ def emit_plan_node(state: dict[str, Any]) -> dict[str, Any]:
             f"- design_version: `{version}`\n"
             f"- microservice_id: `{mid}`\n"
             f"- microservice_name: `{name}`\n\n"
+            f"## Communication spec\n\n"
+            f"Locked protocol(s): {svc.get('api_type') or ''}\n\n"
+            f"{svc.get('api_design') or ''}\n\n"
             f"## Features / functionality\n\n{svc.get('feature_spec') or ''}\n\n"
-            f"## API type\n\n{svc.get('api_type') or ''}\n\n"
-            f"## API design\n\n{svc.get('api_design') or ''}\n\n"
             f"## Tech stack\n\n{svc.get('tech_stack') or ''}\n\n"
             f"## System design (architect package)\n\n{package}\n"
         )

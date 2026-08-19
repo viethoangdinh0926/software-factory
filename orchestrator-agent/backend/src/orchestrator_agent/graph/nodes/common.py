@@ -30,14 +30,15 @@ CHAT DEPTH (assistant_message) — write like a Staff Engineer briefing the team
 - Target 200-500 words of substance. NEVER a bare status line such as "Plan updated.",
   "Tech stack selected." or "Extracted the services." A recap with no reasoning is a
   FAILED turn.
-- Every recommendation you surface (topology, features, API type, API design, tech stack,
+- Every recommendation you surface (topology, communication spec, features, tech stack,
   plan spec, service split) must justify itself by covering:
-  1. WHAT you decided, naming concrete elements — service names, METHOD /path endpoints,
-     libraries with their role, data stores — not "the stack" or "the design".
+  1. WHAT you decided, naming concrete elements — service names, protocols, METHOD /path
+     or RPCs/topics when the locked scheme is request/response, libraries with their role,
+     data stores — not "the stack" or "the design".
   2. WHY it fits THIS service/system: the driving forces from the architect package
-     (contract shape, traffic profile, latency budget, consistency need, team skills).
+     (owned objects, communication schemes, traffic profile, latency budget, consistency).
   3. ALTERNATIVES considered and the explicit reason each was rejected (e.g. "gRPC
-     rejected: this is a browser-facing edge API, so REST+JSON avoids a proxy layer").
+     rejected at the browser edge: REST+JSON matches the architect user↔system scheme").
   4. TRADE-OFFS accepted — operational cost, added latency, lock-in, learning curve —
      and why they are acceptable here.
   5. ASSUMPTIONS made where the package was silent, each labeled with your default.
@@ -53,16 +54,18 @@ CHAT DEPTH (assistant_message) — write like a Staff Engineer briefing the team
 
 APPROVE_LABELS = {
     "confirm_topology": "Confirm topology",
+    "approve_comms": "Approve communication spec",
     "approve_features": "Approve features",
-    "decide_api_type": "Accept API type",
-    "approve_api_design": "Approve API design",
+    "decide_api_type": "Approve communication spec",
+    "approve_api_design": "Approve communication spec",
     "approve_plan": "Approve plan",
 }
 
 STATUS_APPROVE_KIND = {
+    "awaiting_comms": "approve_comms",
+    "awaiting_api_type": "approve_comms",
+    "awaiting_api_design": "approve_comms",
     "awaiting_features": "approve_features",
-    "awaiting_api_type": "decide_api_type",
-    "awaiting_api_design": "approve_api_design",
     "awaiting_stack": "approve_plan",
 }
 
@@ -75,6 +78,33 @@ def features_are_concrete(text: str) -> bool:
     bullets = len(re.findall(r"(?m)^\s*[-*]", body))
     numbered = len(re.findall(r"(?m)^\s*\d+\.", body))
     return (bullets + numbered) >= 4
+
+
+def comms_are_concrete(text: str) -> bool:
+    """Require a completed communication spec for the locked protocol(s)."""
+    body = (text or "").strip()
+    if len(body) < 280:
+        return False
+    lower = body.lower()
+    has_protocol = any(
+        k in lower
+        for k in (
+            "rest",
+            "grpc",
+            "graphql",
+            "websocket",
+            "kafka",
+            "pubsub",
+            "pub/sub",
+            "event",
+            "stream",
+            "rpc",
+        )
+    )
+    bullets = len(re.findall(r"(?m)^\s*[-*#]", body))
+    endpoints = len(re.findall(r"\b(GET|POST|PUT|PATCH|DELETE)\s+/", body, re.I))
+    rpcs = len(re.findall(r"(?i)\b(rpc|topic|event|stream)\b", body))
+    return has_protocol and (bullets >= 4 or endpoints >= 3 or rpcs >= 3)
 
 
 def approve_label(kind: str) -> str:
@@ -93,6 +123,10 @@ def decorate_service(svc: dict[str, Any], *, finalized: bool = False) -> dict[st
     out = dict(svc)
     out["can_approve"] = bool(kind) and open_disc
     if status == "awaiting_features" and not features_are_concrete(out.get("feature_spec") or ""):
+        out["can_approve"] = False
+    if status in {"awaiting_comms", "awaiting_api_type", "awaiting_api_design"} and not comms_are_concrete(
+        out.get("api_design") or ""
+    ):
         out["can_approve"] = False
     out["approve_kind"] = kind if out["can_approve"] else ""
     out["approve_label"] = approve_label(kind) if out["can_approve"] else ""
@@ -303,7 +337,7 @@ def service_focus_system(name: str) -> str:
     """System prefix so a planning tile stays on one microservice."""
     return (
         f"You are planning ONE microservice: {name}. This tile is not the platform design.\n"
-        f"Stay on {name}'s features, API, behavior, and its own data/runtime.\n"
+        f"Stay on {name}'s communication spec, features, behavior, and its own data/runtime.\n"
         "Do not restate overall architecture. Do not design other microservices.\n"
         "Do not prescribe shared infra (CDN, load balancers, Kafka, Redis, object storage, "
         "search clusters) unless this service itself owns that store or must call it as a client.\n"
@@ -323,7 +357,7 @@ def service_focus_user_block(
     extra: str = "",
 ) -> str:
     """User payload with this service's contract, peers, and tile chat — not the full package."""
-    from orchestrator_agent.package_parse import service_contract_section
+    from orchestrator_agent.package_parse import service_comms_excerpt, service_contract_section
 
     names = [str(n) for n in (svc.get("names") or []) if n]
     name = names[-1] if names else "Service"
@@ -334,7 +368,11 @@ def service_focus_user_block(
     ]
     contract = str(svc.get("architect_api_contract") or "").strip()
     features = str(svc.get("feature_spec") or "").strip()
-    section = service_contract_section(str(state.get("package_markdown") or ""), names) or contract
+    package = str(state.get("package_markdown") or "")
+    section = service_contract_section(package, names) or contract
+    comms = service_comms_excerpt(package, names)
+    protocol = str(svc.get("api_type") or svc.get("proposed_api_type") or "").strip()
+    spec = str(svc.get("api_design") or "").strip()
     history_lines: list[str] = []
     for msg in list(svc.get("messages") or [])[-6:]:
         role = str(msg.get("role") or "assistant")
@@ -348,6 +386,9 @@ def service_focus_user_block(
         f"Role: {svc.get('role_key') or ''}",
         f"Peer microservices (call them; do not plan them): {', '.join(peers) or '(none)'}",
         f"Architect sketch for {name} only:\n{section or '(none)'}",
+        f"Architect communication schemes:\n{comms or '(none)'}",
+        f"Locked protocol(s): {protocol or '(not yet locked)'}",
+        f"Agreed communication spec:\n{spec or '(not yet agreed)'}",
         f"Agreed features / functionality:\n{features or '(not yet agreed)'}",
         "Recent tile conversation:\n" + ("\n".join(history_lines) if history_lines else "(none)"),
         f"Latest user message:\n{pending or '(none)'}",

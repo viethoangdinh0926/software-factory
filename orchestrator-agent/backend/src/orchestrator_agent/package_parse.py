@@ -14,7 +14,9 @@ _TRACK_RE = re.compile(r"Track:\s*`?(lld|hld)`?", re.I)
 _MERMAID_RE = re.compile(r"```(?:mermaid)?\s*\n([\s\S]*?)```", re.I)
 _SERVICE_NAME_RE = re.compile(r"\b([A-Z][A-Za-z0-9]+Service)\b")
 _SERVICE_HEADING_RE = re.compile(r"(?m)^#{2,3}\s+([A-Z][A-Za-z0-9]+Service)\s*$")
+_CORE_SECTION_RE = re.compile(r"(?ims)^##\s*Core Microservices\s*\n(.*?)(?=^##\s|\Z)")
 _API_SECTION_RE = re.compile(r"(?ims)^##\s*API Contracts\s*\n(.*?)(?=^##\s|\Z)")
+_COMMS_SECTION_RE = re.compile(r"(?ims)^##\s*Communication Schemes?\s*\n(.*?)(?=^##\s|\Z)")
 
 
 @dataclass
@@ -74,11 +76,40 @@ def _role_key(name: str) -> str:
     return re.sub(r"(?<!^)(?=[A-Z])", "-", stem).lower() or name.lower()
 
 
-def extract_core_services(markdown: str) -> list[dict[str, str]]:
-    """Pull core *Service names from API Contracts headings, then the rest of the package."""
+def _core_services_source(markdown: str) -> str:
     text = markdown or ""
-    section_match = _API_SECTION_RE.search(text)
-    contracts = section_match.group(1) if section_match else ""
+    for regex in (_CORE_SECTION_RE, _API_SECTION_RE):
+        match = regex.search(text)
+        if match:
+            return match.group(1)
+    return ""
+
+
+def extract_communication_schemes(markdown: str) -> str:
+    match = _COMMS_SECTION_RE.search(markdown or "")
+    return (match.group(1).strip() if match else "")
+
+
+def service_comms_excerpt(markdown: str, names: list[str]) -> str:
+    """Slice communication schemes for this service, or return the package-level schemes."""
+    schemes = extract_communication_schemes(markdown)
+    if not schemes:
+        return ""
+    wanted = {n.strip() for n in names if n and str(n).strip()}
+    if not wanted:
+        return schemes[:2500]
+    blocks = re.split(r"(?m)^(?=#{2,3}\s+)", schemes)
+    for block in blocks:
+        heading = re.sub(r"^#{2,3}\s+", "", block.split("\n", 1)[0]).strip()
+        if heading in wanted:
+            return block.strip()[:2500]
+    return schemes[:2500]
+
+
+def extract_core_services(markdown: str) -> list[dict[str, str]]:
+    """Pull core *Service names from Core Microservices (or legacy API Contracts) headings."""
+    text = markdown or ""
+    contracts = _core_services_source(text)
     ordered: list[dict[str, str]] = []
     seen: set[str] = set()
 
@@ -90,7 +121,8 @@ def extract_core_services(markdown: str) -> list[dict[str, str]]:
             {
                 "name": name,
                 "role_key": _role_key(name),
-                "contract_summary": summary or f"HTTP API for {name} as described in the architect package.",
+                "contract_summary": summary
+                or f"Core microservice {name} as described in the architect package.",
             }
         )
 
@@ -114,13 +146,12 @@ def extract_core_services(markdown: str) -> list[dict[str, str]]:
 
 
 def service_contract_section(markdown: str, names: list[str]) -> str:
-    """Return the API Contracts subsection for this service only (not the whole package)."""
+    """Return the core-microservice subsection for this service only (not the whole package)."""
     wanted = [n.strip() for n in names if n and str(n).strip()]
     if not wanted:
         return ""
     text = markdown or ""
-    section_match = _API_SECTION_RE.search(text)
-    source = section_match.group(1) if section_match else text
+    source = _core_services_source(text) or text
     wanted_set = set(wanted)
     blocks = re.split(r"(?m)^(?=#{2,3}\s+)", source)
     for block in blocks:
@@ -163,7 +194,8 @@ def format_agreed_endpoints(name: str, endpoints: list[tuple[str, str]]) -> str:
     if not endpoints:
         return (
             f"No URL endpoints are recorded yet for **{name}**. "
-            "Approve an API design on this tile, or tell me which paths to add."
+            "Complete the communication spec on this tile (REST paths, gRPC RPCs, or event topics), "
+            "or tell me which paths to add."
         )
     lines = [f"Agreed URL endpoints for **{name}**:", ""]
     lines.extend(f"- `{method} {path}`" for method, path in endpoints)

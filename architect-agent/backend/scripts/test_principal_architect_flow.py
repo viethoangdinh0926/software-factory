@@ -72,13 +72,13 @@ for step in range(1, 7):
     assert s.to_public()["can_approve"], s.to_public()
     if step == 3:
         apis = s.api_contracts
-        s = store.chat(s.session_id, "Show me all URL endpoints we agreed on")
+        s = store.chat(s.session_id, "Which domain objects does IdentityService own?")
         print("  hld3 qa", s.phase, s.design_step, flush=True)
         assert s.phase == "hld" and s.design_step == 3
         assert s.api_contracts == apis
         assert s.to_public()["can_approve"]
         last = s.messages[-1]["content"]
-        assert "GET" in last or "POST" in last or "endpoint" in last.lower(), last[:240]
+        assert "IdentityService" in last or "User" in last or "own" in last.lower(), last[:240]
         assert "Updates to this proposal" in last, last[:400]
         assert "None" in last, last[:400]
     s = store.approve(s.session_id)
@@ -102,7 +102,12 @@ print("  after market continue", s.phase, s.design_step, s.design_version, flush
 assert s.phase == "hld" and s.design_step == 4, (s.phase, s.design_step)
 assert s.design_version == version_before + 1
 assert s.design_diagram.strip()
+assert s.communication_schemes.strip()
 assert s.tradeoff_ledger.strip()
+pkg = store.final_design_markdown(s.session_id)
+assert "## Core Microservices" in pkg
+assert "## Communication Schemes" in pkg
+assert "## API Contracts" not in pkg
 
 print("LLD path…", flush=True)
 get_settings.cache_clear()

@@ -182,6 +182,7 @@ def initial_state(session_id: str, markdown: str) -> dict[str, Any]:
         "tradeoff_ledger": "",
         "scale_estimates": "",
         "api_contracts": "",
+        "communication_schemes": "",
         "fmea_notes": "",
         "resume_after_market": False,
         "stay_on_interrupt": False,

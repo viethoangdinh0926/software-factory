@@ -131,32 +131,29 @@ function ServiceInterviewArtifacts({ svc }: { svc: MicroservicePlan }) {
   if (!hasAny) {
     return (
       <p className="lede">
-        No interview results yet. Discuss this service to agree features, API type, design, and
-        stack.
+        No interview results yet. Discuss this service to agree the communication spec, features,
+        and stack.
       </p>
     );
   }
   return (
     <>
+      {svc.api_design || apiType ? (
+        <article className="artifact">
+          <h3>Communication spec</h3>
+          {apiType ? <p>Locked protocol: {apiType}</p> : null}
+          {svc.api_design ? (
+            <div className="doc">
+              <MarkdownView content={svc.api_design} />
+            </div>
+          ) : null}
+        </article>
+      ) : null}
       {svc.feature_spec ? (
         <article className="artifact">
           <h3>Features</h3>
           <div className="doc">
             <MarkdownView content={svc.feature_spec} />
-          </div>
-        </article>
-      ) : null}
-      {apiType ? (
-        <article className="artifact">
-          <h3>API type</h3>
-          <p>{apiType}</p>
-        </article>
-      ) : null}
-      {svc.api_design ? (
-        <article className="artifact">
-          <h3>API design</h3>
-          <div className="doc">
-            <MarkdownView content={svc.api_design} />
           </div>
         </article>
       ) : null}

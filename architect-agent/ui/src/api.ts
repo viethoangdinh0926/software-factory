@@ -33,6 +33,7 @@ export type DesignSession = {
   tradeoff_ledger: string;
   scale_estimates: string;
   api_contracts: string;
+  communication_schemes: string;
   fmea_notes: string;
   market_evaluation_report: string;
   market_evaluation_grade: string;

@@ -1,4 +1,4 @@
-"""Thorough feature / functionality interview before API type or stack."""
+"""Thorough feature / functionality interview after the communication spec is agreed."""
 
 from __future__ import annotations
 
@@ -65,13 +65,14 @@ def discuss_features_for(
             "You are the orchestrator feature advisor.\n"
             f"{skill_digest()}\n\n"
             f"{service_focus_system(name)}\n\n"
-            "The architect package only sketches this microservice. Before any API type, "
-            "API design, or tech stack, run a thorough interactive feature interview for "
+            "The architect package only sketches this microservice. After the communication "
+            "spec is agreed, run a thorough interactive feature interview for "
             "THIS service only.\n"
             "Cover every v1 capability: what it does, who it is for, success and failure "
             "behavior, and what is explicitly out of v1. Name peer services only as "
             "collaborators to invoke.\n"
-            "Do not propose API type, endpoints, or a tech stack in this step.\n"
+            "Do not change the locked communication protocol(s) or rewrite the communication "
+            "spec in this step. Do not propose a tech stack.\n"
             "If the sketch is thin, ask focused follow-up questions in assistant_message "
             "and set ready_for_features false until v1 is concrete.\n"
             "If search notes say LIVE_WEB_SEARCH_UNAVAILABLE, reason from your own knowledge "
@@ -89,6 +90,8 @@ def discuss_features_for(
             svc,
             pending=pending,
             extra=(
+                f"Locked protocol(s): {svc.get('api_type') or svc.get('proposed_api_type') or '(none)'}\n"
+                f"Agreed communication spec:\n{(svc.get('api_design') or '(none)')[:4000]}\n\n"
                 f"Prior agreed features for this service:\n{existing or '(none — first pass)'}\n\n"
                 f"Web search ({'live' if live else 'unavailable / stub'}):\n{search_text}"
             ),
@@ -150,6 +153,8 @@ def feature_discuss_node(state: dict[str, Any]) -> dict[str, Any]:
                 artifacts=(
                     f"Service: {name}\n"
                     f"Architect sketch:\n{svc.get('architect_api_contract') or '(none)'}\n"
+                    f"Locked protocol(s): {svc.get('api_type') or svc.get('proposed_api_type') or ''}\n"
+                    f"Communication spec:\n{(svc.get('api_design') or '')[:4000]}\n"
                     f"Current v1 features / functionality:\n{existing[:8000]}"
                 ),
                 system_extra=service_focus_system(name),

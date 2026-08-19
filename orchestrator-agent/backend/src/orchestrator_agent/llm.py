@@ -47,10 +47,12 @@ class StubChatModel(BaseChatModel):
             payload = _stub_extract(blob)
         elif "orchestrator feature advisor" in lower:
             payload = _stub_features(blob)
+        elif "orchestrator communication advisor" in lower:
+            payload = _stub_comms(blob)
         elif "orchestrator api type advisor" in lower:
-            payload = _stub_api_type(blob)
+            payload = _stub_comms(blob)
         elif "orchestrator api design proposer" in lower:
-            payload = _stub_api_design(blob)
+            payload = _stub_comms(blob)
         elif "orchestrator tech stack advisor" in lower:
             payload = _stub_tech_stack(blob)
         else:
@@ -91,10 +93,11 @@ def _stub_qa(blob: str) -> str:
             "The current v1 feature list on this step is unchanged. I can walk through "
             "each capability, who it is for, and what is out of v1 if you want a specific line."
         )
-    if "rest" in ask or "grpc" in ask or "graphql" in ask:
+    if "rest" in ask or "grpc" in ask or "graphql" in ask or "protocol" in ask or "communication" in ask:
         return (
-            "The current recommendation on this tile is taken from the architect contract "
-            "and similar services of this role. I have not changed the API type."
+            "The locked protocol on this tile comes from the architect communication "
+            "schemes. I have not changed it. REST at the edge is the current lock unless "
+            "the schemes named gRPC or pub/sub for this service."
         )
     if "stack" in ask or "python" in ask or "java" in ask:
         return "The current tech stack on this step is unchanged. I can quote language, framework, and datastore if you want a specific line."
@@ -291,70 +294,47 @@ def _stub_features(blob: str) -> dict[str, Any]:
     }
 
 
-def _stub_api_type(blob: str) -> dict[str, Any]:
-    lower = blob.lower()
-    architect_type = "REST"
-    if "grpc" in lower:
-        architect_type = "gRPC"
-    elif "graphql" in lower:
-        architect_type = "GraphQL"
-    recommendation = "keep"
-    proposed = architect_type
-    if "change to grpc" in lower or "use grpc" in lower:
-        recommendation = "change"
-        proposed = "gRPC"
-    return {
-        "architect_api_type": architect_type,
-        "recommended_api_type": proposed,
-        "recommendation": recommendation,
-        "rationale": (
-            f"Similar services typically expose {proposed}. "
-            f"Architect package reads as {architect_type}."
-        ),
-        "assistant_message": (
-            f"Architect contract looks like **{architect_type}**. Similar services usually use "
-            f"**{proposed}**. Recommendation: **{recommendation}**. Chat to change, or approve "
-            "to lock the API type."
-        ),
-        "used_live_search": False,
-    }
-
-
-def _stub_api_design(blob: str) -> dict[str, Any]:
+def _stub_comms(blob: str) -> dict[str, Any]:
     name = "Service"
-    match = re.search(r"Service name:\s*([A-Za-z0-9]+)", blob)
-    if match:
-        name = match.group(1)
+    focus = re.search(r"Focus microservice:\s*([A-Za-z0-9]+)", blob)
+    if focus:
+        name = focus.group(1)
     else:
         found = re.findall(r"\b([A-Z][A-Za-z0-9]+Service)\b", blob)
         if found:
             name = found[-1]
     slug = re.sub(r"Service$", "", name)
     slug = re.sub(r"(?<!^)(?=[A-Z])", "-", slug).lower() or "resource"
-    api_type = "REST"
-    if "grpc" in blob.lower() and "recommended_api_type" in blob.lower():
-        api_type = "gRPC"
-    if re.search(r"locked api type:\s*`?grpc", blob, re.I):
-        api_type = "gRPC"
-    design = (
-        f"## {name} API design ({api_type})\n\n"
+    lower = blob.lower()
+    protocol = "REST"
+    if "change to grpc" in lower or "use grpc" in lower:
+        protocol = "gRPC"
+    if re.search(r"currently locked protocol\(s\):\s*grpc", lower):
+        protocol = "gRPC"
+    spec = (
+        f"## {name} communication spec ({protocol})\n\n"
+        "Locked from the architect communication schemes; not an independent API-type pick.\n\n"
+        "### User / gateway ↔ this service\n"
+        f"- `{protocol}` request/response for commands and queries this service owns.\n\n"
         f"### `POST /v1/{slug}`\n"
         "Create the primary resource. Validates caller identity via Identity (or local auth), "
         "writes the system of record, and emits a domain event other services may consume.\n\n"
         f"### `GET /v1/{slug}/{{id}}`\n"
-        "Read the resource by id. Returns 404 when missing. May fan out to a catalog or metadata "
-        "peer when the record is a pointer.\n\n"
+        "Read the resource by id. Returns 404 when missing.\n\n"
         f"### `PATCH /v1/{slug}/{{id}}`\n"
-        "Partial update of mutable fields. Enforces ownership; does not silently clobber "
-        "concurrent writes (etag / version).\n\n"
-        f"### `DELETE /v1/{slug}/{{id}}`\n"
-        "Soft-delete or tombstone. Downstream consumers (search, CDN invalidation) are notified.\n"
+        "Partial update of mutable fields. Enforces ownership; etag / version on write.\n\n"
+        "### Service ↔ peers / infra\n"
+        "- Kafka pub/sub for domain events this service produces.\n"
+        "- Request/response SQL to the datastore this service owns.\n"
     )
     return {
-        "api_design": design,
+        "locked_protocol": protocol,
+        "communication_spec": spec,
+        "api_design": spec,
         "assistant_message": (
-            f"Proposed {api_type} design for **{name}** with business logic per endpoint, "
-            "including peer-service calls. Chat to refine, or approve the API design."
+            f"Locked **{protocol}** for **{name}** from the architect schemes and completed "
+            "the communication spec (request/response surface plus pub/sub events). "
+            "Chat to refine, or approve the communication spec."
         ),
     }
 

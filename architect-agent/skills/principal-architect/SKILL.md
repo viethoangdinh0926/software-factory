@@ -52,20 +52,25 @@ Execute a strict, 6-step progressive design strategy. Do not skip steps unless e
 - Identify core business entities, their attributes, and relationships (1:1, 1:N, N:M).
 - Define ownership boundaries for data models.
 
-### Step 3: Microservice Integration & API Design
-- Define business microservices grouped by bounded contexts from Step 2.
-- Define the API Contract for each service:
-  * Select protocol types (REST, GraphQL, gRPC, WebSockets) and justify the choice.
-  * Provide concrete API specifications (e.g., Endpoint Paths, HTTP Methods, Payload structures, Status codes).
+### Step 3: Core Microservices
+- Reason about bounded contexts from the Step 2 domain model.
+- Propose a set of **core microservices**. Each service owns operations on one or more domain objects.
+- Discuss with the user until you both agree. Output detailed descriptions: owned objects, operations/responsibilities, and peer collaborators.
+- Do **not** write HTTP METHOD /path catalogs, OpenAPI, or payload schemas. Pre-defined API designs would lock communication protocols too early.
 
-### Step 4: Infrastructure, Trade-offs & System Diagram
-Architect the supporting infrastructure and apply distributed systems theory.
-- Technical Component Selection: Identify API Gateways, Load Balancers, Caching tiers (Redis/Memcached), Message Brokers (Kafka/RabbitMQ), and Auth systems.
+### Step 4: Communication Schemes, Infrastructure & System Diagram
+Architect how the agreed services talk, then the supporting infrastructure.
+- Communication schemes/protocols, covering:
+  * User ↔ the system (clients, API gateways, CDN, streams).
+  * Core microservice ↔ core microservice (sync request/response vs async pub/sub vs streams).
+  * Core microservice ↔ infra (gateways, database servers, CDN, message brokers, object storage).
+  * Name styles such as REST/JSON, gRPC, WebSocket, Kafka pub/sub — **not** endpoint catalogs.
+- Technical Component Selection: API Gateways, Load Balancers, Caching tiers (Redis/Memcached), Message Brokers (Kafka/RabbitMQ), and Auth systems.
 - Storage Architecture & CAP Theorem Trade-offs:
   * Categorize data storage needs (Relational vs. NoSQL vs. Blob vs. Graph).
   * Explicitly apply the CAP/PACELC theorems. Justify choices between Consistency (CP) and Availability (AP) during network partitions.
   * Define replication strategies and data partitioning/sharding keys.
-- Diagram Generation: Produce a structured system architecture diagram mapping the data flow from client to storage.
+- Diagram Generation: Produce a structured system architecture diagram mapping the data flow from client to storage. Iterate with the user until you both agree on a final diagram.
 
 ### Step 5: Vulnerability & Edge-Case Analysis
 - Propose a "Failure Mode and Effects Analysis" (FMEA). Discuss bottlenecks, single points of failure (SPOFs), race conditions, and split-brain scenarios.
@@ -90,8 +95,8 @@ Architect the supporting infrastructure and apply distributed systems theory.
 
 ## Discussion before Approve
 Until the user Approves the current step (Phase 0, each HLD/LLD step, or market continue) — via the Approve button **or** a chat message such as `Approve`, `looks good`, or `lgtm`:
-- Answer every question from the **current** artifacts (spec, scale, APIs, diagram, FMEA, market report).
-- Be concrete: numbers, service names, `METHOD /path`, CAP choices, grades.
+- Answer every question from the **current** artifacts (spec, scale, core microservices, communication schemes, diagram, FMEA, market report).
+- Be concrete: numbers, service names, owned objects, protocols, CAP choices, grades.
 - Do not skip the question, leave chat empty, or reply with a recap that only asks them to Approve.
 - If they raised a concern or asked to change something, update this step's artifact first.
 - Before inviting Approve **again**, state **Updates to this proposal** (one bullet per change, or `None` if unchanged). Approve applies to that version, not the one from the previous ask.

@@ -32,8 +32,8 @@ from architect_agent.query_intent import (
 _STEP_TITLES = {
     1: "Requirements & capacity estimation",
     2: "Domain object modeling",
-    3: "Microservice integration & API design",
-    4: "Infrastructure, trade-offs & system diagram",
+    3: "Core microservices",
+    4: "Communication schemes, infrastructure & system diagram",
     5: "Vulnerability & edge-case analysis (FMEA)",
     6: "Session synthesis & wrap-up",
 }
@@ -64,10 +64,6 @@ _INFRA_HINTS = (
     "transcod",
 )
 
-_HTTP_ENDPOINT_RE = re.compile(
-    r"\b(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+/[A-Za-z0-9_{}\-./?*]*",
-    re.I,
-)
 _SERVICE_HEADER_RE = re.compile(
     r"(?:^|\n)\s*(?:#{1,3}\s*)?(?:Service:\s*)?([A-Z][A-Za-z0-9]+(?:Service)?)\b",
 )
@@ -139,30 +135,61 @@ def _scale_estimates_are_concrete(text: str) -> bool:
     return True
 
 
-def _api_contracts_are_concrete(text: str) -> bool:
-    """Step 3 depth bar: named services with real HTTP endpoints."""
+def _core_services_are_concrete(text: str) -> bool:
+    """Step 3 depth bar: headed services with owned objects and operations — not HTTP APIs."""
     body = (text or "").strip()
-    if len(body) < 600:
+    if len(body) < 500:
         return False
     lower = body.lower()
-    # Classic shallow summary.
     if (
         "are defined via rest" in lower
         or "ensuring clear service boundaries" in lower
-    ) and _HTTP_ENDPOINT_RE.search(body) is None:
-        return False
-    endpoints = _HTTP_ENDPOINT_RE.findall(body)
-    if len(endpoints) < 6:
+    ) and len(body) < 900:
         return False
     services = {m.group(1) for m in _SERVICE_HEADER_RE.finditer(body)}
-    services |= set(re.findall(r"\b([A-Z][A-Za-z]+Service)\b", body))
+    services |= set(re.findall(r"\b([A-Z][A-Za-z0-9]+Service)\b", body))
     if len(services) < 3:
         return False
-    # Prefer method diversity (not six GETs only).
-    methods = {m.upper() for m in endpoints}
-    if len(methods) < 2:
+    ops = len(
+        re.findall(
+            r"(?i)\b(own|owns|owned|responsib|operat|command|query|bounded context)\b",
+            body,
+        )
+    )
+    bullets = len(re.findall(r"(?m)^\s*[-*]", body))
+    return bullets >= 6 or ops >= 4
+
+
+def _comms_are_concrete(text: str) -> bool:
+    """Step 4 depth bar: named protocols across user, service, and infra planes."""
+    body = (text or "").strip().lower()
+    if len(body) < 400:
         return False
-    return True
+    styles = sum(
+        1
+        for k in (
+            "rest",
+            "grpc",
+            "graphql",
+            "websocket",
+            "kafka",
+            "pubsub",
+            "pub/sub",
+            "pub-sub",
+            "queue",
+            "stream",
+            "event",
+            "request/response",
+            "request-response",
+        )
+        if k in body
+    )
+    planes = sum(
+        1
+        for k in ("user", "client", "gateway", "service", "database", "cdn", "broker")
+        if k in body
+    )
+    return styles >= 2 and planes >= 3
 
 
 def _fmea_notes_are_concrete(text: str) -> bool:
@@ -218,8 +245,8 @@ def _fmea_notes_are_concrete(text: str) -> bool:
 _HLD_PRIMARY_FIELD = {
     1: "scale_estimates",
     2: "updated_business_spec (domain model section) + tradeoff_ledger",
-    3: "api_contracts",
-    4: "design_diagram_lines",
+    3: "api_contracts (core microservice descriptions — no HTTP APIs)",
+    4: "communication_schemes + design_diagram_lines",
     5: "fmea_notes",
     6: "design_justification",
 }
@@ -256,28 +283,40 @@ def _step_artifact_rules(step: int) -> str:
             "HLD Step 2 — write a domain model into updated_business_spec "
             "(## Domain model section) and tradeoff_ledger ownership notes:\n"
             "- Entities, key attributes, relationships (1:1 / 1:N / N:M), ownership.\n"
-            "- Do not skip to APIs. ready_to_advance=true when ≥5 entities are listed.\n"
+            "- Do not skip to microservices or APIs. ready_to_advance=true when ≥5 entities are listed.\n"
         )
     if step == 3:
         return header + (
-            "HLD Step 3 — write api_contracts NOW as headed services with HTTP specs:\n"
-            "- ≥3 services, ≥6 endpoints, mix GET and POST/PATCH.\n"
-            "- Each endpoint: METHOD /path plus brief request/response or status.\n"
+            "HLD Step 3 — write api_contracts NOW as CORE MICROSERVICE DESCRIPTIONS "
+            "(the field name is historical; this is NOT an API catalog):\n"
+            "- Reason about bounded contexts from the domain model. Group one or more "
+            "domain objects under each service that will own their operations.\n"
+            "- ≥3 headed *Service names. Each service: owned objects, operations/"
+            "responsibilities, and peer collaborators. No METHOD /path, OpenAPI, or "
+            "payload schemas — those would lock a protocol too early.\n"
             "- NEVER a one-sentence 'REST/JSON boundaries' summary.\n"
             "Example:\n"
-            "### IdentityService\\n- POST /v1/auth/login — {email,password} → token (200/401)\\n"
-            "### VideoCatalogService\\n- GET /v1/videos/{id} — metadata (200/404)\\n"
-            "- PATCH /v1/videos/{id} — title/visibility (200/403)\\n"
+            "### IdentityService\\nOwns User, Session, Credential. Operations: register, "
+            "login, refresh, profile read. Collaborators: gateway + peers for authz.\\n"
+            "### VideoCatalogService\\nOwns Video, VisibilityPolicy. Operations: register "
+            "upload, read metadata, update title/visibility.\\n"
         )
     if step == 4:
         return header + (
-            "HLD Step 4 — write design_diagram_lines NOW (12–25 nodes). Not a concept pipeline.\n"
-            "Required node kinds: Client, LoadBalancer, APIGateway, Auth/IdentityService, "
-            "each named *Service from api_contracts, Redis, Kafka, Elasticsearch, CDN, "
-            "Postgres, ObjectStorage/S3. Edges for sync vs async.\n"
-            "Use design_diagram_lines only; set design_diagram to \"\".\n"
-            "Example lines: [\"flowchart LR\", \"  Client[Web] --> LB[Load Balancer]\", "
-            "\"  LB --> GW[API Gateway]\", \"  GW --> Auth[IdentityService]\", ...]\n"
+            "HLD Step 4 — write communication_schemes AND design_diagram_lines NOW.\n"
+            "communication_schemes must cover three planes with named styles "
+            "(request/response, stream, pub/sub, etc.):\n"
+            "- User ↔ system (gateway, CDN, client protocols).\n"
+            "- Core microservice ↔ core microservice (sync vs async).\n"
+            "- Core microservice ↔ infra (API gateway, databases, CDN, brokers, object storage).\n"
+            "Do NOT write HTTP METHOD /path catalogs; name the scheme/protocol only.\n"
+            "Diagram: 12–25 nodes, not a concept pipeline. Required kinds: Client, "
+            "LoadBalancer, APIGateway, Auth/IdentityService, each named *Service from "
+            "api_contracts, Redis, Kafka, Elasticsearch, CDN, Postgres, ObjectStorage/S3. "
+            "Edges for sync vs async. Use design_diagram_lines only; set design_diagram to \"\".\n"
+            "Example comms snippet:\n"
+            "### User ↔ system\\nHTTPS request/response via API Gateway; playback via CDN HLS stream.\\n"
+            "### Service ↔ service\\nSync gRPC for authz; Kafka pub/sub for VideoPublished.\\n"
         )
     if step == 5:
         return header + (
@@ -310,6 +349,7 @@ def _apply_depth_gates(
     result: dict[str, Any],
     scale: str,
     apis: str,
+    comms: str,
     fmea: str,
     diagram: str,
 ) -> tuple[bool, dict[str, Any]]:
@@ -326,25 +366,42 @@ def _apply_depth_gates(
                 "bandwidth/egress, and latency/availability targets before we advance."
             )
     elif step == 3:
-        if _api_contracts_are_concrete(apis):
+        if _core_services_are_concrete(apis):
             ready_advance = True
         else:
             ready_advance = False
             hint = (
-                "API contracts are still too brief. Expand `api_contracts` with headed services "
-                "and concrete HTTP method+path endpoints (plus short payload/status notes) "
-                "before we advance."
+                "Core microservices are still too brief. Expand `api_contracts` with headed "
+                "*Service descriptions that list owned domain objects and operations "
+                "(not HTTP METHOD /path catalogs) before we advance."
             )
     elif step == 4:
-        if _diagram_is_concrete(diagram, apis):
+        diagram_ok = _diagram_is_concrete(diagram, apis)
+        comms_ok = _comms_are_concrete(comms)
+        if diagram_ok and comms_ok:
             ready_advance = True
         else:
             ready_advance = False
-            hint = (
-                "The system diagram is still too high-level. Expand it to show "
-                "API gateway/load balancer, auth, each business microservice, "
-                "caches, brokers, CDN, and distinct storage systems before we advance."
-            )
+            if not comms_ok and not diagram_ok:
+                hint = (
+                    "Communication schemes and the system diagram are still too high-level. "
+                    "Name protocols for user↔system, service↔service, and service↔infra "
+                    "(request/response, stream, pub/sub), and expand the diagram to show "
+                    "API gateway/load balancer, auth, each business microservice, caches, "
+                    "brokers, CDN, and distinct storage systems before we advance."
+                )
+            elif not comms_ok:
+                hint = (
+                    "Communication schemes are still too brief. Expand `communication_schemes` "
+                    "to name protocols for user↔system, service↔service, and service↔infra "
+                    "(request/response, stream, pub/sub) before we advance."
+                )
+            else:
+                hint = (
+                    "The system diagram is still too high-level. Expand it to show "
+                    "API gateway/load balancer, auth, each business microservice, "
+                    "caches, brokers, CDN, and distinct storage systems before we advance."
+                )
     elif step == 5:
         if _fmea_notes_are_concrete(fmea):
             ready_advance = True
@@ -426,6 +483,7 @@ def hld_step_node(state: DesignGraphState) -> dict[str, Any]:
             '  "tradeoff_ledger": string,\n'
             '  "scale_estimates": string,\n'
             '  "api_contracts": string,\n'
+            '  "communication_schemes": string,\n'
             '  "fmea_notes": string,\n'
             '  "design_diagram_lines": [string, ...],\n'
             '  "design_diagram": string,\n'
@@ -442,7 +500,8 @@ def hld_step_node(state: DesignGraphState) -> dict[str, Any]:
             f"Living specification:\n\n{business_spec}\n\n"
             f"Trade-off ledger:\n{state.get('tradeoff_ledger') or '(empty)'}\n\n"
             f"Scale estimates:\n{state.get('scale_estimates') or '(empty)'}\n\n"
-            f"API contracts:\n{state.get('api_contracts') or '(empty)'}\n\n"
+            f"Core microservices:\n{state.get('api_contracts') or '(empty)'}\n\n"
+            f"Communication schemes:\n{state.get('communication_schemes') or '(empty)'}\n\n"
             f"FMEA notes:\n{state.get('fmea_notes') or '(empty)'}\n\n"
             f"Current diagram:\n{state.get('design_diagram') or '(none)'}\n\n"
             f"Current justification:\n{state.get('design_justification') or '(none)'}\n\n"
@@ -454,6 +513,7 @@ def hld_step_node(state: DesignGraphState) -> dict[str, Any]:
     )
 
     prior_apis = str(state.get("api_contracts") or "")
+    prior_comms = str(state.get("communication_schemes") or "")
     prior_scale = str(state.get("scale_estimates") or "")
     prior_fmea = str(state.get("fmea_notes") or "")
     prior_ledger = str(state.get("tradeoff_ledger") or "")
@@ -461,6 +521,7 @@ def hld_step_node(state: DesignGraphState) -> dict[str, Any]:
 
     scale = _prefer_richer_text(str(result.get("scale_estimates") or ""), prior_scale)
     apis = _prefer_richer_text(str(result.get("api_contracts") or ""), prior_apis)
+    comms = _prefer_richer_text(str(result.get("communication_schemes") or ""), prior_comms)
     fmea = _prefer_richer_text(str(result.get("fmea_notes") or ""), prior_fmea)
     ledger = _prefer_richer_text(str(result.get("tradeoff_ledger") or ""), prior_ledger)
 
@@ -484,6 +545,7 @@ def hld_step_node(state: DesignGraphState) -> dict[str, Any]:
         result=result,
         scale=scale,
         apis=apis,
+        comms=comms,
         fmea=fmea,
         diagram=diagram,
     )
@@ -493,6 +555,7 @@ def hld_step_node(state: DesignGraphState) -> dict[str, Any]:
         changed = (
             scale != prior_scale
             or apis != prior_apis
+            or comms != prior_comms
             or fmea != prior_fmea
             or ledger != prior_ledger
             or diagram != prior_diagram
@@ -508,6 +571,7 @@ def hld_step_node(state: DesignGraphState) -> dict[str, Any]:
         "tradeoff_ledger": ledger,
         "scale_estimates": scale,
         "api_contracts": apis,
+        "communication_schemes": comms,
         "fmea_notes": fmea,
         "design_diagram": diagram,
         "design_justification": justification,
@@ -539,6 +603,7 @@ def hld_wait_node(state: DesignGraphState) -> dict[str, Any]:
             "tradeoff_ledger": state.get("tradeoff_ledger") or "",
             "scale_estimates": state.get("scale_estimates") or "",
             "api_contracts": state.get("api_contracts") or "",
+            "communication_schemes": state.get("communication_schemes") or "",
             "fmea_notes": state.get("fmea_notes") or "",
             "design_diagram": state.get("design_diagram") or "",
             "design_justification": state.get("design_justification") or "",

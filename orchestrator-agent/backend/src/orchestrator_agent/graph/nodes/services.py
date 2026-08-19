@@ -138,7 +138,7 @@ def extract_services_node(state: dict[str, Any]) -> dict[str, Any]:
     if heuristic:
         extracted = {
             "services": heuristic,
-            "assistant_message": "Extracted core microservices from API Contracts headings.",
+            "assistant_message": "Extracted core microservices from Core Microservices headings.",
         }
     else:
         extracted = invoke_json(
@@ -146,7 +146,8 @@ def extract_services_node(state: dict[str, Any]) -> dict[str, Any]:
                 "You are the orchestrator service extractor.\n"
                 f"{skill_digest()}\n\n"
                 "Extract the core microservices from the architect design package "
-                "(API contracts, diagram, spec). Ignore infra-only boxes (CDN, LB, Kafka) "
+                "(core microservice descriptions, communication schemes, diagram, spec). "
+                "Ignore infra-only boxes (CDN, LB, Kafka) "
                 "unless they are product services.\n"
                 "Respond ONLY with JSON:\n"
                 "{\n"
@@ -221,12 +222,14 @@ def extract_services_node(state: dict[str, Any]) -> dict[str, Any]:
 
 
 def prime_all_services_node(state: dict[str, Any]) -> dict[str, Any]:
-    """Prime every live microservice with a feature interview before API type."""
-    from orchestrator_agent.graph.nodes.features import discuss_features_for
+    """Prime every live microservice with a communication spec from architect protocols."""
+    from orchestrator_agent.graph.nodes.api import draft_comms_for
+    from orchestrator_agent.graph.nodes.common import comms_are_concrete
 
     skip = {
         "suspended",
         "sent",
+        "awaiting_comms",
         "discussing_features",
         "awaiting_features",
         "awaiting_api_type",
@@ -240,26 +243,37 @@ def prime_all_services_node(state: dict[str, Any]) -> dict[str, Any]:
             continue
         name = (svc.get("names") or ["service"])[-1]
         try:
-            updated = discuss_features_for(state, svc, pending="")
+            updated = draft_comms_for(state, svc, pending="")
         except Exception:
-            logger.exception("Feature discussion failed for %s; using a fallback sketch", name)
-            from orchestrator_agent.graph.nodes.features import _fallback_feature_spec
-
+            logger.exception("Communication spec failed for %s; using a fallback sketch", name)
+            protocol = str(svc.get("proposed_api_type") or svc.get("api_type") or "REST")
             updated = dict(svc)
-            updated["feature_spec"] = updated.get("feature_spec") or _fallback_feature_spec(
-                name, str(svc.get("architect_api_contract") or "")
+            updated["proposed_api_type"] = protocol
+            updated["api_type"] = protocol
+            updated["api_design"] = updated.get("api_design") or (
+                f"## {name} communication spec ({protocol})\n\n"
+                "- Honor the architect communication schemes for this service.\n"
+                "- Request/response for queries and commands this service owns.\n"
+                "- Pub/sub events when notifying peers of state changes.\n"
+                "- Do not invent a competing protocol that contradicts the architect package.\n"
             )
-            updated["status"] = "awaiting_features"
+            if not comms_are_concrete(updated["api_design"]):
+                updated["api_design"] += (
+                    "\n### Assumed REST surface\n"
+                    f"- `POST /v1/{name.lower()}` create\n"
+                    f"- `GET /v1/{name.lower()}/{{id}}` read\n"
+                    f"- `PATCH /v1/{name.lower()}/{{id}}` update\n"
+                )
+            updated["status"] = "awaiting_comms"
             msgs = list(updated.get("messages") or [])
             msgs.append(
                 {
                     "role": "assistant",
                     "content": (
-                        f"Could not parse a feature list from the model; starting from a v1 "
-                        f"sketch for **{name}**. Walk through each capability, then approve "
-                        "features when it is complete."
+                        f"Could not parse a communication spec from the model; starting from "
+                        f"the architect schemes for **{name}**. Complete the spec, then approve."
                     ),
-                    "node": "features",
+                    "node": "comms",
                 }
             )
             updated["messages"] = msgs
@@ -268,8 +282,8 @@ def prime_all_services_node(state: dict[str, Any]) -> dict[str, Any]:
     names = ", ".join((s.get("names") or ["service"])[-1] for s in live) or "none"
     notice = (
         f"Opened planning tiles for {len(live)} microservice(s) at once: {names}. "
-        "Discuss every feature for a service on its tile before API type, API design, or stack. "
-        "Each tile can hand off independently once that interview is complete."
+        "Complete each service's communication spec from the architect protocols, then "
+        "interview features, then stack. Each tile can hand off independently."
     )
     return {
         "services": out,

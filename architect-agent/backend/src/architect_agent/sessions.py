@@ -72,6 +72,7 @@ class DesignSession:
     tradeoff_ledger: str = ""
     scale_estimates: str = ""
     api_contracts: str = ""
+    communication_schemes: str = ""
     fmea_notes: str = ""
     ready_for_design: bool = False
     ready_to_advance: bool = False
@@ -125,6 +126,7 @@ class DesignSession:
             "tradeoff_ledger": self.tradeoff_ledger,
             "scale_estimates": self.scale_estimates,
             "api_contracts": self.api_contracts,
+            "communication_schemes": self.communication_schemes,
             "fmea_notes": self.fmea_notes,
             "market_evaluation_report": self.market_evaluation_report,
             "market_evaluation_grade": self.market_evaluation_grade,
@@ -156,6 +158,7 @@ def _session_from_disk(data: dict[str, Any]) -> DesignSession:
         tradeoff_ledger=str(data.get("tradeoff_ledger") or ""),
         scale_estimates=str(data.get("scale_estimates") or ""),
         api_contracts=str(data.get("api_contracts") or ""),
+        communication_schemes=str(data.get("communication_schemes") or ""),
         fmea_notes=str(data.get("fmea_notes") or ""),
         ready_for_design=bool(data.get("ready_for_design") or data.get("ready_to_advance")),
         ready_to_advance=bool(data.get("ready_to_advance") or data.get("ready_for_design")),
@@ -271,6 +274,7 @@ class SessionStore:
             "tradeoff_ledger": session.tradeoff_ledger,
             "scale_estimates": session.scale_estimates,
             "api_contracts": session.api_contracts,
+            "communication_schemes": session.communication_schemes,
             "fmea_notes": session.fmea_notes,
             "resume_after_market": False,
             "stay_on_interrupt": False,
@@ -354,6 +358,8 @@ class SessionStore:
             session.scale_estimates = str(values.get("scale_estimates") or "")
         if values.get("api_contracts") is not None:
             session.api_contracts = str(values.get("api_contracts") or "")
+        if values.get("communication_schemes") is not None:
+            session.communication_schemes = str(values.get("communication_schemes") or "")
         if values.get("fmea_notes") is not None:
             session.fmea_notes = str(values.get("fmea_notes") or "")
         if values.get("market_evaluation_report"):
@@ -426,6 +432,8 @@ class SessionStore:
                 session.scale_estimates = str(payload.get("scale_estimates") or "")
             if payload.get("api_contracts") is not None:
                 session.api_contracts = str(payload.get("api_contracts") or "")
+            if payload.get("communication_schemes") is not None:
+                session.communication_schemes = str(payload.get("communication_schemes") or "")
             if payload.get("fmea_notes") is not None:
                 session.fmea_notes = str(payload.get("fmea_notes") or "")
             if payload.get("market_evaluation_report"):
@@ -591,7 +599,11 @@ class SessionStore:
         if session.scale_estimates.strip():
             parts.extend(["## Scale Estimates\n\n", session.scale_estimates.strip(), "\n\n---\n"])
         if session.api_contracts.strip():
-            parts.extend(["## API Contracts\n\n", session.api_contracts.strip(), "\n\n---\n"])
+            parts.extend(["## Core Microservices\n\n", session.api_contracts.strip(), "\n\n---\n"])
+        if session.communication_schemes.strip():
+            parts.extend(
+                ["## Communication Schemes\n\n", session.communication_schemes.strip(), "\n\n---\n"]
+            )
         if session.fmea_notes.strip():
             parts.extend(["## FMEA Notes\n\n", session.fmea_notes.strip(), "\n\n---\n"])
         parts.extend(
