@@ -233,7 +233,7 @@ export function SessionPage() {
   const showMarketReport = Boolean(session.market_evaluation_report?.trim());
   const showLedger = Boolean(session.tradeoff_ledger?.trim());
   const showScale = Boolean(session.scale_estimates?.trim());
-  const showApis = Boolean(session.api_contracts?.trim());
+  const showServices = Boolean(session.api_contracts?.trim());
   const showComms = Boolean(session.communication_schemes?.trim());
   const showFmea = Boolean(session.fmea_notes?.trim());
 
@@ -353,7 +353,9 @@ export function SessionPage() {
         <section className="panel chat-panel">
           <div className="panel-head">
             <h2>{nodeTitle}</h2>
-            <span className="panel-kicker">Conversation</span>
+            <span className="panel-kicker">
+              {session.design_step_title?.trim() || "Conversation"}
+            </span>
           </div>
           <div className="messages" aria-live="polite">
             {session.messages.map((m, i) => (
@@ -436,7 +438,7 @@ export function SessionPage() {
               <MarkdownView content={session.scale_estimates} className="doc" />
             </div>
           ) : null}
-          {showApis ? (
+          {showServices ? (
             <div className="artifact">
               <div className="panel-head">
                 <h2>Core microservices</h2>

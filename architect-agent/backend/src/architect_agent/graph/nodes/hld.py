@@ -14,6 +14,7 @@ from architect_agent.context_budget import (
     maybe_compact_design_justification,
 )
 from architect_agent.graph.nodes.common import (
+    HLD_STEP_TITLES,
     answer_before_approve,
     approve_label,
     invoke_json,
@@ -29,14 +30,7 @@ from architect_agent.query_intent import (
     with_resolution_close,
 )
 
-_STEP_TITLES = {
-    1: "Requirements & capacity estimation",
-    2: "Domain object modeling",
-    3: "Core microservices",
-    4: "Communication schemes, infrastructure & system diagram",
-    5: "Vulnerability & edge-case analysis (FMEA)",
-    6: "Session synthesis & wrap-up",
-}
+_STEP_TITLES = HLD_STEP_TITLES
 
 _INFRA_HINTS = (
     "gateway",
@@ -245,7 +239,7 @@ def _fmea_notes_are_concrete(text: str) -> bool:
 _HLD_PRIMARY_FIELD = {
     1: "scale_estimates",
     2: "updated_business_spec (domain model section) + tradeoff_ledger",
-    3: "api_contracts (core microservice descriptions — no HTTP APIs)",
+    3: "core_microservices",
     4: "communication_schemes + design_diagram_lines",
     5: "fmea_notes",
     6: "design_justification",
@@ -283,17 +277,16 @@ def _step_artifact_rules(step: int) -> str:
             "HLD Step 2 — write a domain model into updated_business_spec "
             "(## Domain model section) and tradeoff_ledger ownership notes:\n"
             "- Entities, key attributes, relationships (1:1 / 1:N / N:M), ownership.\n"
-            "- Do not skip to microservices or APIs. ready_to_advance=true when ≥5 entities are listed.\n"
+            "- Do not skip to microservices. ready_to_advance=true when ≥5 entities are listed.\n"
         )
     if step == 3:
         return header + (
-            "HLD Step 3 — write api_contracts NOW as CORE MICROSERVICE DESCRIPTIONS "
-            "(the field name is historical; this is NOT an API catalog):\n"
+            "HLD Step 3 — write core_microservices NOW as headed service descriptions:\n"
             "- Reason about bounded contexts from the domain model. Group one or more "
             "domain objects under each service that will own their operations.\n"
             "- ≥3 headed *Service names. Each service: owned objects, operations/"
             "responsibilities, and peer collaborators. No METHOD /path, OpenAPI, or "
-            "payload schemas — those would lock a protocol too early.\n"
+            "payload schemas — those would lock a protocol too early. This is NOT an API step.\n"
             "- NEVER a one-sentence 'REST/JSON boundaries' summary.\n"
             "Example:\n"
             "### IdentityService\\nOwns User, Session, Credential. Operations: register, "
@@ -371,7 +364,7 @@ def _apply_depth_gates(
         else:
             ready_advance = False
             hint = (
-                "Core microservices are still too brief. Expand `api_contracts` with headed "
+                "Core microservices are still too brief. Expand `core_microservices` with headed "
                 "*Service descriptions that list owned domain objects and operations "
                 "(not HTTP METHOD /path catalogs) before we advance."
             )
@@ -482,7 +475,7 @@ def hld_step_node(state: DesignGraphState) -> dict[str, Any]:
             '  "updated_business_spec": string,\n'
             '  "tradeoff_ledger": string,\n'
             '  "scale_estimates": string,\n'
-            '  "api_contracts": string,\n'
+            '  "core_microservices": string,\n'
             '  "communication_schemes": string,\n'
             '  "fmea_notes": string,\n'
             '  "design_diagram_lines": [string, ...],\n'
@@ -520,7 +513,10 @@ def hld_step_node(state: DesignGraphState) -> dict[str, Any]:
     prior_diagram = str(state.get("design_diagram") or "")
 
     scale = _prefer_richer_text(str(result.get("scale_estimates") or ""), prior_scale)
-    apis = _prefer_richer_text(str(result.get("api_contracts") or ""), prior_apis)
+    apis = _prefer_richer_text(
+        str(result.get("core_microservices") or result.get("api_contracts") or ""),
+        prior_apis,
+    )
     comms = _prefer_richer_text(str(result.get("communication_schemes") or ""), prior_comms)
     fmea = _prefer_richer_text(str(result.get("fmea_notes") or ""), prior_fmea)
     ledger = _prefer_richer_text(str(result.get("tradeoff_ledger") or ""), prior_ledger)

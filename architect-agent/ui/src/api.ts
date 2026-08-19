@@ -18,6 +18,7 @@ export type DesignSession = {
   phase: string;
   design_track: string;
   design_step: number;
+  design_step_title: string;
   ready_for_design: boolean;
   ready_to_advance: boolean;
   design_ready_to_approve: boolean;
@@ -124,5 +125,6 @@ export function trackStepLabel(session: DesignSession): string | null {
   }
   const step = Math.max(0, session.design_step || 0);
   if (step <= 0) return track;
-  return `${track} · Step ${step}/${max}`;
+  const title = (session.design_step_title || "").trim();
+  return title ? `${track} · ${step}/${max} ${title}` : `${track} · Step ${step}/${max}`;
 }

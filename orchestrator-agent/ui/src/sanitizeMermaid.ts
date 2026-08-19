@@ -61,7 +61,7 @@ export function sanitizeMermaidSource(raw: string): string {
 function needsQuotes(label: string): boolean {
   if (!label) return false;
   if (label.startsWith('"') && label.endsWith('"')) return false;
-  return /[()[\]{}|/\\@#%&=+]/.test(label);
+  return /[()[\]{}|/\\@#%&=+$]/.test(label);
 }
 
 function escapeQuotes(label: string): string {

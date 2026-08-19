@@ -226,6 +226,33 @@ APPROVE_LABELS = {
     ("market_research", 0): "Continue after market evaluation",
 }
 
+HLD_STEP_TITLES = {
+    1: "Requirements & capacity estimation",
+    2: "Domain object modeling",
+    3: "Core microservices",
+    4: "Communication schemes, infrastructure & system diagram",
+    5: "Vulnerability & edge-case analysis (FMEA)",
+    6: "Session synthesis & wrap-up",
+}
+
+LLD_STEP_TITLES = {
+    1: "Information gathering",
+    2: "Architectural blueprint",
+    3: "Verification",
+}
+
+
+def design_step_title(phase: str, track: str, step: int) -> str:
+    if phase == "market_research":
+        return "Market evaluation"
+    if phase == "phase0" or track == "unset":
+        return "Scope classification"
+    if track == "lld":
+        return LLD_STEP_TITLES.get(step, "Low-level design")
+    if track == "hld":
+        return HLD_STEP_TITLES.get(step, "High-level design")
+    return ""
+
 
 def approve_label(phase: str, track: str, step: int, *, design_ready: bool = False) -> str:
     if phase == "market_research":

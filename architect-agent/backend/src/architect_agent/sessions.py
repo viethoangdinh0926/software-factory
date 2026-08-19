@@ -13,7 +13,7 @@ from langgraph.types import Command
 from architect_agent.a2a.orchestrator import HandoffResult, retry_design_package, send_design_package
 from architect_agent.config import get_settings
 from architect_agent.graph import build_graph, initial_state
-from architect_agent.graph.nodes.common import approve_label
+from architect_agent.graph.nodes.common import approve_label, design_step_title
 from architect_agent.mermaid_sanitize import sanitize_mermaid
 from architect_agent.query_intent import is_step_approval_message
 
@@ -111,6 +111,7 @@ class DesignSession:
             "phase": self.phase,
             "design_track": self.design_track,
             "design_step": self.design_step,
+            "design_step_title": design_step_title(self.phase, self.design_track, self.design_step),
             "ready_for_design": self.ready_for_design,
             "ready_to_advance": self.ready_to_advance,
             "design_ready_to_approve": self.design_ready_to_approve,

@@ -285,6 +285,30 @@ def _stub_hld(blob: str) -> dict[str, Any]:
     feedback = _latest_feedback(blob)
     design = _stub_design_proposal(blob, feedback)
     diagram = _stub_hld_architecture_diagram(feedback) if step >= 4 else ""
+    core_services = (
+        "### IdentityService\n"
+        "Owns User, Session, Credential. Bounded context: authentication and profile identity.\n"
+        "- Operations: register, login, refresh session, read/update profile, revoke credentials.\n"
+        "- Collaborators: called by the API gateway and peer services for authz checks.\n"
+        "### ChannelService\n"
+        "Owns Channel, ChannelMembership.\n"
+        "- Operations: create channel, read metadata, update branding, manage memberships.\n"
+        "- Collaborators: invoked by VideoCatalogService when attaching a video to a channel.\n"
+        "### VideoCatalogService\n"
+        "Owns Video, VideoMetadata, VisibilityPolicy.\n"
+        "- Operations: register a video, read catalog metadata, update title/visibility, list by channel.\n"
+        "- Collaborators: consumes upload-complete events; called by PlaybackService for authz metadata.\n"
+        "### UploadService\n"
+        "Owns UploadSession, UploadPart.\n"
+        "- Operations: initiate multipart upload, complete parts, abort upload.\n"
+        "- Collaborators: notifies VideoCatalogService when an original is stored.\n"
+        "### PlaybackService\n"
+        "Owns PlaybackSession (ephemeral), ManifestGrant.\n"
+        "- Operations: authorize playback, issue time-limited CDN grants, record start-of-play.\n"
+        "- Collaborators: reads VideoCatalogService metadata; media bytes live on CDN/object storage.\n"
+        if step >= 3
+        else ""
+    )
     return {
         "updated_business_spec": _rich_spec(blob),
         "tradeoff_ledger": (
@@ -305,30 +329,8 @@ def _stub_hld(blob: str) -> dict[str, Any]:
             if step >= 1
             else ""
         ),
-        "api_contracts": (
-            "### IdentityService\n"
-            "Owns User, Session, Credential. Bounded context: authentication and profile identity.\n"
-            "- Operations: register, login, refresh session, read/update profile, revoke credentials.\n"
-            "- Collaborators: called by the API gateway and peer services for authz checks.\n"
-            "### ChannelService\n"
-            "Owns Channel, ChannelMembership.\n"
-            "- Operations: create channel, read metadata, update branding, manage memberships.\n"
-            "- Collaborators: invoked by VideoCatalogService when attaching a video to a channel.\n"
-            "### VideoCatalogService\n"
-            "Owns Video, VideoMetadata, VisibilityPolicy.\n"
-            "- Operations: register a video, read catalog metadata, update title/visibility, list by channel.\n"
-            "- Collaborators: consumes upload-complete events; called by PlaybackService for authz metadata.\n"
-            "### UploadService\n"
-            "Owns UploadSession, UploadPart.\n"
-            "- Operations: initiate multipart upload, complete parts, abort upload.\n"
-            "- Collaborators: notifies VideoCatalogService when an original is stored.\n"
-            "### PlaybackService\n"
-            "Owns PlaybackSession (ephemeral), ManifestGrant.\n"
-            "- Operations: authorize playback, issue time-limited CDN grants, record start-of-play.\n"
-            "- Collaborators: reads VideoCatalogService metadata; media bytes live on CDN/object storage.\n"
-            if step >= 3
-            else ""
-        ),
+        "core_microservices": core_services,
+        "api_contracts": core_services,
         "communication_schemes": (
             "### User ↔ system\n"
             "- Browser/mobile clients use HTTPS request/response through the API Gateway (REST/JSON at the edge).\n"

@@ -13,6 +13,7 @@ from architect_agent.context_budget import (
     maybe_compact_design_justification,
 )
 from architect_agent.graph.nodes.common import (
+    LLD_STEP_TITLES,
     answer_before_approve,
     approve_label,
     invoke_json,
@@ -28,11 +29,7 @@ from architect_agent.query_intent import (
     with_resolution_close,
 )
 
-_STEP_TITLES = {
-    1: "Information gathering",
-    2: "Architectural blueprint",
-    3: "Verification",
-}
+_STEP_TITLES = LLD_STEP_TITLES
 
 
 def lld_step_node(state: DesignGraphState) -> dict[str, Any]:

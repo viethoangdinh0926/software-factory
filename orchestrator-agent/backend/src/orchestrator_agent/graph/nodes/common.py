@@ -20,7 +20,8 @@ logger = logging.getLogger(__name__)
 _RETRY_HINT = (
     "CRITICAL FORMAT ERROR. Your previous reply was NOT valid JSON.\n"
     "Respond with ONE JSON object. FIRST non-whitespace character must be `{`.\n"
-    "Keep assistant_message's full elaborated justification; escape its newlines as \\n."
+    "Keep assistant_message's full elaborated justification; escape its newlines as \\n. "
+    "Do not use LaTeX ($\\text{...}$ / $\\approx$); write plain text or unicode."
 )
 
 # Appended to skill_digest() so every orchestrator prompt inherits the same depth bar:

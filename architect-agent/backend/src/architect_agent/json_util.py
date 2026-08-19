@@ -132,6 +132,7 @@ def recover_architecture_payload_from_prose(text: str) -> dict[str, Any] | None:
             "updated_business_spec": "",
             "tradeoff_ledger": "",
             "scale_estimates": "",
+            "core_microservices": "",
             "api_contracts": "",
             "communication_schemes": "",
             "fmea_notes": "",
@@ -153,6 +154,7 @@ def recover_architecture_payload_from_prose(text: str) -> dict[str, Any] | None:
             "updated_business_spec": "",
             "tradeoff_ledger": "",
             "scale_estimates": "",
+            "core_microservices": "",
             "api_contracts": "",
             "communication_schemes": "",
             "fmea_notes": "",
@@ -278,7 +280,12 @@ def _candidate_blobs(cleaned: str) -> list[str]:
     out: list[str] = []
     seen: set[str] = set()
     for blob in blobs:
-        for variant in (blob, _escape_raw_controls_in_strings(blob)):
+        for variant in (
+            blob,
+            _escape_raw_controls_in_strings(blob),
+            _escape_invalid_backslashes_in_strings(blob),
+            _escape_invalid_backslashes_in_strings(_escape_raw_controls_in_strings(blob)),
+        ):
             if variant and variant not in seen:
                 seen.add(variant)
                 out.append(variant)
@@ -423,4 +430,60 @@ def _escape_raw_controls_in_strings(text: str) -> str:
         out.append(ch)
         if ch == '"':
             in_string = True
+    return "".join(out)
+
+
+def _escape_invalid_backslashes_in_strings(text: str) -> str:
+    """Keep LaTeX like ``\\text`` / ``\\approx`` as literals instead of JSON escapes.
+
+    Models often write ``$\\text{DAU}$`` inside JSON strings. ``\\t`` is a tab and
+    ``\\a`` is invalid JSON, so parse either corrupts or fails.
+    """
+    out: list[str] = []
+    in_string = False
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if not in_string:
+            out.append(ch)
+            if ch == '"':
+                in_string = True
+            i += 1
+            continue
+        if ch == "\\":
+            if i + 1 >= n:
+                out.append("\\\\")
+                i += 1
+                continue
+            nxt = text[i + 1]
+            if nxt == "u" and i + 5 < n and all(
+                text[i + 2 + k] in "0123456789abcdefABCDEF" for k in range(4)
+            ):
+                out.append(text[i : i + 6])
+                i += 6
+                continue
+            if nxt in '"\\/':
+                out.append(text[i : i + 2])
+                i += 2
+                continue
+            if nxt in "bfnrt":
+                j = i + 2
+                while j < n and text[j].isalpha():
+                    j += 1
+                if j > i + 2:
+                    out.append("\\\\")
+                    out.append(text[i + 1 : j])
+                    i = j
+                    continue
+                out.append(text[i : i + 2])
+                i += 2
+                continue
+            out.append("\\\\")
+            i += 1
+            continue
+        if ch == '"':
+            in_string = False
+        out.append(ch)
+        i += 1
     return "".join(out)

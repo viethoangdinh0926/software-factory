@@ -23,6 +23,7 @@ from architect_agent.query_intent import (
     is_revision_request,
     is_step_approval_message,
 )
+from architect_agent.json_util import parse_llm_json_object
 from architect_agent.sessions import SessionStore, _legacy_map
 
 get_settings.cache_clear()
@@ -40,6 +41,12 @@ assert is_step_approval_message("Looks good")
 assert is_step_approval_message("lgtm")
 assert not is_step_approval_message("Why should I approve REST?")
 assert not is_step_approval_message("Looks good, add a health check")
+
+latex_json = r'{"assistant_message": "DAU $\text{assumed}$ is $\approx$ 5k"}'
+latex_msg = parse_llm_json_object(latex_json)["assistant_message"]
+assert "\t" not in latex_msg, repr(latex_msg)
+assert r"\text" in latex_msg
+assert r"\approx" in latex_msg
 
 print("HLD path…", flush=True)
 store = SessionStore()
@@ -71,6 +78,7 @@ for step in range(1, 7):
     assert s.phase == "hld" and s.design_step == step, (s.phase, s.design_step)
     assert s.to_public()["can_approve"], s.to_public()
     if step == 3:
+        assert s.to_public()["design_step_title"] == "Core microservices"
         apis = s.api_contracts
         s = store.chat(s.session_id, "Which domain objects does IdentityService own?")
         print("  hld3 qa", s.phase, s.design_step, flush=True)
