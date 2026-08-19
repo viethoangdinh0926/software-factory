@@ -19,6 +19,7 @@ from architect_agent.query_intent import (
     is_advance_request,
     is_informational_query,
     promote_chat_to_approve,
+    with_next_prompt,
     with_resolution_close,
 )
 from architect_agent.web_search import perform_web_search
@@ -509,7 +510,12 @@ def phase0_wait_node(state: DesignGraphState) -> dict[str, Any]:
     track = state.get("design_track") or "unset"
     step = int(state.get("design_step") or 0)
     ready = bool(state.get("ready_to_advance"))
-    assistant = state.get("pending_assistant_message") or ""
+    label = approve_label("phase0", track, step)
+    assistant = with_next_prompt(
+        state.get("pending_assistant_message") or "",
+        approve_label=label,
+        can_approve=ready,
+    )
 
     resume = interrupt(
         {
@@ -522,7 +528,7 @@ def phase0_wait_node(state: DesignGraphState) -> dict[str, Any]:
             "ready_to_advance": ready,
             "can_approve": ready,
             "approve_kind": "advance",
-            "approve_label": approve_label("phase0", track, step),
+            "approve_label": label,
         }
     )
 

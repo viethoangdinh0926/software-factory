@@ -5,7 +5,9 @@ from typing import Any
 
 from orchestrator_agent.graph.nodes.common import (
     active_service,
+    answer_current_artifacts,
     close_after_feedback,
+    close_user_message,
     comms_are_concrete,
     invoke_json,
     pick_assistant_message,
@@ -13,7 +15,6 @@ from orchestrator_agent.graph.nodes.common import (
     service_focus_system,
     service_focus_user_block,
     skill_digest,
-    answer_current_artifacts,
 )
 from orchestrator_agent.json_util import recover_markdown_field_from_prose
 from orchestrator_agent.package_parse import (
@@ -167,6 +168,7 @@ def draft_comms_for(
     updated["api_type"] = protocol
     updated["api_design"] = spec
     updated["status"] = "awaiting_comms"
+    assistant = close_user_message(assistant, svc=updated)
     svc_msgs = list(updated.get("messages") or [])
     svc_msgs.append({"role": "assistant", "content": assistant, "node": "comms"})
     updated["messages"] = svc_msgs
@@ -211,6 +213,7 @@ def _finish_service_turn(
         updated["api_design"] = api_design
     if status is not None:
         updated["status"] = status
+    assistant = close_user_message(assistant, svc=updated)
     svc_msgs = list(updated.get("messages") or [])
     svc_msgs.append({"role": "assistant", "content": assistant, "node": node})
     updated["messages"] = svc_msgs

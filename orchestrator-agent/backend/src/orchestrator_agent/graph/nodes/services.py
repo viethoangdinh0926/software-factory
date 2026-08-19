@@ -5,7 +5,13 @@ import re
 import uuid
 from typing import Any
 
-from orchestrator_agent.graph.nodes.common import empty_service, invoke_json, replace_service, skill_digest
+from orchestrator_agent.graph.nodes.common import (
+    close_user_message,
+    empty_service,
+    invoke_json,
+    replace_service,
+    skill_digest,
+)
 from orchestrator_agent.graph.nodes.ingest import reset_planning_fields
 from orchestrator_agent.json_util import recover_extract_from_prose
 from orchestrator_agent.package_parse import extract_core_services
@@ -265,14 +271,16 @@ def prime_all_services_node(state: dict[str, Any]) -> dict[str, Any]:
                     f"- `PATCH /v1/{name.lower()}/{{id}}` update\n"
                 )
             updated["status"] = "awaiting_comms"
+            fallback = close_user_message(
+                f"Could not parse a communication spec from the model; starting from "
+                f"the architect schemes for **{name}**. Complete the spec, then approve.",
+                svc=updated,
+            )
             msgs = list(updated.get("messages") or [])
             msgs.append(
                 {
                     "role": "assistant",
-                    "content": (
-                        f"Could not parse a communication spec from the model; starting from "
-                        f"the architect schemes for **{name}**. Complete the spec, then approve."
-                    ),
+                    "content": fallback,
                     "node": "comms",
                 }
             )
@@ -280,10 +288,12 @@ def prime_all_services_node(state: dict[str, Any]) -> dict[str, Any]:
         out = replace_service(out, updated)
     live = [s for s in out if s.get("status") != "suspended"]
     names = ", ".join((s.get("names") or ["service"])[-1] for s in live) or "none"
-    notice = (
+    notice = close_user_message(
         f"Opened planning tiles for {len(live)} microservice(s) at once: {names}. "
         "Complete each service's communication spec from the architect protocols, then "
-        "interview features, then stack. Each tile can hand off independently."
+        "interview features, then stack. Each tile can hand off independently.",
+        mode="idle",
+        can_approve=False,
     )
     return {
         "services": out,

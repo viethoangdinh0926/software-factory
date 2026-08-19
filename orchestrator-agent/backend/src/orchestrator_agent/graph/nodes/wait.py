@@ -7,6 +7,7 @@ from langgraph.types import interrupt
 from orchestrator_agent.graph.nodes.common import (
     active_service,
     approve_label,
+    close_user_message,
     decorate_service,
     replace_service,
 )
@@ -29,8 +30,13 @@ def _append_service_user(state: dict[str, Any], service_id: str, content: str) -
 def wait_node(state: dict[str, Any]) -> dict[str, Any]:
     wait_kind = str(state.get("wait_kind") or "idle")
     topology = str(state.get("topology") or "unset")
-    assistant = state.get("pending_assistant_message") or ""
     session_can_approve = wait_kind not in {"", "idle", "distributed", "discuss_features"}
+    assistant = close_user_message(
+        state.get("pending_assistant_message") or "",
+        approve_kind=wait_kind if session_can_approve else "",
+        can_approve=session_can_approve,
+        mode="idle" if wait_kind in {"", "idle", "distributed"} else "step",
+    )
     resume = interrupt(
         {
             "phase": state.get("phase") or wait_kind,
@@ -74,7 +80,11 @@ def wait_node(state: dict[str, Any]) -> dict[str, Any]:
     if topology == "distributed" or wait_kind == "distributed":
         if not service_id:
             if action == "chat" and user_text:
-                note = "Use a microservice tile to discuss that service’s plan."
+                note = close_user_message(
+                    "Use a microservice tile to discuss that service’s plan.",
+                    mode="idle",
+                    can_approve=False,
+                )
                 return {
                     "pending_assistant_message": note,
                     "route": "wait",
@@ -172,9 +182,11 @@ def wait_node(state: dict[str, Any]) -> dict[str, Any]:
                     "wait_kind": "distributed",
                     "messages": msgs,
                 }
-            note = (
+            note = close_user_message(
                 "Chat on this tile to revise the communication spec, then approve through "
-                "a new engineer handoff."
+                "a new engineer handoff.",
+                mode="handoff",
+                can_approve=False,
             )
             return {
                 "services": services,
@@ -201,10 +213,10 @@ def wait_node(state: dict[str, Any]) -> dict[str, Any]:
 
     if action == "chat":
         if wait_kind == "idle":
-            note = (
-                "No active planning step. Waiting for the next architect package, or end the session."
-                if str(state.get("app_status") or "") == "sent"
-                else "No active planning step. Waiting for the next architect package, or end the session."
+            note = close_user_message(
+                "No active planning step. Waiting for the next architect package, or end the session.",
+                mode="idle",
+                can_approve=False,
             )
             return {
                 "pending_assistant_message": note,

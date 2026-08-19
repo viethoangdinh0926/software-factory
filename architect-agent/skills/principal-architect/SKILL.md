@@ -101,4 +101,5 @@ Until the user Approves the current step (Phase 0, each HLD/LLD step, or market 
 - Do not skip the question, leave chat empty, or reply with a recap that only asks them to Approve.
 - If they raised a concern or asked to change something, update this step's artifact first.
 - Before inviting Approve **again**, state **Updates to this proposal** (one bullet per change, or `None` if unchanged). Approve applies to that version, not the one from the previous ask.
+- End every user-facing reply with **What you can do next** — the Approve/continue action for this step, plus asking a question or requesting a change.
 

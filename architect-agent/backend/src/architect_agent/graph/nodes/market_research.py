@@ -7,7 +7,7 @@ from langgraph.types import interrupt
 from architect_agent.graph.nodes.common import answer_before_approve, approve_label
 from architect_agent.graph.state import DesignGraphState
 from architect_agent.market_research import generate_market_evaluation_report
-from architect_agent.query_intent import is_informational_query, promote_chat_to_approve
+from architect_agent.query_intent import is_informational_query, promote_chat_to_approve, with_next_prompt
 
 
 def market_research_node(state: DesignGraphState) -> dict[str, Any]:
@@ -68,8 +68,13 @@ def market_wait_node(state: DesignGraphState) -> dict[str, Any]:
     """Pause for market report review; continue triggers handoff + design resume."""
     report = state.get("market_evaluation_report") or ""
     grade = state.get("market_evaluation_grade") or ""
-    assistant_message = state.get("pending_assistant_message") or ""
     track = state.get("design_track") or "hld"
+    label = approve_label("market_research", track, 0)
+    assistant_message = with_next_prompt(
+        state.get("pending_assistant_message") or "",
+        approve_label=label,
+        can_approve=True,
+    )
 
     resume = interrupt(
         {
@@ -86,7 +91,7 @@ def market_wait_node(state: DesignGraphState) -> dict[str, Any]:
             "can_approve": True,
             "can_download_market_report": True,
             "approve_kind": "continue_after_market",
-            "approve_label": approve_label("market_research", track, 0),
+            "approve_label": label,
             "ready_for_design": True,
         }
     )

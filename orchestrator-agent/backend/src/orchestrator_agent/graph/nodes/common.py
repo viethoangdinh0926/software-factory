@@ -11,7 +11,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from orchestrator_agent.json_util import parse_llm_json_object
 from orchestrator_agent.llm import get_chat_model
-from orchestrator_agent.query_intent import with_resolution_close
+from orchestrator_agent.query_intent import with_next_prompt, with_resolution_close
 
 ProseRecover = Callable[[str], dict[str, Any] | None]
 
@@ -133,6 +133,35 @@ def decorate_service(svc: dict[str, Any], *, finalized: bool = False) -> dict[st
     out["approve_label"] = approve_label(kind) if out["can_approve"] else ""
     out["discussion_open"] = open_disc
     return out
+
+
+def close_user_message(
+    message: str,
+    *,
+    approve_kind: str = "",
+    can_approve: bool | None = None,
+    mode: str = "step",
+    svc: dict[str, Any] | None = None,
+) -> str:
+    """Append a next-action prompt using the current step or tile state."""
+    if svc is not None:
+        decorated = decorate_service(svc)
+        status = str(svc.get("status") or "")
+        use_mode = "handoff" if status in {"sent", "approved"} else mode
+        return with_next_prompt(
+            message,
+            approve_label=str(decorated.get("approve_label") or ""),
+            can_approve=bool(decorated.get("can_approve")),
+            mode=use_mode,
+        )
+    label = approve_label(approve_kind) if approve_kind else ""
+    approve = bool(approve_kind) if can_approve is None else can_approve
+    return with_next_prompt(
+        message,
+        approve_label=label,
+        can_approve=approve,
+        mode=mode,
+    )
 
 
 def invoke_json(

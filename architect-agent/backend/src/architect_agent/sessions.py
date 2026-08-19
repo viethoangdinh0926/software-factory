@@ -15,7 +15,7 @@ from architect_agent.config import get_settings
 from architect_agent.graph import build_graph, initial_state
 from architect_agent.graph.nodes.common import approve_label, design_step_title
 from architect_agent.mermaid_sanitize import sanitize_mermaid
-from architect_agent.query_intent import is_advance_request, is_step_approval_message
+from architect_agent.query_intent import is_advance_request, is_step_approval_message, with_next_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -523,6 +523,7 @@ class SessionStore:
             status_line += (
                 " You can retry this same package from the session without another design cycle."
             )
+        status_line = with_next_prompt(status_line, mode="handoff", can_approve=False)
         node = "hld" if session.design_track == "hld" else "lld"
         session.messages.append({"role": "assistant", "content": status_line, "node": node})
         self._persist(session)
@@ -553,6 +554,7 @@ class SessionStore:
             status_line += (
                 " You can retry this same package again without another design cycle."
             )
+        status_line = with_next_prompt(status_line, mode="handoff", can_approve=False)
         node = "hld" if session.design_track == "hld" else "lld"
         session.messages.append({"role": "assistant", "content": status_line, "node": node})
         self._persist(session)

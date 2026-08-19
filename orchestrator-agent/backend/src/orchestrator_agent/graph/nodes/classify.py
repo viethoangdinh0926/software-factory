@@ -5,6 +5,7 @@ from typing import Any
 from orchestrator_agent.graph.nodes.common import (
     answer_current_artifacts,
     approve_label,
+    close_user_message,
     invoke_json,
     skill_digest,
 )
@@ -87,6 +88,12 @@ def classify_node(state: dict[str, Any]) -> dict[str, Any]:
             assistant,
             changed=topology != str(state.get("topology") or ""),
         )
+    assistant = close_user_message(
+        assistant,
+        approve_kind="confirm_topology" if not certain else "",
+        can_approve=not certain,
+        mode="step" if not certain else "idle",
+    )
     msgs = [{"role": "assistant", "content": assistant, "node": "classify"}]
     if certain:
         return {

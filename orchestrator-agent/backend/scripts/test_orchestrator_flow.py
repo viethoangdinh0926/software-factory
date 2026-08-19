@@ -19,6 +19,7 @@ from orchestrator_agent.graph.nodes.common import pick_assistant_message, servic
 from orchestrator_agent.llm import get_chat_model
 from orchestrator_agent.package_parse import extract_http_endpoints, format_agreed_endpoints, service_contract_section
 from orchestrator_agent.query_intent import (
+    NEXT_PROMPT_HEADER,
     is_advance_request,
     is_revision_request,
     is_step_approval_message,
@@ -132,6 +133,7 @@ assert len(live) == 2, live
 assert all(x.get("status") == "awaiting_comms" for x in live), [x.get("status") for x in live]
 assert all(x.get("can_approve") for x in live)
 assert all((x.get("api_design") or "").strip() for x in live)
+assert all(NEXT_PROMPT_HEADER in (x.get("messages") or [{}])[-1].get("content", "") for x in live)
 assert not pub["can_approve"]
 assert pub["wait_kind"] == "distributed", pub["wait_kind"]
 first_ids = {
@@ -150,6 +152,7 @@ assert ident["can_approve"]
 assert ident["messages"][-1]["content"].strip()
 assert "Updates to this proposal" in ident["messages"][-1]["content"]
 assert "None" in ident["messages"][-1]["content"]
+assert NEXT_PROMPT_HEADER in ident["messages"][-1]["content"]
 
 s = store.chat(SESSION, "next step", service_id=identity_id)
 ident = next(x for x in s.to_public()["services"] if x["microservice_id"] == identity_id)
@@ -166,6 +169,7 @@ assert ident["can_approve"]
 assert ident["messages"][-1]["content"].strip()
 assert "Updates to this proposal" in ident["messages"][-1]["content"]
 assert "None" in ident["messages"][-1]["content"]
+assert NEXT_PROMPT_HEADER in ident["messages"][-1]["content"]
 
 s = store.approve(SESSION, service_id=identity_id)
 ident = next(x for x in s.to_public()["services"] if x["microservice_id"] == identity_id)

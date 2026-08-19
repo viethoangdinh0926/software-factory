@@ -7,6 +7,7 @@ from orchestrator_agent.graph.nodes.common import (
     answer_current_artifacts,
     approve_label,
     close_after_feedback,
+    close_user_message,
     invoke_json,
     pick_assistant_message,
     replace_service,
@@ -40,6 +41,7 @@ def stack_research_node(state: dict[str, Any]) -> dict[str, Any]:
                 ),
                 system_extra=service_focus_system(name),
             )
+            assistant = close_user_message(assistant, svc=svc)
             updated = dict(svc)
             svc_msgs = list(updated.get("messages") or [])
             svc_msgs.append({"role": "assistant", "content": assistant, "node": "stack"})
@@ -168,12 +170,13 @@ def stack_research_node(state: dict[str, Any]) -> dict[str, Any]:
             changed=stack != prior_stack,
         )
     notes = str(result.get("search_notes") or search_text[:1200])
-    msgs = [{"role": "assistant", "content": assistant, "node": "stack"}]
     if svc is not None:
         updated = dict(svc)
         updated["tech_stack"] = stack
         updated["search_notes"] = notes
         updated["status"] = "awaiting_stack"
+        assistant = close_user_message(assistant, svc=updated)
+        msgs = [{"role": "assistant", "content": assistant, "node": "stack"}]
         svc_msgs = list(updated.get("messages") or [])
         svc_msgs.append({"role": "assistant", "content": assistant, "node": "stack"})
         updated["messages"] = svc_msgs
@@ -189,6 +192,10 @@ def stack_research_node(state: dict[str, Any]) -> dict[str, Any]:
             "approve_label": "",
             "messages": msgs,
         }
+    assistant = close_user_message(
+        assistant, approve_kind="approve_plan", can_approve=True
+    )
+    msgs = [{"role": "assistant", "content": assistant, "node": "stack"}]
     return {
         "tech_stack": stack,
         "search_notes": notes,
@@ -234,9 +241,10 @@ def emit_plan_node(state: dict[str, Any]) -> dict[str, Any]:
         updated["plan_spec"] = spec
         updated["status"] = "sent"
         svc_msgs = list(updated.get("messages") or [])
-        sent_msg = (
+        sent_msg = close_user_message(
             f"Plan spec for **{name}** queued for the engineer "
-            f"(design `{session_id}`, microservice `{mid}`)."
+            f"(design `{session_id}`, microservice `{mid}`).",
+            svc=updated,
         )
         svc_msgs.append({"role": "assistant", "content": sent_msg, "node": "emit"})
         updated["messages"] = svc_msgs
@@ -266,7 +274,11 @@ def emit_plan_node(state: dict[str, Any]) -> dict[str, Any]:
         f"## Tech stack\n\n{state.get('tech_stack') or ''}\n\n"
         f"## System design (architect package)\n\n{package}\n"
     )
-    sent_msg = f"Plan spec queued for the engineer (design `{session_id}`)."
+    sent_msg = close_user_message(
+        f"Plan spec queued for the engineer (design `{session_id}`).",
+        mode="idle",
+        can_approve=False,
+    )
     action = {
         "action": "plan",
         "design_session_id": session_id,

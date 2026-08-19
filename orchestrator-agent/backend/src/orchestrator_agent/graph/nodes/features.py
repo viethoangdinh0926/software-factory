@@ -9,6 +9,7 @@ from orchestrator_agent.graph.nodes.common import (
     answer_current_artifacts,
     approve_label,
     close_after_feedback,
+    close_user_message,
     features_are_concrete,
     invoke_json,
     pick_assistant_message,
@@ -120,6 +121,7 @@ def discuss_features_for(
     updated["feature_spec"] = spec
     updated["search_notes"] = search_text[:1500]
     updated["status"] = status
+    assistant = close_user_message(assistant, svc=updated)
     svc_msgs = list(updated.get("messages") or [])
     svc_msgs.append({"role": "assistant", "content": assistant, "node": "features"})
     updated["messages"] = svc_msgs
@@ -243,6 +245,11 @@ def feature_discuss_node(state: dict[str, Any]) -> dict[str, Any]:
     )
     if pending:
         assistant = close_after_feedback(assistant, pending=pending, changed=spec != existing)
+    assistant = close_user_message(
+        assistant,
+        approve_kind="approve_features" if ready else "",
+        can_approve=ready,
+    )
     return {
         "feature_spec": spec,
         "search_notes": str(result.get("search_notes") or search_text[:1200]),

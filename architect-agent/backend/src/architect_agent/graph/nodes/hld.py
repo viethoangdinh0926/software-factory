@@ -28,6 +28,7 @@ from architect_agent.query_intent import (
     is_advance_request,
     is_informational_query,
     promote_chat_to_approve,
+    with_next_prompt,
     with_resolution_close,
 )
 
@@ -587,8 +588,12 @@ def hld_wait_node(state: DesignGraphState) -> dict[str, Any]:
     step = max(1, min(6, int(state.get("design_step") or 1)))
     ready = bool(state.get("ready_to_advance"))
     design_ready = bool(state.get("design_ready_to_approve"))
-    assistant = state.get("pending_assistant_message") or ""
     design_approve = is_design_approve_step("hld", step) and design_ready
+    assistant = with_next_prompt(
+        state.get("pending_assistant_message") or "",
+        approve_label=approve_label("hld", "hld", step, design_ready=design_ready),
+        can_approve=ready or design_approve,
+    )
 
     resume = interrupt(
         {

@@ -116,7 +116,10 @@ _ENDPOINT_ASK_HINTS = ("endpoint", "url", "uri", "route", "path")
 _SHOW_HINTS = ("show", "list", "all", "agreed", "current", "what", "which", "remind", "we agree")
 
 UPDATES_HEADER = "**Updates to this proposal**"
-_APPROVE_AGAIN = "Approve this version if it looks right, or tell me what else to change."
+NEXT_PROMPT_HEADER = "**What you can do next**"
+_DONE_MESSAGE_RE = re.compile(
+    r"(?i)^\s*session (marked )?done\.?\s*$|^\s*session ended\.?\s*$"
+)
 
 FEEDBACK_RESOLUTION_RULES = (
     "The user commented after you last asked them to Approve. You MUST:\n"
@@ -126,7 +129,8 @@ FEEDBACK_RESOLUTION_RULES = (
     f"{UPDATES_HEADER}\n"
     "- one bullet per change, tied to their comment\n"
     "  (or a single bullet: None — with a one-line reason if the artifact is unchanged).\n"
-    "4. Then invite Approve for THIS updated version, not the previous one."
+    "4. Then invite Approve for THIS updated version, not the previous one. "
+    "A **What you can do next** prompt is appended by the system."
 )
 
 
@@ -285,13 +289,76 @@ def promote_chat_to_approve(action: str, text: str, *, can_approve: bool) -> str
     return action
 
 
+def format_next_prompt(
+    *,
+    approve_label: str = "",
+    can_approve: bool = True,
+    mode: str = "step",
+) -> str:
+    """User-visible footer: what to do next to continue this process."""
+    label = (approve_label or "Approve").strip() or "Approve"
+    lines = [NEXT_PROMPT_HEADER]
+    if mode == "handoff":
+        lines.extend(
+            [
+                "- Continue on this tile if you want to revise, then hand off an updated plan.",
+                "- Open another microservice tile to keep planning.",
+            ]
+        )
+    elif mode == "idle":
+        lines.extend(
+            [
+                "- Open a microservice tile to continue planning that service.",
+                "- Or wait for the next architect package.",
+            ]
+        )
+    elif can_approve:
+        lines.extend(
+            [
+                f"- Click **{label}**, or say `Approve` / `next step` / `looks good`, to continue this process.",
+                "- Ask a question about this step.",
+                "- Tell me what to change before we move on.",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                "- Reply with more detail so we can complete this step.",
+                "- Or say `next step` / `wrap up` to move on with what we have.",
+                "- Ask a question about the current proposal.",
+            ]
+        )
+    return "\n".join(lines)
+
+
+def with_next_prompt(
+    message: str,
+    *,
+    approve_label: str = "",
+    can_approve: bool = True,
+    mode: str = "step",
+) -> str:
+    """Append a next-action prompt unless the message already has one or is a session-end note."""
+    body = (message or "").strip()
+    if not body or _DONE_MESSAGE_RE.search(body):
+        return body
+    if NEXT_PROMPT_HEADER.lower() in body.lower():
+        return body
+    return (
+        f"{body}\n\n"
+        f"{format_next_prompt(approve_label=approve_label, can_approve=can_approve, mode=mode)}"
+    )
+
+
 def with_resolution_close(
     message: str,
     *,
     changed: bool,
     change_lines: list[str] | None = None,
+    approve_label: str = "",
+    can_approve: bool = True,
 ) -> str:
-    """Ensure a changelog and a fresh Approve ask after resolving user comments."""
+    """Ensure a changelog and a next-action prompt after resolving user comments."""
     body = (message or "").strip()
     if UPDATES_HEADER.lower() not in body.lower():
         if changed:
@@ -306,10 +373,4 @@ def with_resolution_close(
             f"- {line.lstrip('- ').strip()}" for line in lines if str(line).strip()
         )
         body = f"{body}\n\n{section}".strip()
-    tail = body.lower()[-500:]
-    if "approve this version" not in tail and not re.search(
-        r"(?i)\b(click approve|invite approve|approve when|approve to |approve this)\b",
-        tail,
-    ):
-        body = f"{body}\n\n{_APPROVE_AGAIN}"
-    return body
+    return with_next_prompt(body, approve_label=approve_label, can_approve=can_approve)

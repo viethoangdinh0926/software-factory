@@ -19,10 +19,12 @@ from architect_agent.config import get_settings
 from architect_agent.llm import get_chat_model
 from architect_agent.graph import reset_graph
 from architect_agent.query_intent import (
+    NEXT_PROMPT_HEADER,
     is_advance_request,
     is_informational_query,
     is_revision_request,
     is_step_approval_message,
+    with_next_prompt,
 )
 from architect_agent.json_util import parse_llm_json_object
 from architect_agent.sessions import SessionStore, _legacy_map
@@ -49,6 +51,9 @@ assert not is_advance_request("What's the next step?")
 assert not is_step_approval_message("Why should I approve REST?")
 assert not is_step_approval_message("Looks good, add a health check")
 assert not is_step_approval_message("next step, add a health check")
+assert NEXT_PROMPT_HEADER in with_next_prompt("Here is the proposal.")
+assert with_next_prompt(with_next_prompt("Here is the proposal.")).count(NEXT_PROMPT_HEADER) == 1
+assert "Session marked done." == with_next_prompt("Session marked done.")
 
 latex_json = r'{"assistant_message": "DAU $\text{assumed}$ is $\approx$ 5k"}'
 latex_msg = parse_llm_json_object(latex_json)["assistant_message"]
@@ -69,6 +74,7 @@ print("  start", s.phase, s.design_track, s.design_step, s.to_public()["can_appr
 pub = s.to_public()
 assert s.phase == "phase0", s.phase
 assert pub["can_approve"], pub
+assert NEXT_PROMPT_HEADER in s.messages[-1]["content"]
 track0 = s.design_track
 s = store.chat(s.session_id, "Why is this HLD rather than LLD?")
 print("  phase0 qa", s.phase, s.design_track, s.to_public()["can_approve"], flush=True)
@@ -77,6 +83,7 @@ assert s.design_track == track0
 assert s.to_public()["can_approve"]
 assert s.messages[-1]["role"] == "assistant"
 assert s.messages[-1]["content"].strip()
+assert NEXT_PROMPT_HEADER in s.messages[-1]["content"]
 s = store.chat(s.session_id, "Looks good")
 print("  after phase0", s.phase, s.design_track, s.design_step, flush=True)
 assert s.design_track == "hld", s.design_track
@@ -89,6 +96,7 @@ for step in range(1, 7):
         s = store.chat(s.session_id, "next step")
         print(f"  after next-step chat@{step}", s.phase, s.design_step, flush=True)
         assert s.phase == "hld" and s.design_step == 2
+        assert NEXT_PROMPT_HEADER in s.messages[-1]["content"]
         continue
     if step == 3:
         assert s.to_public()["design_step_title"] == "Core microservices"
@@ -102,6 +110,7 @@ for step in range(1, 7):
         assert "IdentityService" in last or "User" in last or "own" in last.lower(), last[:240]
         assert "Updates to this proposal" in last, last[:400]
         assert "None" in last, last[:400]
+        assert NEXT_PROMPT_HEADER in last, last[-400:]
     s = store.approve(s.session_id)
     print(f"  after approve@{step}", s.phase, s.design_step, flush=True)
     if step < 6:
@@ -116,6 +125,7 @@ for step in range(1, 7):
         assert s.to_public()["can_approve"]
         assert s.messages[-1]["role"] == "assistant"
         assert s.messages[-1]["content"].strip()
+        assert NEXT_PROMPT_HEADER in s.messages[-1]["content"]
 
 version_before = s.design_version
 s = store.approve(s.session_id)
