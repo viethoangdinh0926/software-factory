@@ -95,7 +95,7 @@ plan = ident.get("execution_plan") or {}
 items = plan.get("items") or []
 assert items, plan
 assert any(it.get("peer_services") for it in items), items
-assert NEXT_PROMPT_HEADER in (ident.get("messages") or [{}])[-1].get("content", "")
+assert NEXT_PROMPT_HEADER not in (ident.get("messages") or [{}])[-1].get("content", "")
 consults = ident.get("peer_consults") or []
 assert any(c.get("peer_name") == "VideoCatalogService" and c.get("we_initiate") for c in consults)
 assert any(c.get("status") == "pending_peer" for c in consults)
@@ -128,7 +128,7 @@ assert any(
 )
 hit = next(c for c in ident.get("peer_consults") or [] if c.get("we_initiate"))
 assert "thumbnail_url" in (hit.get("offered_api") or "")
-assert NEXT_PROMPT_HEADER in (ident.get("messages") or [{}])[-1].get("content", "")
+assert NEXT_PROMPT_HEADER not in (ident.get("messages") or [{}])[-1].get("content", "")
 
 print("approve identity plan…", flush=True)
 s = store.chat(SESSION, "Approve", service_id=IDENTITY)

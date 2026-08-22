@@ -42,8 +42,14 @@ assert classify_user_message("I'm happy with this, let's continue") == ("command
 assert classify_user_message("Why is this HLD rather than LLD?") == ("information", "answer")
 assert classify_user_message("Show me all URL endpoints we agreed on") == ("information", "answer")
 assert classify_user_message("Add a health check endpoint") == ("command", "revise")
+# Example phrasings of "help me answer your questions" — not a keyword list.
+assert classify_user_message("Give me some potential answers") == ("information", "answer")
+assert classify_user_message("What would you pick for those?") == ("information", "answer")
+assert classify_user_message("Can you draft replies I could use?") == ("information", "answer")
 assert is_informational_query("Why is this HLD rather than LLD?")
 assert is_informational_query("Show me all URL endpoints we agreed on")
+assert is_informational_query("Draft some replies I can use")
+assert not is_revision_request("What would you pick for those?")
 assert is_revision_request("Please switch to a modular monolith")
 assert is_revision_request("Add a health check endpoint")
 assert is_revision_request("Why is there no rate limiting?")
@@ -69,8 +75,16 @@ echoed = without_user_echo(
 assert "We should add rate limiting" not in echoed
 assert "HLD step 1 is ready." in echoed
 assert "I heard you:" not in without_user_echo("I heard you: GDPR please.\nNext question?", "GDPR please")
-assert NEXT_PROMPT_HEADER in with_next_prompt("Here is the proposal.")
-assert with_next_prompt(with_next_prompt("Here is the proposal.")).count(NEXT_PROMPT_HEADER) == 1
+assert NEXT_PROMPT_HEADER not in with_next_prompt("Here is the proposal.")
+assert "click" not in without_user_echo(
+    "Scope looks like **HLD**. Click **Approve** to start that track."
+).lower()
+assert "confirm, approve, or agree" in without_user_echo(
+    "Scope looks like **HLD**. Click **Approve** to start that track."
+).lower()
+assert with_next_prompt(
+    "Here is the proposal.\n\n**What you can do next**\n- Click **Approve**."
+) == "Here is the proposal."
 assert "Session marked done." == with_next_prompt("Session marked done.")
 assert assistant_message_is_thin("LLD step 1 update.")
 assert assistant_message_is_thin("HLD step 2 update.")
@@ -122,7 +136,7 @@ print("  start", s.phase, s.design_track, s.design_step, s.to_public()["can_appr
 pub = s.to_public()
 assert s.phase == "phase0", s.phase
 assert pub["can_approve"], pub
-assert NEXT_PROMPT_HEADER in s.messages[-1]["content"]
+assert NEXT_PROMPT_HEADER not in s.messages[-1]["content"]
 track0 = s.design_track
 s = store.chat(s.session_id, "Why is this HLD rather than LLD?")
 print("  phase0 qa", s.phase, s.design_track, s.to_public()["can_approve"], flush=True)
@@ -131,7 +145,7 @@ assert s.design_track == track0
 assert s.to_public()["can_approve"]
 assert s.messages[-1]["role"] == "assistant"
 assert s.messages[-1]["content"].strip()
-assert NEXT_PROMPT_HEADER in s.messages[-1]["content"]
+assert NEXT_PROMPT_HEADER not in s.messages[-1]["content"]
 s = store.chat(s.session_id, "Looks good")
 print("  after phase0", s.phase, s.design_track, s.design_step, flush=True)
 assert s.design_track == "hld", s.design_track
@@ -152,7 +166,7 @@ for step in range(1, 7):
         s = store.chat(s.session_id, "next step")
         print(f"  after next-step chat@{step}", s.phase, s.design_step, flush=True)
         assert s.phase == "hld" and s.design_step == 2
-        assert NEXT_PROMPT_HEADER in s.messages[-1]["content"]
+        assert NEXT_PROMPT_HEADER not in s.messages[-1]["content"]
         continue
     if step == 3:
         assert s.to_public()["design_step_title"] == "Core microservices"
@@ -166,7 +180,7 @@ for step in range(1, 7):
         assert "IdentityService" in last or "User" in last or "own" in last.lower(), last[:240]
         assert "Updates to this proposal" in last, last[:400]
         assert "None" in last, last[:400]
-        assert NEXT_PROMPT_HEADER in last, last[-400:]
+        assert NEXT_PROMPT_HEADER not in last, last[-400:]
     s = store.approve(s.session_id)
     print(f"  after approve@{step}", s.phase, s.design_step, flush=True)
     if step < 6:
@@ -181,7 +195,7 @@ for step in range(1, 7):
         assert s.to_public()["can_approve"]
         assert s.messages[-1]["role"] == "assistant"
         assert s.messages[-1]["content"].strip()
-        assert NEXT_PROMPT_HEADER in s.messages[-1]["content"]
+        assert NEXT_PROMPT_HEADER not in s.messages[-1]["content"]
         s = store.chat(s.session_id, "I'm worried the grade ignored compliance.")
         print("  market concern", s.phase, flush=True)
         assert s.phase == "market_research", s.phase
@@ -232,6 +246,26 @@ assert s2.phase == "market_research"
 s2 = store2.approve(s2.session_id)
 assert s2.phase == "lld" and s2.design_step == 3
 assert s2.design_version >= 1
+
+print("phase0 suggests answers to its own questions…", flush=True)
+get_settings.cache_clear()
+get_chat_model.cache_clear()
+classify_user_message.cache_clear()
+reset_graph()
+store4 = SessionStore()
+s4 = store4.start("I want an app like youtube")
+assert s4.phase == "phase0"
+asked4 = s4.messages[-1]["content"]
+assert "?" in asked4 or "❓" in asked4, asked4[:400]
+spec_before = s4.business_spec
+s4 = store4.chat(s4.session_id, "Draft some replies I can use.")
+last4 = s4.messages[-1]["content"]
+assert s4.phase == "phase0", s4.phase
+assert s4.business_spec == spec_before
+assert "Recommended" in last4, last4[:500]
+assert "Draft some replies I can use." not in last4
+assert "folded that into" not in last4.lower()
+assert NEXT_PROMPT_HEADER not in last4
 
 print("phase0 interview addresses concerns…", flush=True)
 get_settings.cache_clear()

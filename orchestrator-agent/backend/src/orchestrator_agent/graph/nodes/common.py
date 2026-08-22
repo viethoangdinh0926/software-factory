@@ -11,7 +11,11 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from orchestrator_agent.json_util import parse_llm_json_object
 from orchestrator_agent.llm import get_chat_model
-from orchestrator_agent.query_intent import with_next_prompt, with_resolution_close
+from orchestrator_agent.query_intent import (
+    SUGGESTED_ANSWER_RULES,
+    with_next_prompt,
+    with_resolution_close,
+)
 
 ProseRecover = Callable[[str], dict[str, Any] | None]
 
@@ -48,8 +52,9 @@ CHAT DEPTH (assistant_message) — write like a Staff Engineer briefing the team
   clause what it buys here. Prefer concrete versions/numbers over vague adjectives.
 - Use tight markdown structure (bold lead-ins, short bullets) so it stays scannable.
   Depth means information density, NOT padding — no filler, no restating the question.
-- Still invite Approve once the artifact is ready. Elaboration replaces terseness; it
-  does not replace the approve flow.
+- Still ask them to confirm, approve, or agree once the artifact is ready. Never tell
+  them to click a button. Elaboration replaces terseness; it does not replace the
+  approve flow.
 """.strip()
 
 APPROVE_LABELS = {
@@ -333,6 +338,7 @@ def answer_current_artifacts(
 ) -> str:
     """Answer a question from current artifacts without rewriting the step."""
     extra = f"{system_extra.strip()}\n" if system_extra.strip() else ""
+    extra = f"{SUGGESTED_ANSWER_RULES}\n{extra}"
     result = invoke_json(
         system=(
             "You are answering a question about the current workflow step before the user "
@@ -345,7 +351,7 @@ def answer_current_artifacts(
             "behind whatever they asked about — why it is shaped that way, what the "
             "alternatives were, and what it costs — so they learn the architecture, not "
             "just its current values.\n"
-            "Do not invite Approve. Do not say you finalized or updated anything.\n"
+            "Do not ask them to confirm in place of the answer. Do not say you finalized or updated anything.\n"
             'Respond ONLY with JSON: {"assistant_message": string}'
         ),
         user=f"Current artifacts:\n{artifacts}\n\nUser question:\n{question}",
@@ -391,7 +397,8 @@ def service_focus_system(name: str) -> str:
         "If the user asked a question, answer it in assistant_message with concrete facts "
         "(entity names, who initiates, what data/events flow). Do not reply with a status recap.\n"
         "If they raised a concern or asked to change something, update this service's artifact, "
-        "list **Updates to this proposal**, then invite Approve for that version."
+        "list **Updates to this proposal**, then ask them to confirm, approve, or agree "
+        "for that version. Never tell them to click a button."
     )
 
 

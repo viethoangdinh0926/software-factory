@@ -75,7 +75,8 @@ class StubChatModel(BaseChatModel):
                 **_stub_phase0(blob),
                 "assistant_message": (
                     "The spec is updated from your comments. "
-                    "Approve to start the classified track, or keep editing."
+                    "If this looks right, confirm, approve, or agree to start the classified "
+                    "track, or keep editing."
                 ),
             }
         elif "phase 0 classifier" in lower or "classify the design scope" in lower:
@@ -139,6 +140,50 @@ class StubChatModel(BaseChatModel):
         )
 
 
+def _stub_help_answering_questions(text: str) -> bool:
+    """Stub stand-in for the classifier LLM: user wants candidate replies to our questions."""
+    compact = re.sub(r"\s+", " ", (text or "").strip().lower())
+    if not compact:
+        return False
+    asking_for_help = any(
+        token in compact
+        for token in (
+            "help me",
+            "help us",
+            "what would you",
+            "what should i",
+            "what could i",
+            "can you draft",
+            "could you draft",
+            "draft",
+            "propose",
+            "suggest",
+            "candidate",
+            "option",
+            "possible",
+            "potential",
+            "recommend",
+            "example",
+            "sample",
+        )
+    )
+    about_replying = any(
+        token in compact
+        for token in (
+            "answer",
+            "reply",
+            "replies",
+            "respond",
+            "pick",
+            "choose",
+            "question",
+            "option",
+            "default",
+        )
+    )
+    return asking_for_help and about_replying
+
+
 def _stub_turn_intent(blob: str) -> dict[str, str]:
     """Deterministic command vs information classification for the stub model."""
     user = ""
@@ -149,6 +194,8 @@ def _stub_turn_intent(blob: str) -> dict[str, str]:
     if not user:
         user = blob
     compact = re.sub(r"\s+", " ", user).strip().lower().rstrip(".!")
+    if _stub_help_answering_questions(user):
+        return {"category": "information", "action": "answer"}
     if re.search(r"\bwhy should i approve\b", compact) or (
         "?" in user and re.search(r"\bapprove\b", compact) and "rate" not in compact
     ):
@@ -187,11 +234,47 @@ def _stub_turn_intent(blob: str) -> dict[str, str]:
     return {"category": "command", "action": "revise"}
 
 
+def _stub_suggested_answers(blob: str) -> str:
+    questions: list[str] = []
+    if "Open questions to propose answers for:" in blob:
+        block = blob.split("Open questions to propose answers for:", 1)[1]
+        for stop in ("User question:", "Current artifacts", "Business spec:"):
+            if stop in block:
+                block = block.split(stop, 1)[0]
+        for line in block.splitlines():
+            text = line.strip().lstrip("-").strip()
+            if text:
+                questions.append(text)
+    if not questions and "Last assistant message (questions you asked):" in blob:
+        block = blob.split("Last assistant message (questions you asked):", 1)[1]
+        for stop in ("Open questions", "User question:", "Current artifacts"):
+            if stop in block:
+                block = block.split(stop, 1)[0]
+        for line in block.splitlines():
+            stripped = line.strip()
+            if "?" in stripped or stripped.startswith("❓"):
+                questions.append(stripped.lstrip("❓-• ").strip())
+    if not questions:
+        questions = ["the open question I asked"]
+    parts = [
+        "Here are potential answers you can use or edit. "
+        "I am not treating this as your decision yet.\n"
+    ]
+    for question in questions[:6]:
+        parts.append(f"### {question}")
+        parts.append("- (Recommended) A concrete default based on the current spec.")
+        parts.append("- A more conservative alternative.")
+        parts.append("- A more ambitious alternative.\n")
+    return "\n".join(parts)
+
+
 def _stub_qa(blob: str) -> str:
     lower = blob.lower()
     ask = lower
     if "user question:" in lower:
         ask = lower.split("user question:", 1)[-1]
+    if _stub_help_answering_questions(ask):
+        return _stub_suggested_answers(blob)
     if "endpoint" in ask or " url" in ask or "urls" in ask:
         found = re.findall(
             r"\b((?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+/[A-Za-z0-9_{}\-./]*)",
@@ -286,7 +369,8 @@ def _stub_phase0(blob: str) -> dict[str, Any]:
         "tradeoff_ledger": "- Scope classification pending user confirm.\n",
         "assistant_message": (
             f"Scope looks like **{track.upper()}**.{addressed} "
-            "Click approve to start that track, or tell me if this should be the other track."
+            "If this looks right, confirm, approve, or agree to start that track, "
+            "or tell me if this should be the other track."
         ),
     }
 
@@ -311,10 +395,17 @@ def _stub_phase0_questions(blob: str) -> dict[str, Any]:
 
 def _stub_phase0_interview_turn(blob: str) -> dict[str, Any]:
     feedback = _latest_feedback(blob)
-    idx = 1
     match = re.search(r"Current question index:\s*(\d+)", blob)
-    if match:
-        idx = min(int(match.group(1)) + 1, 5)
+    current = int(match.group(1)) if match else 0
+    if _stub_help_answering_questions(feedback):
+        return {
+            "updated_business_spec": _rich_spec(blob),
+            "questions": _stub_phase0_questions(blob)["questions"],
+            "current_question_index": current,
+            "interview_complete": False,
+            "assistant_message": _stub_suggested_answers(blob),
+        }
+    idx = min(current + 1, 5)
     return {
         "updated_business_spec": _rich_spec(blob)
         + (f"\n- User comment: {feedback[:240]}\n" if feedback else ""),
@@ -357,9 +448,9 @@ def _stub_lld(blob: str) -> dict[str, Any]:
             ("I applied your comments to this step. " if feedback else "")
             + f"LLD step {step} draft ready. "
             + (
-                "Approve to run market evaluation and hand off."
+                "If this looks right, confirm, approve, or agree so we can run market evaluation and hand off."
                 if step >= 3
-                else "Approve to advance, or chat to refine."
+                else "If this looks right, confirm, approve, or agree to advance, or tell me what to change."
             )
         ),
     }
@@ -515,9 +606,9 @@ def _stub_hld(blob: str) -> dict[str, Any]:
             )
             + f"HLD step {step} draft ready. "
             + (
-                "Approve to run market evaluation and hand off."
+                "If this looks right, confirm, approve, or agree so we can run market evaluation and hand off."
                 if step >= 6
-                else "Approve to advance, or chat to refine."
+                else "If this looks right, confirm, approve, or agree to advance, or tell me what to change."
             )
         ),
     }

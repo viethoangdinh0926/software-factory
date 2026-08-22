@@ -16,6 +16,7 @@ from architect_agent.json_util import (
 )
 from architect_agent.llm import get_chat_model
 from architect_agent.query_intent import (
+    SUGGESTED_ANSWER_RULES,
     extract_http_endpoints,
     format_agreed_endpoints,
     is_revision_request,
@@ -35,14 +36,15 @@ _RETRY_HINT = (
     "Fill THIS STEP's primary artifact in full (never empty). Other large fields \"\".\n"
     "Mermaid only in design_diagram_lines as short strings.\n"
     "assistant_message: keep the full elaborated justification (what changed, why, "
-    "alternatives rejected, trade-offs accepted); escape its newlines as \\n. Invite Approve."
+    "alternatives rejected, trade-offs accepted); escape its newlines as \\n. "
+    "Ask them to confirm, approve, or agree — never tell them to click a button."
 )
 
 _QA_RETRY_HINT = (
     "CRITICAL FORMAT ERROR. Your previous reply was NOT valid JSON.\n"
     "Respond with ONE JSON object starting with `{`.\n"
     '{"assistant_message": "<full answer to the user question>"}\n'
-    "Do not invite Approve. Do not rewrite artifacts."
+    "Do not ask them to confirm in place of the answer. Do not rewrite artifacts."
 )
 
 
@@ -152,6 +154,61 @@ def _artifacts_for_qa(state: dict[str, Any]) -> str:
     return "\n\n".join(parts)
 
 
+def _last_assistant_text(state: dict[str, Any]) -> str:
+    last = str(state.get("pending_assistant_message") or "").strip()
+    if last:
+        return last
+    for msg in reversed(state.get("messages") or []):
+        if isinstance(msg, dict) and msg.get("role") == "assistant":
+            text = str(msg.get("content") or "").strip()
+            if text:
+                return text
+    return ""
+
+
+def _open_questions_for_suggestions(state: dict[str, Any]) -> list[str]:
+    questions: list[str] = []
+    interview = state.get("interview_questions") or []
+    answers = state.get("interview_answers") or {}
+    try:
+        idx = int(state.get("current_question_index") or 0)
+    except (TypeError, ValueError):
+        idx = 0
+    if isinstance(interview, list):
+        for i, item in enumerate(interview):
+            if not isinstance(item, dict):
+                continue
+            text = str(item.get("text") or "").strip()
+            if not text:
+                continue
+            qid = str(item.get("id") or f"q{i}")
+            already = str(answers.get(qid) or "").strip()
+            if i >= idx or not already:
+                questions.append(text)
+    if questions:
+        return questions[:8]
+    last = _last_assistant_text(state)
+    for line in last.splitlines():
+        stripped = line.strip()
+        if "?" in stripped or stripped.startswith("❓"):
+            questions.append(stripped.lstrip("❓-• ").strip())
+    return questions[:8]
+
+
+def _suggested_answer_context(state: dict[str, Any]) -> str:
+    last = _last_assistant_text(state)
+    open_qs = _open_questions_for_suggestions(state)
+    parts: list[str] = []
+    if last:
+        parts.append(f"Last assistant message (questions you asked):\n{last[:4000]}")
+    if open_qs:
+        parts.append(
+            "Open questions to propose answers for:\n"
+            + "\n".join(f"- {q}" for q in open_qs)
+        )
+    return "\n\n".join(parts)
+
+
 def answer_open_query(state: dict[str, Any], question: str, *, node: str) -> str:
     """Answer a user question from current artifacts without rewriting the step."""
     q = (question or "").strip()
@@ -163,11 +220,13 @@ def answer_open_query(state: dict[str, Any], question: str, *, node: str) -> str
     grade = str(state.get("market_evaluation_grade") or "").strip()
     if grade and "grade" in q.lower() and not is_revision_request(q):
         return f"The market evaluation grade for this design version is **{grade}**."
+    extra_user = f"\n\n{_suggested_answer_context(state)}"
     result = invoke_json(
         system=(
             "Answer the user's question from the current artifacts. This is Q&A "
             "before they approve this workflow step.\n"
             f"Current node: {node}.\n"
+            f"{SUGGESTED_ANSWER_RULES}\n"
             "Use concrete facts (numbers, service names, owned objects, communication "
             "schemes/protocols, CAP choices).\n"
             f"{EXPLANATION_DEPTH_DIGEST}\n"
@@ -175,20 +234,21 @@ def answer_open_query(state: dict[str, Any], question: str, *, node: str) -> str
             "value. Explain the reasoning behind it — the forces that drove it, the "
             "alternatives rejected, the trade-offs accepted — and name the relevant pattern "
             "or principle so the user leaves understanding the architecture.\n"
-            "Do not invite Approve. Do not say you finalized or updated the design.\n"
+            "Do not ask them to confirm in place of the answer. Do not say you finalized "
+            "or updated the design.\n"
             "If they raised a concern, address that concern directly — do not ignore it "
             "to restate the current step.\n"
             "Do not rewrite artifacts. assistant_message is the full answer.\n"
             'Respond ONLY with JSON: {"assistant_message": string}'
         ),
-        user=f"{_artifacts_for_qa(state)}\n\nUser question:\n{q}",
+        user=f"{_artifacts_for_qa(state)}{extra_user}\n\nUser question:\n{q}",
         recover_prose=_qa_recover,
         prefer_prose=True,
         retry_hint=_QA_RETRY_HINT,
     )
     return str(result.get("assistant_message") or "").strip() or (
         "I can answer from the current artifacts on this step. "
-        "Ask about a specific section, or click Approve when you are ready to continue."
+        "Ask about a specific section, or confirm, approve, or agree when you are ready to continue."
     )
 
 
@@ -289,13 +349,13 @@ _THIN_STATUS_RE = re.compile(
 _NEXT_STEP_HINT = {
     ("lld", 1): "Next we draw the class/structure blueprint from these rules.",
     ("lld", 2): "Next we verify the blueprint against the spec invariants.",
-    ("lld", 3): "Approve to run market evaluation and hand the package off.",
+    ("lld", 3): "If this looks right, confirm, approve, or agree so we can run market evaluation and hand the package off.",
     ("hld", 1): "Next we model the domain objects those numbers imply.",
     ("hld", 2): "Next we split owned objects into core microservices.",
     ("hld", 3): "Next we name communication schemes and draw the system diagram.",
     ("hld", 4): "Next we run FMEA against this topology.",
     ("hld", 5): "Next we synthesize the session and wrap up.",
-    ("hld", 6): "Approve to run market evaluation and hand the package off.",
+    ("hld", 6): "If this looks right, confirm, approve, or agree so we can run market evaluation and hand the package off.",
 }
 
 
@@ -357,7 +417,7 @@ def synthesize_step_briefing(
     if track == "hld" and step == 4 and diagram.strip():
         nodes = len(set(re.findall(r"\b([A-Za-z][\w]*)\s*(?:\[|\(|\{)", diagram)))
         extra = f"\n\nThe system diagram now has about **{nodes or 'several'}** named nodes (clients, gateway, services, stores)."
-    nxt = _NEXT_STEP_HINT.get((track, step), "Approve to continue, or tell me what to change.")
+    nxt = _NEXT_STEP_HINT.get((track, step), "If this looks right, confirm, approve, or agree so we can continue.")
     return (
         f"**{label} step {step} — {title}** is complete enough to review.\n\n"
         f"Here is what this step locked in:\n\n{body}{extra}\n\n"

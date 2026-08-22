@@ -50,7 +50,7 @@ class StubChatModel(BaseChatModel):
             payload = _stub_implement(blob)
         else:
             payload = {
-                "assistant_message": "Stub engineer is ready. Approve to continue.",
+                "assistant_message": "Stub engineer is ready. If this looks right, confirm, approve, or agree so we can continue.",
                 "ready": True,
             }
         return ChatResult(
@@ -72,6 +72,50 @@ def _slug(name: str) -> str:
     return slug or "resource"
 
 
+def _stub_help_answering_questions(text: str) -> bool:
+    """Stub stand-in for the classifier LLM: user wants candidate replies to our questions."""
+    compact = re.sub(r"\s+", " ", (text or "").strip().lower())
+    if not compact:
+        return False
+    asking_for_help = any(
+        token in compact
+        for token in (
+            "help me",
+            "help us",
+            "what would you",
+            "what should i",
+            "what could i",
+            "can you draft",
+            "could you draft",
+            "draft",
+            "propose",
+            "suggest",
+            "candidate",
+            "option",
+            "possible",
+            "potential",
+            "recommend",
+            "example",
+            "sample",
+        )
+    )
+    about_replying = any(
+        token in compact
+        for token in (
+            "answer",
+            "reply",
+            "replies",
+            "respond",
+            "pick",
+            "choose",
+            "question",
+            "option",
+            "default",
+        )
+    )
+    return asking_for_help and about_replying
+
+
 def _stub_turn_intent(blob: str) -> dict[str, str]:
     user = ""
     for marker in ("User message:", "Latest user message:"):
@@ -81,6 +125,8 @@ def _stub_turn_intent(blob: str) -> dict[str, str]:
     if not user:
         user = blob
     compact = re.sub(r"\s+", " ", user).strip().lower().rstrip(".!")
+    if _stub_help_answering_questions(user):
+        return {"category": "information", "action": "answer"}
     if re.search(r"\bwhy should i approve\b", compact) or (
         "?" in user and re.search(r"\bapprove\b", compact) and "rate" not in compact
     ):
@@ -128,6 +174,15 @@ def _stub_qa(blob: str) -> str:
     ask = lower
     if "user question:" in lower:
         ask = lower.split("user question:", 1)[-1]
+    if _stub_help_answering_questions(ask):
+        return (
+            "Here are potential answers you can use or edit. "
+            "I am not treating this as your decision yet.\n\n"
+            "### The open question I asked\n"
+            "- (Recommended) A concrete default based on this sub-engineer's artifacts.\n"
+            "- A more conservative alternative.\n"
+            "- A more ambitious alternative.\n"
+        )
     if "offered api" in ask or "protocol" in ask or "endpoint" in ask:
         return (
             "This sub-engineer owns the offered API and protocol for its microservice. "
@@ -356,7 +411,7 @@ def _stub_implement(blob: str) -> dict[str, Any]:
         "implementation_notes": notes,
         "assistant_message": (
             f"Ready to implement **{name}** against its offered API and consulted peer "
-            "surfaces. Approve to mark this sub-engineer ready."
+            "surfaces. If this looks right, confirm, approve, or agree to mark this sub-engineer ready."
         ),
     }
 

@@ -137,6 +137,10 @@ USER_MESSAGE_FIRST_RULES = (
     "2. Do NOT reply with only the next prepared interview question or the next "
     "step script. A canned next-question with no response to what they just said "
     "is a FAILED turn.\n"
+    "2b. If they asked for help answering questions YOU asked (candidate options, "
+    "a recommended pick, or a draft reply): give 2–3 concrete options per open "
+    "question and mark one (Recommended). Do not treat that request as their "
+    "answer. Do not skip to a new question.\n"
     "3. If they asked to change the spec or design, apply it this turn.\n"
     "4. Only AFTER addressing them may you ask at most ONE follow-up, and only if "
     "it is still needed.\n"
@@ -149,11 +153,33 @@ USER_MESSAGE_FIRST_RULES = (
     "  (or a single bullet: None — with a one-line reason if the artifact is unchanged).\n"
 )
 
+ASK_TO_CONFIRM_RULES = (
+    "When the step is ready, ask them to confirm, approve, or agree so you can "
+    "continue. Never tell them to click a button or name a UI control. They may "
+    "confirm in chat or use the UI — their choice."
+)
+
+ASK_TO_CONFIRM_LINE = (
+    "If this looks right, confirm, approve, or agree so we can continue."
+)
+
 FEEDBACK_RESOLUTION_RULES = (
     "The user commented on the current proposal. You MUST follow USER MESSAGE FIRST.\n"
     f"{USER_MESSAGE_FIRST_RULES}\n"
-    "Then invite Approve for THIS updated version, not the previous one. "
-    "A **What you can do next** prompt is appended by the system."
+    "Then ask them to confirm, approve, or agree for THIS updated version, not the "
+    "previous one. Never tell them to click a button."
+)
+
+SUGGESTED_ANSWER_RULES = (
+    "If this turn is the user asking for help answering questions YOU asked — "
+    "candidate options, a recommended pick, or a draft reply — that request IS "
+    "the work of this turn. Judge that from the meaning of the message, not from "
+    "any fixed wording.\n"
+    "For every open question in your last assistant message and any unanswered "
+    "interview checklist items you already posed, give 2–3 concrete potential "
+    "answers and mark one (Recommended).\n"
+    "Do not treat their request as their answer. Do not skip to a new question. "
+    "Do not rewrite artifacts. Stay on the same questions so they can pick or edit."
 )
 
 
@@ -174,6 +200,9 @@ _TURN_INTENT_SYSTEM = (
     "- none: some other command.\n"
     "If category is information, action must be answer.\n"
     "A question about whether/why they should approve something is information.\n"
+    "If they want help answering questions you asked — candidate options, a "
+    "recommended pick, or a draft reply — that is information. It is not a "
+    "revision and not their interview answer. Decide from intent, not wording.\n"
     "A concern that implies a missing feature (e.g. 'why is there no rate limiting?') "
     "is command/revise.\n"
     "Respond ONLY with JSON:\n"
@@ -313,7 +342,7 @@ def format_next_prompt(
     mode: str = "step",
 ) -> str:
     """User-visible footer: what to do next to continue this process."""
-    label = (approve_label or "Approve").strip() or "Approve"
+    del approve_label
     lines = [NEXT_PROMPT_HEADER]
     if mode == "handoff":
         lines.extend(
@@ -332,7 +361,7 @@ def format_next_prompt(
     elif can_approve:
         lines.extend(
             [
-                f"- Click **{label}**, or say `Approve` / `next step` / `looks good`, to continue this process.",
+                f"- Confirm, approve, or agree (in chat or the UI) to continue this process.",
                 "- Ask a question about this step.",
                 "- Tell me what to change before we move on.",
             ]
@@ -358,13 +387,34 @@ _ECHO_PREFIX_RE = re.compile(
     r")\s*[:\(]\s*.{0,240}?(?:\)[.!]?\s*|[.!]+\s+)"
 )
 
+_CLICK_UI_RE = re.compile(
+    r"(?i)\bclick(?:\s+on)?\s+(?:the\s+)?"
+    r"(?:"
+    r"\*\*[^*]{1,80}\*\*"
+    r"|(?:Approve|Confirm|Continue|Pause|Execute|Next)(?:\s+\w+){0,8}"
+    r"|(?:approve|confirm|continue|pause|execute)(?:\s+\w+){0,8}\s+button"
+    r"|button"
+    r")"
+)
+
+
+def without_click_instruction(message: str) -> str:
+    """Chat must ask to confirm/approve/agree, never to click a UI control."""
+    body = (message or "").strip()
+    if not body:
+        return body
+    cleaned = _CLICK_UI_RE.sub("confirm, approve, or agree", body)
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    return cleaned.strip()
+
 
 def without_user_echo(message: str, user_text: str = "") -> str:
     """Drop verbatim restatements of the user's last message from an assistant reply."""
     body = (message or "").strip()
     if not body:
         return body
-    cleaned = _ECHO_PREFIX_RE.sub("", body).strip()
+    cleaned = without_click_instruction(_ECHO_PREFIX_RE.sub("", body).strip())
+    cleaned = without_click_instruction(cleaned)
     quoted = re.sub(r"\s+", " ", (user_text or "").strip())
     if quoted and len(quoted) >= 8:
         for wrap in (f"({quoted})", f'"{quoted}"', f"'{quoted}'"):
@@ -383,16 +433,12 @@ def with_next_prompt(
     can_approve: bool = True,
     mode: str = "step",
 ) -> str:
-    """Append a next-action prompt unless the message already has one or is a session-end note."""
+    """Return the reply without a 'What you can do next' footer."""
+    del approve_label, can_approve, mode
     body = without_user_echo((message or "").strip())
     if not body or _DONE_MESSAGE_RE.search(body):
         return body
-    if NEXT_PROMPT_HEADER.lower() in body.lower():
-        return body
-    return (
-        f"{body}\n\n"
-        f"{format_next_prompt(approve_label=approve_label, can_approve=can_approve, mode=mode)}"
-    )
+    return re.split(r"(?i)\n*\*\*What you can do next\*\*", body, maxsplit=1)[0].strip()
 
 
 def with_resolution_close(

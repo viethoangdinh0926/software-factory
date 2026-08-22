@@ -31,6 +31,10 @@ of the design tree, resolving dependencies between decisions one-by-one.
     questioning immediately. If there is not enough information to sketch a credible design,
     say so honestly and list what is missing. Only enable approval when the spec is sufficient,
     or when the user explicitly says **approve anyway**.
+11. If the user asks for potential, suggested, example, or recommended answers to the
+    questions you asked, stay on those questions. Give 2–3 concrete options per open
+    question and mark one `(Recommended)`. Do not treat that request as their answer
+    and do not skip ahead.
 
 ## Question format
 

@@ -270,7 +270,8 @@ def _step_artifact_rules(step: int) -> str:
             "- assistant_message: per CHAT DEPTH, walk through how you derived each number "
             "(the arithmetic chain from DAU → peak concurrency → QPS), which assumptions "
             "drive it most, how sensitive the design is if they are wrong, and what these "
-            "numbers rule in/out for later steps. Then invite Approve. Optional one ❓.\n"
+            "numbers rule in/out for later steps. Then ask them to confirm, approve, or "
+            "agree. Never tell them to click a button. Optional one ❓.\n"
             "Example scale_estimates snippet:\n"
             "- DAU: 50,000,000 (assumed YouTube-like; labeled assumption)\\n"
             "- Peak concurrent viewers: 5,000,000\\n"
@@ -329,7 +330,8 @@ def _step_artifact_rules(step: int) -> str:
     if step == 6:
         return header + (
             "HLD Step 6 — write design_justification synthesis (stack, CAP, residual risks). "
-            "Set design_ready_to_approve=true. Invite Approve & send design.\n"
+            "Set design_ready_to_approve=true. Ask them to confirm, approve, or agree "
+            "before sending the design. Never tell them to click a button.\n"
             "When writing design_justification, you MUST explain the functionality of each component "
             "from the design diagram. For each major component (API Gateway, microservices, databases, "
             "CDN, message queue, etc.), describe what it does, its role in the system, and how it "
@@ -472,7 +474,7 @@ def hld_step_node(state: DesignGraphState) -> dict[str, Any]:
             f"Current HLD step: {step} — {_STEP_TITLES.get(step, '')}.\n"
             f"{USER_MESSAGE_FIRST_RULES if pending else ''}"
             "Fill this step's primary artifact completely on this turn using labeled "
-            "assumptions. The interviewer should only need to click Approve.\n"
+            "assumptions. Ask them to confirm, approve, or agree — never tell them to click a button.\n"
             "If the user just commented, address that comment before restating the step.\n"
             "Do not skip steps unless the user explicitly directs it.\n"
             f"{step_rules}"

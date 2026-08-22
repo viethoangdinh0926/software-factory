@@ -137,7 +137,7 @@ assert all(x.get("status") == "awaiting_relations" for x in live), [x.get("statu
 assert all(x.get("can_approve") for x in live)
 assert all((x.get("entity_relationships") or x.get("api_design") or "").strip() for x in live)
 assert all("We initiate" in (x.get("entity_relationships") or x.get("api_design") or "") for x in live)
-assert all(NEXT_PROMPT_HEADER in (x.get("messages") or [{}])[-1].get("content", "") for x in live)
+assert all(NEXT_PROMPT_HEADER not in (x.get("messages") or [{}])[-1].get("content", "") for x in live)
 assert not pub["can_approve"]
 assert pub["wait_kind"] == "distributed", pub["wait_kind"]
 first_ids = {
@@ -156,7 +156,7 @@ assert ident["can_approve"]
 assert ident["messages"][-1]["content"].strip()
 assert "Updates to this proposal" in ident["messages"][-1]["content"]
 assert "None" in ident["messages"][-1]["content"]
-assert NEXT_PROMPT_HEADER in ident["messages"][-1]["content"]
+assert NEXT_PROMPT_HEADER not in ident["messages"][-1]["content"]
 
 s = store.chat(SESSION, "next step", service_id=identity_id)
 ident = next(x for x in s.to_public()["services"] if x["microservice_id"] == identity_id)
@@ -173,7 +173,7 @@ assert ident["can_approve"]
 assert ident["messages"][-1]["content"].strip()
 assert "Updates to this proposal" in ident["messages"][-1]["content"]
 assert "None" in ident["messages"][-1]["content"]
-assert NEXT_PROMPT_HEADER in ident["messages"][-1]["content"]
+assert NEXT_PROMPT_HEADER not in ident["messages"][-1]["content"]
 
 s = store.chat(SESSION, "Approve", service_id=identity_id)
 ident = next(x for x in s.to_public()["services"] if x["microservice_id"] == identity_id)

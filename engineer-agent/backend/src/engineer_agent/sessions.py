@@ -23,6 +23,7 @@ from engineer_agent.execution import (
 from engineer_agent.llm import invoke_json
 from engineer_agent.plan_parse import ParsedHandoff, parse_handoff, parse_related_entities, sub_agent_id
 from engineer_agent.query_intent import (
+    SUGGESTED_ANSWER_RULES,
     classify_user_message,
     with_next_prompt,
     with_resolution_close,
@@ -944,6 +945,13 @@ class SessionStore:
             time.sleep(0.15)
 
     def _answer(self, sub: dict[str, Any], question: str) -> str:
+        last_assistant = ""
+        for msg in reversed(sub.get("messages") or []):
+            if isinstance(msg, dict) and msg.get("role") == "assistant":
+                last_assistant = str(msg.get("content") or "").strip()
+                if last_assistant:
+                    break
+        extra = f"{SUGGESTED_ANSWER_RULES}\n"
         artifacts = (
             f"Sub-agent: {sub.get('sub_agent_id')}\n"
             f"Service: {sub.get('microservice_name')}\n"
@@ -951,12 +959,14 @@ class SessionStore:
             f"Offered API:\n{(sub.get('offered_api') or '')[:4000]}\n"
             f"Execution plan:\n{json.dumps(sub.get('execution_plan') or {}, indent=2)[:4000]}\n"
             f"Entity relationships:\n{(sub.get('entity_relationships') or '')[:2500]}\n"
-            f"Peer consults:\n{json.dumps(sub.get('peer_consults') or [], indent=2)[:2500]}"
+            f"Peer consults:\n{json.dumps(sub.get('peer_consults') or [], indent=2)[:2500]}\n"
+            f"Last assistant message:\n{last_assistant[:2500]}"
         )
         result = invoke_json(
             system=(
                 "You are answering a question about the current sub-engineer.\n"
-                "Answer from the artifacts. Do not invite Approve.\n"
+                f"{extra}"
+                "Answer from the artifacts. Do not ask them to confirm in place of the answer.\n"
                 'Respond ONLY with JSON: {"assistant_message": string}'
             ),
             user=f"Current artifacts:\n{artifacts}\n\nUser question:\n{question}",

@@ -61,12 +61,56 @@ class StubChatModel(BaseChatModel):
             payload = _stub_tech_stack(blob)
         else:
             payload = {
-                "assistant_message": "Stub orchestrator is ready. Approve to continue.",
+                "assistant_message": "Stub orchestrator is ready. If this looks right, confirm, approve, or agree so we can continue.",
                 "ready": True,
             }
         return ChatResult(
             generations=[ChatGeneration(message=AIMessage(content=json.dumps(payload)))]
         )
+
+
+def _stub_help_answering_questions(text: str) -> bool:
+    """Stub stand-in for the classifier LLM: user wants candidate replies to our questions."""
+    compact = re.sub(r"\s+", " ", (text or "").strip().lower())
+    if not compact:
+        return False
+    asking_for_help = any(
+        token in compact
+        for token in (
+            "help me",
+            "help us",
+            "what would you",
+            "what should i",
+            "what could i",
+            "can you draft",
+            "could you draft",
+            "draft",
+            "propose",
+            "suggest",
+            "candidate",
+            "option",
+            "possible",
+            "potential",
+            "recommend",
+            "example",
+            "sample",
+        )
+    )
+    about_replying = any(
+        token in compact
+        for token in (
+            "answer",
+            "reply",
+            "replies",
+            "respond",
+            "pick",
+            "choose",
+            "question",
+            "option",
+            "default",
+        )
+    )
+    return asking_for_help and about_replying
 
 
 def _stub_turn_intent(blob: str) -> dict[str, str]:
@@ -78,6 +122,8 @@ def _stub_turn_intent(blob: str) -> dict[str, str]:
     if not user:
         user = blob
     compact = re.sub(r"\s+", " ", user).strip().lower().rstrip(".!")
+    if _stub_help_answering_questions(user):
+        return {"category": "information", "action": "answer"}
     if re.search(r"\bwhy should i approve\b", compact) or (
         "?" in user and re.search(r"\bapprove\b", compact) and "rate" not in compact
     ):
@@ -127,6 +173,15 @@ def _stub_qa(blob: str) -> str:
         ask = lower.split("user question:", 1)[-1]
     elif "latest user message:" in lower:
         ask = lower.split("latest user message:", 1)[-1]
+    if _stub_help_answering_questions(ask):
+        return (
+            "Here are potential answers you can use or edit. "
+            "I am not treating this as your decision yet.\n\n"
+            "### The open question I asked\n"
+            "- (Recommended) A concrete default based on the current artifacts.\n"
+            "- A more conservative alternative.\n"
+            "- A more ambitious alternative.\n"
+        )
     if "endpoint" in ask or " url" in ask or "urls" in ask:
         found = re.findall(
             r"\b((?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+/[A-Za-z0-9_{}\-./]*)",

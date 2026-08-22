@@ -48,8 +48,8 @@ def market_research_node(state: DesignGraphState) -> dict[str, Any]:
     assistant_message = (
         f"Market evaluation for {version_hint} complete — idea grade **{grade}**.\n\n"
         f"{summary}\n\n"
-        "Review the **Market evaluation** report. When you're ready, click "
-        "**Continue after market evaluation** to hand off the design package and "
+        "Review the **Market evaluation** report. If this looks right, confirm, "
+        "approve, or agree so we can hand off the design package and "
         f"resume **{str(track).upper()}** design iteration."
     )
 

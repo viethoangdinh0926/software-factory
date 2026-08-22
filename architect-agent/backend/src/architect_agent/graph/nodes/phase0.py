@@ -150,7 +150,8 @@ def phase0_classify_node(state: DesignGraphState) -> dict[str, Any]:
                     "multi-user scale, or 'like YouTube/Uber/SaaS'. LLD if it is a library, CLI, "
                     "or single OS process.\n"
                     "Set design_track to lld or hld and ready_to_advance=true.\n"
-                    "assistant_message should say the classification and invite Approve to start the track.\n"
+                    "assistant_message should say the classification and ask them to confirm, "
+                    "approve, or agree to start the track. Never tell them to click a button.\n"
                     "Respond ONLY with JSON:\n"
                     "{\n"
                     '  "design_track": "unset" | "lld" | "hld",\n'
@@ -177,7 +178,10 @@ def phase0_classify_node(state: DesignGraphState) -> dict[str, Any]:
             ledger = result.get("tradeoff_ledger") or state.get("tradeoff_ledger") or ""
             assistant = (
                 result.get("assistant_message")
-                or f"Scope classified as **{new_track.upper()}**. Click approve to begin the track."
+                or (
+                    f"Scope classified as **{new_track.upper()}**. "
+                    "If this looks right, confirm, approve, or agree so we can begin the track."
+                )
             )
             if pending:
                 assistant = with_resolution_close(
@@ -286,6 +290,24 @@ def phase0_classify_node(state: DesignGraphState) -> dict[str, Any]:
                 "messages": [{"role": "assistant", "content": current_question.get("text", ""), "node": "phase0"}],
             }
 
+        if is_informational_query(pending):
+            return answer_before_approve(
+                state,
+                pending,
+                node="phase0",
+                base={
+                    "phase": "phase0",
+                    "design_track": "unset",
+                    "design_step": 0,
+                    "ready_to_advance": False,
+                    "interview_questions": interview_questions,
+                    "interview_answers": interview_answers,
+                    "current_question_index": current_question_index,
+                    "interview_complete": False,
+                    "spec_compiled": False,
+                },
+            )
+
         current_question = interview_questions[current_question_index]
         question_id = current_question.get("id", f"q{current_question_index}")
         answers = dict(interview_answers or {})
@@ -386,7 +408,8 @@ def phase0_classify_node(state: DesignGraphState) -> dict[str, Any]:
                 "Do NOT ask for DAU/QPS/bitrate here — that is HLD Step 1.\n"
                 "If classification is already clear, set design_track to lld or hld and "
                 "ready_to_advance=true. assistant_message should say the classification and "
-                "invite Approve to start the track.\n"
+                "ask them to confirm, approve, or agree to start the track. Never tell them "
+                "to click a button.\n"
                 "Ask ONE clarifying question ONLY if LLD vs HLD is truly ambiguous; still "
                 "propose a (Recommended) track.\n"
                 "Respond ONLY with JSON:\n"
@@ -418,7 +441,8 @@ def phase0_classify_node(state: DesignGraphState) -> dict[str, Any]:
         assistant = (
             result.get("assistant_message")
             or (
-                f"Scope classified as **{new_track.upper()}**. Click approve to begin the track."
+                f"Scope classified as **{new_track.upper()}**. "
+                "If this looks right, confirm, approve, or agree so we can begin the track."
                 if ready
                 else "I need a bit more detail to classify LLD vs HLD."
             )

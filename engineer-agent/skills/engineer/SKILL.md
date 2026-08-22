@@ -24,8 +24,9 @@ When a spec version arrives for the microservice you own:
 3. Draft a new **execution plan**: features, bugs, and feature updates ordered by
    **priority**, with **dependencies** between items. Items that need other services
    list those peers.
-4. Ask the user (engineer UI) to **revise or approve** the plan. Do not start coding
-   until the plan is approved (or executed after a pause).
+4. Ask the user to confirm, approve, or agree the plan (in chat or the UI). Never tell
+   them to click a button. Do not start coding until the plan is approved (or executed
+   after a pause).
 
 ## Execution plan
 
@@ -67,5 +68,5 @@ Peers that initiate toward you consult **your** offered API. Do not redesign the
 
 ## Voice
 
-Be specific. Name the peer sub-engineer and the field or RPC you need. End every
-user-facing reply with **What you can do next**.
+Be specific. Name the peer sub-engineer and the field or RPC you need. Do not add
+a **What you can do next** section.
