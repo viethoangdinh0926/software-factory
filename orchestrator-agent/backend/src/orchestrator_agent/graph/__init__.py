@@ -9,7 +9,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
 from orchestrator_agent.config import BACKEND_ROOT
-from orchestrator_agent.graph.nodes.api import comms_spec_node
+from orchestrator_agent.graph.nodes.api import relations_node
 from orchestrator_agent.graph.nodes.classify import classify_node
 from orchestrator_agent.graph.nodes.features import feature_discuss_node
 from orchestrator_agent.graph.nodes.ingest import handle_update_node, ingest_node
@@ -51,9 +51,10 @@ _WAIT_MAP: dict[str, Any] = {
     "extract_services": "extract_services",
     "prime_all": "prime_all",
     "feature_discuss": "feature_discuss",
-    "comms_spec": "comms_spec",
-    "api_type_research": "comms_spec",
-    "api_design_propose": "comms_spec",
+    "relations": "relations",
+    "comms_spec": "relations",
+    "api_type_research": "relations",
+    "api_design_propose": "relations",
     "stack_research": "stack_research",
     "emit_plan": "emit_plan",
     "wait": "wait",
@@ -74,9 +75,10 @@ def build_graph() -> CompiledStateGraph:
     graph.add_node("extract_services", extract_services_node)
     graph.add_node("prime_all", prime_all_services_node)
     graph.add_node("feature_discuss", feature_discuss_node)
-    graph.add_node("comms_spec", comms_spec_node)
-    graph.add_node("api_type_research", comms_spec_node)
-    graph.add_node("api_design_propose", comms_spec_node)
+    graph.add_node("relations", relations_node)
+    graph.add_node("comms_spec", relations_node)
+    graph.add_node("api_type_research", relations_node)
+    graph.add_node("api_design_propose", relations_node)
     graph.add_node("stack_research", stack_research_node)
     graph.add_node("emit_plan", emit_plan_node)
     graph.add_node("wait", wait_node)
@@ -102,6 +104,7 @@ def build_graph() -> CompiledStateGraph:
     graph.add_edge("extract_services", "prime_all")
     graph.add_edge("prime_all", "wait")
     graph.add_edge("feature_discuss", "wait")
+    graph.add_edge("relations", "wait")
     graph.add_edge("comms_spec", "wait")
     graph.add_edge("api_type_research", "wait")
     graph.add_edge("api_design_propose", "wait")
@@ -145,6 +148,7 @@ def initial_state(session_id: str, markdown: str) -> dict[str, Any]:
         "plan_spec": "",
         "api_type": "",
         "api_design": "",
+        "entity_relationships": "",
         "app_status": "",
         "search_notes": "",
         "messages": [],

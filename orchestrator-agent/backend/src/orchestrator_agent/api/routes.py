@@ -7,6 +7,7 @@ from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
 from orchestrator_agent.config import get_settings
+from orchestrator_agent.git_access import GitAccessError
 from orchestrator_agent.sessions import get_store
 
 logger = logging.getLogger(__name__)
@@ -20,6 +21,11 @@ class ChatRequest(BaseModel):
 
 class ApproveRequest(BaseModel):
     service_id: str | None = None
+
+
+class GitSaveRequest(BaseModel):
+    git_repo_url: str = Field(min_length=1)
+    ssh_private_key: str | None = None
 
 
 class IngestResponse(BaseModel):
@@ -144,3 +150,33 @@ async def download_plan(session_id: str) -> PlainTextResponse:
         media_type="text/markdown; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="plan-spec-{session_id}.md"'},
     )
+
+
+@router.put("/api/sessions/{session_id}/git")
+async def save_git(session_id: str, body: GitSaveRequest) -> dict:
+    try:
+        session = get_store().save_git(
+            session_id,
+            git_repo_url=body.git_repo_url,
+            ssh_private_key=body.ssh_private_key,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Unknown design session") from exc
+    except GitAccessError as exc:
+        raise HTTPException(status_code=400, detail=exc.user_message) from exc
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Failed to save git access for session %s", session_id)
+        raise HTTPException(status_code=500, detail="Something went wrong. Please try again.") from exc
+    return session.to_public()
+
+
+@router.post("/api/sessions/{session_id}/git/send")
+async def send_git(session_id: str) -> dict:
+    try:
+        session = get_store().send_git(session_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Unknown design session") from exc
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Failed to send git access for session %s", session_id)
+        raise HTTPException(status_code=500, detail="Something went wrong. Please try again.") from exc
+    return session.to_public()

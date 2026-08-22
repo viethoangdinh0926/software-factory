@@ -32,6 +32,7 @@ class OrchestratorGraphState(TypedDict):
     plan_spec: str
     api_type: str
     api_design: str
+    entity_relationships: str
     app_status: str
     search_notes: str
     messages: Annotated[list[dict[str, Any]], _append_messages]

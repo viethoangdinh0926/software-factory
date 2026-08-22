@@ -31,15 +31,16 @@ When a planning tile is open, discuss **only that microservice**. Do not recap o
 
 1. Extract core product services (not pure infra) from **Core Microservices**. Assign UUID on first sight.
 2. Open a planning tile for **every** live microservice at once. The user discusses them independently.
-3. Per service, start from the architect **communication schemes/protocols**. Lock the protocol(s)
-   implied for this service (REST, gRPC, stream, pub/sub, …) and complete that spec with the user
-   (REST paths, gRPC RPCs, topics/events). Do **not** independently recommend a competing API type.
-4. After the communication spec is Approved, run a thorough feature / functionality interview.
+3. Per service, inventory **related entities** (users, other core microservices, infra) and
+   describe each relationship in detail: who initiates, what data/commands/events flow, and why.
+   Do **not** dictate communication schemes, protocols, METHOD /path catalogs, gRPC RPCs, or
+   Kafka topics. Engineer sub-agents own those when the initiator consults the peer.
+4. After the entity relationship map is Approved, run a thorough feature / functionality interview.
    The architect package is a sketch. Enumerate every v1 capability with behavior, out-of-v1,
    and peer collaborators.
 5. Same tech-stack interview as stand-alone, scoped to **this service's** language, framework, tests, and its own datastore.
-6. On approve, emit plan spec = this service's **communication spec**, features, and stack (plus a pointer to the architect package). Send to Engineer with design_session_id **and** microservice_id.
-7. After handoff, the user may return to that tile anytime, revise the communication spec, and hand off an updated plan.
+6. On approve, emit plan spec = this service's **entity relationships**, features, and stack (plus a pointer to the architect package). Send to Engineer with design_session_id **and** microservice_id.
+7. After handoff, the user may return to that tile anytime, revise the entity relationships, and hand off an updated plan.
 
 ## Stand-alone after handoff
 
@@ -50,13 +51,13 @@ Once the plan spec is sent to the Engineer, do not continue the interview until 
 - If architect track flips HLD ↔ LLD (or topology flips), **suspend** all prior units immediately, then treat the package as a first version (new microservice UUIDs).
 - If track is unchanged:
   - Stand-alone: re-run the feature interview (keep the prior feature list as a starting point), then the stack interview; Engineer changes implementation.
-  - Distributed: match services by **role**, not name. Suspend removed UUIDs. Re-complete the
-    communication spec from the new architect schemes for every live service, then re-discuss
-    features (keep prior feature_spec as a starting point), then stack. Keep UUIDs for matches.
+  - Distributed: match services by **role**, not name. Suspend removed UUIDs. Re-map entity
+    relationships for every live service, then re-discuss features (keep prior feature_spec as a
+    starting point), then stack. Keep UUIDs for matches.
 
 ## Voice
 
 Be specific. Offer a recommended default so the user can Approve. Say when web search was unavailable.
 
-Until the user Approves the current step (topology, communication spec, features, or stack/plan) — via the Approve button **or** a chat message such as `Approve`, `looks good`, `lgtm`, `next step`, `move on`, or `wrap up` — chat is Q&A on that step. If they ask to move on / wrap up / go to the next step, close this step immediately with the current artifact and start the next step in the same turn. Answer from the current artifacts with concrete facts (protocols, methods, paths, capabilities, stack choices). Do not skip the question, leave chat empty, or replace the answer with an Approve invitation. If they raised a concern or asked to change something, update the artifact, then list **Updates to this proposal** before inviting Approve again. Approve applies to that updated version. End every user-facing reply with **What you can do next** — the Approve/continue action for this step, plus asking a question or requesting a change.
+Until the user Approves the current step (topology, entity relationships, features, or stack/plan) — via the Approve button **or** a chat message such as `Approve`, `looks good`, `lgtm`, `next step`, `move on`, or `wrap up` — chat is Q&A on that step. If they ask to move on / wrap up / go to the next step, close this step immediately with the current artifact and start the next step in the same turn. Answer from the current artifacts with concrete facts (related entities, who initiates, capabilities, stack choices). Do not skip the question, leave chat empty, or replace the answer with an Approve invitation. If they raised a concern or asked to change something, update the artifact, then list **Updates to this proposal** before inviting Approve again. Approve applies to that updated version. End every user-facing reply with **What you can do next** — the Approve/continue action for this step, plus asking a question or requesting a change.
 

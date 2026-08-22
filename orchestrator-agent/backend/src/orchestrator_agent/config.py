@@ -45,6 +45,9 @@ class Settings(BaseSettings):
 
     engineer_agent_url: str | None = None
 
+    # Live `git ls-remote` with the session SSH key before sending git data to the engineer.
+    git_verify_enabled: bool = True
+
 
 @lru_cache
 def get_settings() -> Settings:

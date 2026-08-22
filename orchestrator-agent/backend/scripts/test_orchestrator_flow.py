@@ -8,6 +8,8 @@ import tempfile
 from pathlib import Path
 
 os.environ["LLM_PROVIDER"] = "stub"
+os.environ["ENGINEER_AGENT_URL"] = ""
+os.environ["GIT_VERIFY_ENABLED"] = "false"
 
 tmp = Path(tempfile.mkdtemp(prefix="orchestrator-smoke-"))
 os.environ["DATA_DIR"] = str(tmp / "sessions")
@@ -93,7 +95,7 @@ focus = service_focus_user_block(
 )
 assert "Focus microservice: IdentityService" in focus
 assert "Package excerpt" not in focus
-assert "Architect communication schemes:" in focus
+assert "Architect communication schemes (context only — do not lock protocols):" in focus
 assert pick_assistant_message({"assistant_message": ""}, fallback="Hi") == "Hi"
 assert "POST /login" in pick_assistant_message(
     {"assistant_message": "  ", "api_design": "POST /login"},
@@ -130,9 +132,10 @@ assert s.topology == "distributed", s.topology
 assert s.architect_track == "hld"
 live = [x for x in pub["services"] if x.get("status") != "suspended"]
 assert len(live) == 2, live
-assert all(x.get("status") == "awaiting_comms" for x in live), [x.get("status") for x in live]
+assert all(x.get("status") == "awaiting_relations" for x in live), [x.get("status") for x in live]
 assert all(x.get("can_approve") for x in live)
-assert all((x.get("api_design") or "").strip() for x in live)
+assert all((x.get("entity_relationships") or x.get("api_design") or "").strip() for x in live)
+assert all("We initiate" in (x.get("entity_relationships") or x.get("api_design") or "") for x in live)
 assert all(NEXT_PROMPT_HEADER in (x.get("messages") or [{}])[-1].get("content", "") for x in live)
 assert not pub["can_approve"]
 assert pub["wait_kind"] == "distributed", pub["wait_kind"]
@@ -144,10 +147,10 @@ assert "IdentityService" in first_ids and "VideoCatalogService" in first_ids
 catalog_id = first_ids["VideoCatalogService"]
 identity_id = first_ids["IdentityService"]
 
-print("  identity comms qa…", flush=True)
-s = store.chat(SESSION, "Why is REST the locked protocol?", service_id=identity_id)
+print("  identity relations qa…", flush=True)
+s = store.chat(SESSION, "Who initiates toward VideoCatalogService?", service_id=identity_id)
 ident = next(x for x in s.to_public()["services"] if x["microservice_id"] == identity_id)
-assert ident["status"] == "awaiting_comms", ident["status"]
+assert ident["status"] == "awaiting_relations", ident["status"]
 assert ident["can_approve"]
 assert ident["messages"][-1]["content"].strip()
 assert "Updates to this proposal" in ident["messages"][-1]["content"]
@@ -157,9 +160,9 @@ assert NEXT_PROMPT_HEADER in ident["messages"][-1]["content"]
 s = store.chat(SESSION, "next step", service_id=identity_id)
 ident = next(x for x in s.to_public()["services"] if x["microservice_id"] == identity_id)
 cat = next(x for x in s.to_public()["services"] if x["microservice_id"] == catalog_id)
-print("  after identity comms", ident["status"], cat["status"], flush=True)
+print("  after identity relations", ident["status"], cat["status"], flush=True)
 assert ident["approve_kind"] == "approve_features", ident["approve_kind"]
-assert cat["status"] == "awaiting_comms", "other service must stay on its own tile"
+assert cat["status"] == "awaiting_relations", "other service must stay on its own tile"
 
 print("  identity features qa…", flush=True)
 s = store.chat(SESSION, "What features are in v1?", service_id=identity_id)
@@ -176,14 +179,15 @@ ident = next(x for x in s.to_public()["services"] if x["microservice_id"] == ide
 cat = next(x for x in s.to_public()["services"] if x["microservice_id"] == catalog_id)
 print("  after identity features", ident["status"], cat["status"], flush=True)
 assert ident["approve_kind"] == "approve_plan"
-assert cat["status"] == "awaiting_comms", "other service must stay on its own tile"
+assert cat["status"] == "awaiting_relations", "other service must stay on its own tile"
 s = store.approve(SESSION, service_id=identity_id)
 print("  after identity plan", [x.get("status") for x in s.services], flush=True)
 ident = next(x for x in s.services if x["microservice_id"] == identity_id)
 cat = next(x for x in s.services if x["microservice_id"] == catalog_id)
 assert ident.get("status") == "sent"
-assert cat.get("status") == "awaiting_comms"
-assert "## Communication spec" in (ident.get("plan_spec") or "")
+assert cat.get("status") == "awaiting_relations"
+assert "## Entity relationships" in (ident.get("plan_spec") or "")
+assert "Locked protocol" not in (ident.get("plan_spec") or "")
 assert "## Features / functionality" in (ident.get("plan_spec") or "")
 assert (ident.get("feature_spec") or "").strip()
 assert s.engineer_handoffs[-1]["action"] == "plan"
@@ -192,7 +196,7 @@ assert s.engineer_handoffs[-1]["microservice_id"] == identity_id
 print("  revise sent identity…", flush=True)
 s = store.chat(SESSION, "Add a health check endpoint.", service_id=identity_id)
 ident = next(x for x in s.to_public()["services"] if x["microservice_id"] == identity_id)
-assert ident["status"] == "awaiting_comms", ident["status"]
+assert ident["status"] == "awaiting_relations", ident["status"]
 
 hld_v2 = _package(
     version=2,
@@ -259,6 +263,58 @@ try:
 except PermissionError:
     pass
 assert store.get(SESSION).tech_stack == s.tech_stack
+
+print("git access save + failed send + resend…", flush=True)
+from orchestrator_agent.git_access import GitAccessError, validate_repo_url
+from orchestrator_agent import sessions as sessions_mod
+
+SAMPLE_KEY = (
+    "-----BEGIN OPENSSH PRIVATE KEY-----\n"
+    "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW\n"
+    "-----END OPENSSH PRIVATE KEY-----\n"
+)
+try:
+    validate_repo_url("https://github.com/org/repo.git")
+    raise AssertionError("https git url should be rejected")
+except GitAccessError:
+    pass
+s = store.save_git(
+    SESSION,
+    git_repo_url="git@github.com:org/video-platform.git",
+    ssh_private_key=SAMPLE_KEY,
+)
+pub = s.to_public()
+assert pub["git_repo_url"] == "git@github.com:org/video-platform.git"
+assert pub["git_key_configured"] is True
+assert pub["can_send_git"] is True
+assert "ssh_private_key" not in pub
+assert "git_ssh_private_key" not in pub
+s = store.send_git(SESSION)
+assert s.git_send_status == "failed", s.git_send_status
+assert s.git_send_error
+assert s.to_public()["can_send_git"] is True
+
+def _fake_send(**kwargs):
+    from orchestrator_agent.a2a.engineer import EngineerHandoff
+
+    return EngineerHandoff(
+        status="sent",
+        handoff_id="git-1",
+        path="",
+        target_url="http://127.0.0.1:8091",
+        detail="Engineer stored git access for this design session.",
+        at="2026-08-22T00:00:00+00:00",
+        action="git",
+        design_session_id=kwargs["design_session_id"],
+        design_version=0,
+        microservice_id=None,
+    )
+
+sessions_mod.send_git_access = _fake_send  # type: ignore[method-assign]
+s = store.send_git(SESSION)
+assert s.git_send_status == "sent", s.git_send_error
+assert s.git_send_error == ""
+assert any(h["action"] == "git" and h["status"] == "sent" for h in s.engineer_handoffs)
 
 print("OK", flush=True)
 sys.exit(0)

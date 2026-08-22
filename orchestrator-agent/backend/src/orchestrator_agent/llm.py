@@ -47,12 +47,14 @@ class StubChatModel(BaseChatModel):
             payload = _stub_extract(blob)
         elif "orchestrator feature advisor" in lower:
             payload = _stub_features(blob)
+        elif "orchestrator relationship advisor" in lower:
+            payload = _stub_relations(blob)
         elif "orchestrator communication advisor" in lower:
-            payload = _stub_comms(blob)
+            payload = _stub_relations(blob)
         elif "orchestrator api type advisor" in lower:
-            payload = _stub_comms(blob)
+            payload = _stub_relations(blob)
         elif "orchestrator api design proposer" in lower:
-            payload = _stub_comms(blob)
+            payload = _stub_relations(blob)
         elif "orchestrator tech stack advisor" in lower:
             payload = _stub_tech_stack(blob)
         else:
@@ -93,11 +95,17 @@ def _stub_qa(blob: str) -> str:
             "The current v1 feature list on this step is unchanged. I can walk through "
             "each capability, who it is for, and what is out of v1 if you want a specific line."
         )
+    if "relationship" in ask or "entity" in ask or "who initiates" in ask:
+        return (
+            "The current entity relationship map on this tile is unchanged. I can walk "
+            "through each related user, peer service, or infra component and who initiates "
+            "that link. Protocols and APIs are not locked here."
+        )
     if "rest" in ask or "grpc" in ask or "graphql" in ask or "protocol" in ask or "communication" in ask:
         return (
-            "The locked protocol on this tile comes from the architect communication "
-            "schemes. I have not changed it. REST at the edge is the current lock unless "
-            "the schemes named gRPC or pub/sub for this service."
+            "This tile does not lock REST vs gRPC vs topics. Related entities and who "
+            "initiates each link are in the relationship map. Engineer sub-agents choose "
+            "protocols when they consult each other."
         )
     if "stack" in ask or "python" in ask or "java" in ask:
         return "The current tech stack on this step is unchanged. I can quote language, framework, and datastore if you want a specific line."
@@ -294,7 +302,7 @@ def _stub_features(blob: str) -> dict[str, Any]:
     }
 
 
-def _stub_comms(blob: str) -> dict[str, Any]:
+def _stub_relations(blob: str) -> dict[str, Any]:
     name = "Service"
     focus = re.search(r"Focus microservice:\s*([A-Za-z0-9]+)", blob)
     if focus:
@@ -303,40 +311,45 @@ def _stub_comms(blob: str) -> dict[str, Any]:
         found = re.findall(r"\b([A-Z][A-Za-z0-9]+Service)\b", blob)
         if found:
             name = found[-1]
-    slug = re.sub(r"Service$", "", name)
-    slug = re.sub(r"(?<!^)(?=[A-Z])", "-", slug).lower() or "resource"
-    lower = blob.lower()
-    protocol = "REST"
-    if "change to grpc" in lower or "use grpc" in lower:
-        protocol = "gRPC"
-    if re.search(r"currently locked protocol\(s\):\s*grpc", lower):
-        protocol = "gRPC"
+    peers = [n for n in re.findall(r"\b([A-Z][A-Za-z0-9]+Service)\b", blob) if n != name]
+    peer = peers[0] if peers else "PeerDomainService"
     spec = (
-        f"## {name} communication spec ({protocol})\n\n"
-        "Locked from the architect communication schemes; not an independent API-type pick.\n\n"
-        "### User / gateway ↔ this service\n"
-        f"- `{protocol}` request/response for commands and queries this service owns.\n\n"
-        f"### `POST /v1/{slug}`\n"
-        "Create the primary resource. Validates caller identity via Identity (or local auth), "
-        "writes the system of record, and emits a domain event other services may consume.\n\n"
-        f"### `GET /v1/{slug}/{{id}}`\n"
-        "Read the resource by id. Returns 404 when missing.\n\n"
-        f"### `PATCH /v1/{slug}/{{id}}`\n"
-        "Partial update of mutable fields. Enforces ownership; etag / version on write.\n\n"
-        "### Service ↔ peers / infra\n"
-        "- Kafka pub/sub for domain events this service produces.\n"
-        "- Request/response SQL to the datastore this service owns.\n"
+        f"## Entity relationships for {name}\n\n"
+        "### User (kind: user)\n"
+        "- We initiate: no. Callers and API gateways initiate toward this service.\n"
+        "- Relationship: users send commands and queries this service owns (register, "
+        "read, update). This service returns owned-resource state; it does not prescribe "
+        "HTTP vs gRPC here.\n\n"
+        f"### {peer} (kind: core_microservice)\n"
+        "- We initiate: yes when this service must fetch collaborator state or notify it "
+        "of a domain event it produced.\n"
+        "- Relationship: this service depends on the collaborator for authorization checks "
+        "or owned-object lookups. The peer's offered API is owned by that service's "
+        "engineer sub-agent, not this plan.\n"
+        "- Data this service needs from them: identity/ownership of the related record.\n"
+        "- Data this service provides to them: events when this service's record changes.\n\n"
+        "### Postgres (kind: infra)\n"
+        "- We initiate: yes.\n"
+        "- Relationship: system of record for objects this service owns; reads and writes "
+        "stay inside this bounded context.\n\n"
+        "### Message broker (kind: infra)\n"
+        "- We initiate: yes for events this service produces.\n"
+        "- Relationship: notify collaborators of state changes without locking a topic "
+        "catalog in this plan.\n"
     )
     return {
-        "locked_protocol": protocol,
-        "communication_spec": spec,
+        "entity_relationships": spec,
         "api_design": spec,
         "assistant_message": (
-            f"Locked **{protocol}** for **{name}** from the architect schemes and completed "
-            "the communication spec (request/response surface plus pub/sub events). "
-            "Chat to refine, or approve the communication spec."
+            f"Mapped related entities for **{name}**: users, **{peer}**, datastore, and "
+            "broker, including who initiates each link. Chat to refine, or approve the "
+            "relationship map. Protocols and APIs stay with engineer sub-agents."
         ),
     }
+
+
+def _stub_comms(blob: str) -> dict[str, Any]:
+    return _stub_relations(blob)
 
 
 def _stub_tech_stack(blob: str) -> dict[str, Any]:

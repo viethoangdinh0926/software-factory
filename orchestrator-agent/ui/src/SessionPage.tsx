@@ -17,6 +17,8 @@ import {
   getSession,
   planDownloadUrl,
   retryIngest,
+  saveGit,
+  sendGit,
   serviceLabel,
   type MicroservicePlan,
   type WorkflowSession,
@@ -124,29 +126,26 @@ function InterviewResultsModal({
 }
 
 function ServiceInterviewArtifacts({ svc }: { svc: MicroservicePlan }) {
-  const apiType = svc.api_type || svc.proposed_api_type;
+  const relations = svc.entity_relationships || svc.api_design;
   const hasAny = Boolean(
-    svc.feature_spec || apiType || svc.api_design || svc.tech_stack || svc.plan_spec,
+    svc.feature_spec || relations || svc.tech_stack || svc.plan_spec,
   );
   if (!hasAny) {
     return (
       <p className="lede">
-        No interview results yet. Discuss this service to agree the communication spec, features,
+        No interview results yet. Discuss this service to agree related entities, features,
         and stack.
       </p>
     );
   }
   return (
     <>
-      {svc.api_design || apiType ? (
+      {relations ? (
         <article className="artifact">
-          <h3>Communication spec</h3>
-          {apiType ? <p>Locked protocol: {apiType}</p> : null}
-          {svc.api_design ? (
-            <div className="doc">
-              <MarkdownView content={svc.api_design} />
-            </div>
-          ) : null}
+          <h3>Entity relationships</h3>
+          <div className="doc">
+            <MarkdownView content={relations} />
+          </div>
         </article>
       ) : null}
       {svc.feature_spec ? (
@@ -196,9 +195,12 @@ function ServiceTile({
   const [pending, setPending] = useState<string | null>(null);
   const [specOpen, setSpecOpen] = useState(false);
   const open = svc.discussion_open && svc.status !== "suspended";
-  const apiType = svc.api_type || svc.proposed_api_type;
   const hasResults = Boolean(
-    svc.feature_spec || apiType || svc.api_design || svc.tech_stack || svc.plan_spec,
+    svc.feature_spec ||
+      svc.entity_relationships ||
+      svc.api_design ||
+      svc.tech_stack ||
+      svc.plan_spec,
   );
   const closeSpec = useCallback(() => setSpecOpen(false), []);
 
@@ -304,6 +306,135 @@ function ServiceTile({
           <p className="finalize-note">This microservice is suspended.</p>
         )}
       </div>
+    </section>
+  );
+}
+
+function GitAccessPanel({
+  session,
+  busy,
+  onBusy,
+  onUpdate,
+  onError,
+}: {
+  session: WorkflowSession;
+  busy: boolean;
+  onBusy: (id: string | null) => void;
+  onUpdate: (session: WorkflowSession) => void;
+  onError: (msg: string) => void;
+}) {
+  const [repoUrl, setRepoUrl] = useState(session.git_repo_url || "");
+  const [sshKey, setSshKey] = useState("");
+  const [savedNote, setSavedNote] = useState<string | null>(null);
+
+  async function onSave(e: FormEvent) {
+    e.preventDefault();
+    if (busy || session.finalized) return;
+    onBusy("git");
+    setSavedNote(null);
+    onError("");
+    try {
+      const next = await saveGit(session.design_session_id, repoUrl.trim(), sshKey);
+      onUpdate(next);
+      setSshKey("");
+      setSavedNote("Git repo and key saved on this session.");
+    } catch (err) {
+      onError(err instanceof Error ? err.message : "Something went wrong. Please try again.");
+    } finally {
+      onBusy(null);
+    }
+  }
+
+  async function onSend() {
+    if (busy || session.finalized || !session.can_send_git) return;
+    onBusy("git");
+    setSavedNote(null);
+    onError("");
+    try {
+      const next = await sendGit(session.design_session_id);
+      onUpdate(next);
+      if (next.git_send_status !== "failed") {
+        setSavedNote("Git data sent to the engineer.");
+      }
+    } catch (err) {
+      onError(err instanceof Error ? err.message : "Something went wrong. Please try again.");
+    } finally {
+      onBusy(null);
+    }
+  }
+
+  const sendLabel = session.git_send_status === "failed" ? "Resend to engineer" : "Send to engineer";
+
+  return (
+    <section className="panel git-panel">
+      <div className="panel-head">
+        <h2>Git repo</h2>
+        <span className="panel-kicker">
+          {session.git_send_status === "sent"
+            ? "sent to engineer"
+            : session.git_key_configured
+              ? "key on file"
+              : "not configured"}
+        </span>
+      </div>
+      <p className="lede">
+        Sub-engineers use this SSH remote to update code for this design session. The private key
+        stays on the server and is never shown again after you save.
+      </p>
+      {session.git_send_status === "failed" && session.git_send_error ? (
+        <div className="error banner" role="alert">
+          <p>{session.git_send_error}</p>
+        </div>
+      ) : null}
+      {savedNote ? <p className="lede git-ok">{savedNote}</p> : null}
+      <form className="git-form" onSubmit={onSave}>
+        <label className="git-field">
+          <span>Repo URL (SSH)</span>
+          <input
+            type="text"
+            value={repoUrl}
+            onChange={(e) => setRepoUrl(e.target.value)}
+            placeholder="git@github.com:org/repo.git"
+            disabled={busy || session.finalized}
+            autoComplete="off"
+            spellCheck={false}
+          />
+        </label>
+        <label className="git-field">
+          <span>
+            SSH private key
+            {session.git_key_configured
+              ? ` (on file${session.git_key_fingerprint ? ` · ${session.git_key_fingerprint}` : ""}; paste to replace)`
+              : ""}
+          </span>
+          <textarea
+            value={sshKey}
+            onChange={(e) => setSshKey(e.target.value)}
+            rows={5}
+            placeholder={
+              session.git_key_configured
+                ? "Leave blank to keep the stored key, or paste a new key to replace it."
+                : "-----BEGIN OPENSSH PRIVATE KEY-----"
+            }
+            disabled={busy || session.finalized}
+            autoComplete="off"
+            spellCheck={false}
+          />
+        </label>
+        <div className="git-actions">
+          <button className="btn ghost" type="submit" disabled={busy || session.finalized}>
+            {busy ? "Working…" : "Save"}
+          </button>
+          <button
+            className="btn primary"
+            type="button"
+            disabled={busy || session.finalized || !session.can_send_git}
+            onClick={() => void onSend()}
+          >
+            {busy ? "Working…" : sendLabel}
+          </button>
+        </div>
+      </form>
     </section>
   );
 }
@@ -491,6 +622,14 @@ export function SessionPage() {
       ) : null}
 
       {error ? <p className="error banner">{error}</p> : null}
+
+      <GitAccessPanel
+        session={session}
+        busy={busyId === "git"}
+        onBusy={setBusyId}
+        onUpdate={setSession}
+        onError={(msg) => setError(msg || null)}
+      />
 
       {hasNewPackageNotification ? (
         <div className="info banner" role="status">

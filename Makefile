@@ -17,11 +17,11 @@ START_TIMEOUT ?= 30
 export PATH := $(HOME)/.local/bin:$(PATH)
 
 # Add a directory here when a new agent package lands (must have a Makefile).
-AGENTS := architect-agent orchestrator-agent
+AGENTS := architect-agent orchestrator-agent engineer-agent
 
 # Downstream first so A2A peers are listening before upstream starts.
-START_ORDER := orchestrator-agent architect-agent
-STOP_ORDER  := architect-agent orchestrator-agent
+START_ORDER := engineer-agent orchestrator-agent architect-agent
+STOP_ORDER  := architect-agent orchestrator-agent engineer-agent
 
 architect-agent_BIN  := architect-agent
 architect-agent_HOST ?= 127.0.0.1
@@ -30,6 +30,10 @@ architect-agent_PORT ?= 8080
 orchestrator-agent_BIN  := orchestrator-agent
 orchestrator-agent_HOST ?= 127.0.0.1
 orchestrator-agent_PORT ?= 8090
+
+engineer-agent_BIN  := engineer-agent
+engineer-agent_HOST ?= 127.0.0.1
+engineer-agent_PORT ?= 8091
 
 # Architect delivers design packages to the orchestrator when the factory is up.
 # This is set in architect-agent/.env - don't override it here
@@ -55,6 +59,7 @@ help:
 	@echo "Agents: $(AGENTS)"
 	@echo "  architect-agent     http://127.0.0.1:$(architect-agent_PORT)/"
 	@echo "  orchestrator-agent  http://127.0.0.1:$(orchestrator-agent_PORT)/"
+	@echo "  engineer-agent      http://127.0.0.1:$(engineer-agent_PORT)/"
 
 deploy: check-env install build start
 

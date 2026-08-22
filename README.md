@@ -1,13 +1,14 @@
 # Software Factory
 
-A local multi-agent design factory. The **Architect** turns a vague idea into an approved system design; the **Orchestrator** turns that design into engineer-ready plan specs. Both agents expose a React UI, a FastAPI BFF, and an A2A JSON-RPC surface. They share the architect `design_session_id` as the workflow key.
+A local multi-agent design factory. The **Architect** turns a vague idea into an approved system design; the **Orchestrator** turns that design into engineer-ready plan specs; the **Engineer** runs a fleet of sub-engineers that own each microservice's offered API. All three expose a React UI, a FastAPI BFF, and an A2A JSON-RPC surface. They share the architect `design_session_id` as the workflow key.
 
 | Agent | UI / API | Default URL |
 | --- | --- | --- |
 | Architect | design interview, LLD/HLD, market eval | http://127.0.0.1:8080/ |
-| Orchestrator | stack + API planning, engineer handoff | http://127.0.0.1:8090/ |
+| Orchestrator | entity relationships + stack, engineer handoff | http://127.0.0.1:8090/ |
+| Engineer | sub-engineer fleet, offered APIs, peer consult | http://127.0.0.1:8091/ |
 
-The Engineer agent is not in this repo yet. Orchestrator queues plan specs under `orchestrator-agent/backend/data/plan_specs/` (or sends them to `ENGINEER_AGENT_URL` when set).
+Set `ENGINEER_AGENT_URL=http://127.0.0.1:8091` in `orchestrator-agent/.env`. If that peer is down, plan specs still land under `orchestrator-agent/backend/data/plan_specs/`.
 
 ## Architecture
 
@@ -51,7 +52,7 @@ flowchart TB
       OA2A["A2A<br/>agent card · JSON-RPC · executor"]
       OSess["Session store"]
       OGraph["LangGraph + SQLite checkpointer"]
-      ONodes["ingest · classify · handle update<br/>extract services · prime all tiles<br/>API type · API design · stack<br/>emit plan · wait"]
+      ONodes["ingest · classify · handle update<br/>extract services · prime all tiles<br/>entity relationships · features · stack<br/>emit plan · wait"]
       OSkill["Skill<br/>orchestrator"]
       OLLM["LLM adapter"]
       OSearch["Web search"]
@@ -71,17 +72,34 @@ flowchart TB
       OGraph --> OData
       OSess --> OPeer
     end
-  end
 
-  Engineer["Engineer Agent<br/>not in repo yet"]
+    subgraph Engineer["Engineer Agent :8091"]
+      direction TB
+      EUI["React SPA<br/>Home · Fleet tiles"]
+      EBFF["FastAPI BFF<br/>POST /ingest · /api/sessions<br/>static UI · /healthz"]
+      EA2A["A2A<br/>agent card · JSON-RPC · executor"]
+      ESess["Fleet store<br/>sub-agent = session + microservice"]
+      ESkill["Skill<br/>engineer"]
+      ELLM["LLM adapter"]
+      EData["data/<br/>sessions · handoffs/"]
+
+      EUI --> EBFF
+      EA2A --> EBFF
+      EBFF --> ESess
+      ESess --> ESkill
+      ESess --> ELLM
+      ESess --> EData
+    end
+  end
 
   User -->|"chat / approve"| AUI
   User -->|"chat / approve per service"| OUI
+  User -->|"chat / approve per sub-engineer"| EUI
   APeer -->|"design package markdown<br/>keyed by design_session_id"| OA2A
-  OPeer -->|"plan spec markdown"| Engineer
+  OPeer -->|"plan spec markdown"| EA2A
 ```
 
-Same `design_session_id` on both UIs. Architect handoff is A2A to `ORCHESTRATOR_AGENT_URL` (default `:8090`); if that peer is down, packages land in `architect-agent/backend/data/handoffs/`.
+Same `design_session_id` on all three UIs. Architect handoff is A2A to `ORCHESTRATOR_AGENT_URL` (default `:8090`); if that peer is down, packages land in `architect-agent/backend/data/handoffs/`.
 
 ## Design-to-plan flow
 
@@ -99,15 +117,17 @@ flowchart LR
   PlanA --> Lock["Discussion locked<br/>until next architect package"]
 
   Class -->|"distributed"| Tiles["Prime all microservices<br/>one UI tile each"]
-  Tiles --> PerSvc["Per tile: API type → API design → stack"]
+  Tiles --> PerSvc["Per tile: entity relationships → features → stack"]
   PerSvc --> PlanB["Plan spec per service"]
-  PlanB --> Open["Tile stays open<br/>revise API anytime"]
+  PlanB --> Open["Tile stays open<br/>revise relationships anytime"]
 
-  PlanA --> Eng["Engineer queue"]
+  PlanA --> Eng["Engineer fleet"]
   PlanB --> Eng
+  Eng --> Sub["Sub-engineer owns offered API"]
+  Sub --> Consult["Initiator consults peer API"]
 ```
 
-**Distributed:** every live microservice is discussed at once. Reopen `/sessions/{design_session_id}` on the orchestrator to change an API and hand off again.
+**Distributed:** every live microservice is discussed at once. The orchestrator maps related entities and who initiates; it does not lock protocols. Reopen `/sessions/{design_session_id}` on the orchestrator to change relationships and hand off again. The engineer opens a matching sub-engineer tile (`design_session_id` + `microservice_id`) that owns the offered API and consults peers it initiates toward.
 
 **Stand-alone:** after the first engineer handoff, orchestrator chat/approve are locked until the architect sends another package. The session remains readable in the UI.
 
@@ -124,6 +144,10 @@ software-factory/
     backend/
     ui/
     skills/                # orchestrator
+  engineer-agent/          # Sub-engineer fleet — see engineer-agent/README.md
+    backend/
+    ui/
+    skills/                # engineer
 ```
 
 ## Deploy
@@ -131,12 +155,12 @@ software-factory/
 From this directory:
 
 ```bash
-make deploy      # .env, install, build UIs, start both agents
-make teardown    # stop both agents
+make deploy      # .env, install, build UIs, start all agents
+make teardown    # stop all agents
 make status      # pid + /healthz
 make logs        # tail .run/*.log
 ```
 
-Copy each agent's `.env.example` to `.env` and set `LLM_PROVIDER` / keys there. Set `ORCHESTRATOR_AGENT_URL` in `architect-agent/.env` to point to the orchestrator (default `http://127.0.0.1:8090`).
+Copy each agent's `.env.example` to `.env` and set `LLM_PROVIDER` / keys there. Set `ORCHESTRATOR_AGENT_URL` in `architect-agent/.env` to point to the orchestrator (default `http://127.0.0.1:8090`). Set `ENGINEER_AGENT_URL` in `orchestrator-agent/.env` to point to the engineer (default `http://127.0.0.1:8091`).
 
-Single-agent foreground run: `make -C architect-agent deploy` or `make -C orchestrator-agent deploy`.
+Single-agent foreground run: `make -C architect-agent deploy`, `make -C orchestrator-agent deploy`, or `make -C engineer-agent deploy`.

@@ -1,0 +1,5 @@
+# Engineer Agent (root)
+.env
+.DS_Store
+
+**/__pycache__/

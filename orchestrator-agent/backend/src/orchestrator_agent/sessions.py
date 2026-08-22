@@ -10,12 +10,20 @@ from typing import Any
 
 from langgraph.types import Command
 
-from orchestrator_agent.a2a.engineer import send_plan_spec, send_suspend
+from orchestrator_agent.a2a.engineer import send_git_access, send_plan_spec, send_suspend
 from orchestrator_agent.config import get_settings
+from orchestrator_agent.git_access import (
+    GitAccessError,
+    key_fingerprint,
+    validate_private_key,
+    validate_repo_url,
+    verify_repo_access,
+)
 from orchestrator_agent.graph import build_graph, initial_state
 from orchestrator_agent.graph.nodes.common import decorate_service
 from orchestrator_agent.package_parse import ParsedPackage, parse_design_package
 from orchestrator_agent.query_intent import is_advance_request, is_step_approval_message
+from orchestrator_agent.secrets_store import load_git_secrets, save_git_secrets
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +50,7 @@ class WorkflowSession:
     plan_spec: str = ""
     api_type: str = ""
     api_design: str = ""
+    entity_relationships: str = ""
     feature_spec: str = ""
     app_status: str = ""
     search_notes: str = ""
@@ -55,6 +64,13 @@ class WorkflowSession:
     approve_kind: str = ""
     approve_label: str = ""
     finalized: bool = False
+    git_repo_url: str = ""
+    git_ssh_private_key: str = ""
+    git_key_fingerprint: str = ""
+    git_send_status: str = ""
+    git_send_error: str = ""
+    git_sent_at: str = ""
+    git_sent_fingerprint: str = ""
 
     @property
     def discussion_locked(self) -> bool:
@@ -88,6 +104,7 @@ class WorkflowSession:
             "plan_spec": self.plan_spec,
             "api_type": self.api_type,
             "api_design": self.api_design,
+            "entity_relationships": self.entity_relationships,
             "feature_spec": self.feature_spec,
             "app_status": self.app_status,
             "search_notes": self.search_notes,
@@ -101,6 +118,14 @@ class WorkflowSession:
             "approve_label": interrupt.get("approve_label") or self.approve_label,
             "discussion_locked": locked,
             "finalized": self.finalized,
+            "git_repo_url": self.git_repo_url,
+            "git_key_configured": bool(self.git_ssh_private_key),
+            "git_key_fingerprint": self.git_key_fingerprint,
+            "git_send_status": self.git_send_status,
+            "git_send_error": self.git_send_error,
+            "git_sent_at": self.git_sent_at,
+            "git_sent_fingerprint": self.git_sent_fingerprint,
+            "can_send_git": bool(self.git_repo_url and self.git_ssh_private_key) and not self.finalized,
         }
 
     @classmethod
@@ -120,6 +145,7 @@ class WorkflowSession:
             plan_spec=str(data.get("plan_spec") or ""),
             api_type=str(data.get("api_type") or ""),
             api_design=str(data.get("api_design") or ""),
+            entity_relationships=str(data.get("entity_relationships") or ""),
             feature_spec=str(data.get("feature_spec") or ""),
             app_status=str(data.get("app_status") or ""),
             search_notes=str(data.get("search_notes") or ""),
@@ -133,6 +159,12 @@ class WorkflowSession:
             approve_kind=str(data.get("approve_kind") or ""),
             approve_label=str(data.get("approve_label") or ""),
             finalized=bool(data.get("finalized")),
+            git_repo_url=str(data.get("git_repo_url") or ""),
+            git_key_fingerprint=str(data.get("git_key_fingerprint") or ""),
+            git_send_status=str(data.get("git_send_status") or ""),
+            git_send_error=str(data.get("git_send_error") or ""),
+            git_sent_at=str(data.get("git_sent_at") or ""),
+            git_sent_fingerprint=str(data.get("git_sent_fingerprint") or ""),
         )
 
 
@@ -169,6 +201,7 @@ class SessionStore:
                 data = json.loads(path.read_text(encoding="utf-8"))
                 session = WorkflowSession.from_dict(data)
                 if session.design_session_id:
+                    self._hydrate_git_secrets(session)
                     self._cache[session.design_session_id] = session
             except Exception:
                 logger.exception("Failed to load workflow %s", path)
@@ -181,7 +214,21 @@ class SessionStore:
         payload["created_at"] = session.created_at
         payload["last_interrupt"] = session.last_interrupt
         path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        if session.git_repo_url or session.git_ssh_private_key:
+            save_git_secrets(
+                session.design_session_id,
+                git_repo_url=session.git_repo_url,
+                ssh_private_key=session.git_ssh_private_key,
+            )
         self._cache[session.design_session_id] = session
+
+    def _hydrate_git_secrets(self, session: WorkflowSession) -> None:
+        secrets = load_git_secrets(session.design_session_id)
+        if secrets.get("git_repo_url") and not session.git_repo_url:
+            session.git_repo_url = secrets["git_repo_url"]
+        if secrets.get("ssh_private_key"):
+            session.git_ssh_private_key = secrets["ssh_private_key"]
+            session.git_key_fingerprint = key_fingerprint(session.git_ssh_private_key)
 
     def _config(self, session_id: str) -> dict[str, Any]:
         return {"configurable": {"thread_id": session_id}}
@@ -209,6 +256,7 @@ class SessionStore:
             path = self._session_path(session_id)
             if path.is_file():
                 session = WorkflowSession.from_dict(json.loads(path.read_text(encoding="utf-8")))
+                self._hydrate_git_secrets(session)
                 self._cache[session_id] = session
         if session is None:
             raise KeyError(session_id)
@@ -363,6 +411,69 @@ class SessionStore:
     def end_session(self, session_id: str) -> WorkflowSession:
         return self.resume(session_id, action="session_done")
 
+    def save_git(
+        self,
+        session_id: str,
+        *,
+        git_repo_url: str,
+        ssh_private_key: str | None = None,
+    ) -> WorkflowSession:
+        with self._lock_for(session_id):
+            session = self.get(session_id)
+            url = validate_repo_url(git_repo_url)
+            incoming = (ssh_private_key or "").strip()
+            if incoming:
+                key = validate_private_key(ssh_private_key or "")
+            elif session.git_ssh_private_key:
+                key = session.git_ssh_private_key
+            else:
+                raise GitAccessError("Paste an SSH private key for this repo.")
+            fingerprint = key_fingerprint(key)
+            changed = url != session.git_repo_url or fingerprint != session.git_key_fingerprint
+            session.git_repo_url = url
+            session.git_ssh_private_key = key
+            session.git_key_fingerprint = fingerprint
+            if changed:
+                session.git_send_status = ""
+                session.git_send_error = ""
+            self._persist(session)
+            return session
+
+    def send_git(self, session_id: str) -> WorkflowSession:
+        with self._lock_for(session_id):
+            session = self.get(session_id)
+            session.git_send_error = ""
+            try:
+                if not session.git_repo_url or not session.git_ssh_private_key:
+                    raise GitAccessError("Save a git repo URL and SSH private key before sending.")
+                verify_repo_access(session.git_repo_url, session.git_ssh_private_key)
+                delivery = send_git_access(
+                    design_session_id=session.design_session_id,
+                    git_repo_url=session.git_repo_url,
+                    ssh_private_key=session.git_ssh_private_key,
+                )
+            except GitAccessError as exc:
+                session.git_send_status = "failed"
+                session.git_send_error = exc.user_message
+                self._persist(session)
+                return session
+            if delivery.status == "sent":
+                session.git_send_status = "sent"
+                session.git_send_error = ""
+                session.git_sent_at = delivery.at
+                session.git_sent_fingerprint = session.git_key_fingerprint
+            else:
+                session.git_send_status = "failed"
+                session.git_send_error = (
+                    delivery.detail
+                    or "Could not deliver git access to the engineer. You can resend."
+                )
+            public = delivery.to_public()
+            session.engineer_handoffs.append(public)
+            session.last_handoff = public
+            self._persist(session)
+            return session
+
     def _flush_engineer_actions(self, session: WorkflowSession) -> None:
         state = self._graph.get_state(self._config(session.design_session_id))
         values = state.values or {}
@@ -430,6 +541,7 @@ class SessionStore:
         session.plan_spec = str(values.get("plan_spec") or "")
         session.api_type = str(values.get("api_type") or "")
         session.api_design = str(values.get("api_design") or "")
+        session.entity_relationships = str(values.get("entity_relationships") or "")
         session.app_status = str(values.get("app_status") or "")
         session.search_notes = str(values.get("search_notes") or "")
         session.services = list(values.get("services") or [])

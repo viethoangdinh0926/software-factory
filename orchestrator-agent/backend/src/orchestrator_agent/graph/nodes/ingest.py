@@ -146,6 +146,7 @@ def handle_update_node(state: dict[str, Any]) -> dict[str, Any]:
             "plan_spec": "",
             "api_type": "",
             "api_design": "",
+            "entity_relationships": "",
             "app_status": "planning" if topology == "standalone" else "",
             "previous_services": [],
             "pending_engineer_actions": actions,
@@ -181,7 +182,8 @@ def handle_update_node(state: dict[str, Any]) -> dict[str, Any]:
             "role": "system",
             "content": (
                 f"Updated distributed design v{version}. Matching microservices by role "
-                "(name changes are not removals), then re-discussing features for each service."
+                "(name changes are not removals), then re-mapping entity relationships "
+                "for each service."
             ),
             "node": "ingest",
         }
@@ -200,6 +202,7 @@ def reset_planning_fields(svc: dict[str, Any]) -> dict[str, Any]:
     updated["api_type_recommendation"] = ""
     updated["proposed_api_type"] = ""
     updated["api_design"] = ""
+    updated["entity_relationships"] = ""
     updated["tech_stack"] = ""
     updated["plan_spec"] = ""
     updated["status"] = "planning"

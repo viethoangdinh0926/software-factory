@@ -12,9 +12,13 @@ After `ui` is built, static files land in `backend/src/orchestrator_agent/static
 
 ## Role
 
-Receives architect **design packages** (A2A markdown) keyed by the architect `design_session_id`. Classifies stand-alone vs distributed, plans tech stacks (and per-microservice APIs in **parallel tiles**), then queues plan specs for the Engineer agent (`ENGINEER_AGENT_URL`). If that URL is unset, specs are written under `backend/data/plan_specs/`.
+Receives architect **design packages** (A2A markdown) keyed by the architect `design_session_id`. Classifies stand-alone vs distributed, maps per-service **entity relationships** in **parallel tiles**, then queues plan specs for the Engineer agent (`ENGINEER_AGENT_URL`). If that URL is unset, specs are written under `backend/data/plan_specs/`.
 
-Distributed workflows stay open: reopen `/sessions/{design_session_id}` anytime to revise a service API and hand off an update. Stand-alone discussion locks after the first engineer handoff until the architect sends a new package.
+The orchestrator does **not** lock communication schemes, protocols, or API catalogs. Engineer sub-agents own offered APIs and consult peers they initiate toward.
+
+Distributed workflows stay open: reopen `/sessions/{design_session_id}` anytime to revise a service's relationships and hand off an update. Stand-alone discussion locks after the first engineer handoff until the architect sends a new package.
+
+Each session has a **Git repo** panel: save an SSH remote and private key, then **Send to engineer**. The orchestrator runs `git ls-remote` with that key first. Failures show on the panel with **Resend to engineer**. The private key is stored under `backend/data/secrets/` (mode 0600) and is never returned by the API.
 
 ## Deploy
 

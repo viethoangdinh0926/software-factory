@@ -228,13 +228,14 @@ def extract_services_node(state: dict[str, Any]) -> dict[str, Any]:
 
 
 def prime_all_services_node(state: dict[str, Any]) -> dict[str, Any]:
-    """Prime every live microservice with a communication spec from architect protocols."""
-    from orchestrator_agent.graph.nodes.api import draft_comms_for
-    from orchestrator_agent.graph.nodes.common import comms_are_concrete
+    """Prime every live microservice with an entity-relationship map."""
+    from orchestrator_agent.graph.nodes.api import draft_relations_for
+    from orchestrator_agent.graph.nodes.common import relations_are_concrete
 
     skip = {
         "suspended",
         "sent",
+        "awaiting_relations",
         "awaiting_comms",
         "discussing_features",
         "awaiting_features",
@@ -249,31 +250,36 @@ def prime_all_services_node(state: dict[str, Any]) -> dict[str, Any]:
             continue
         name = (svc.get("names") or ["service"])[-1]
         try:
-            updated = draft_comms_for(state, svc, pending="")
+            updated = draft_relations_for(state, svc, pending="")
         except Exception:
-            logger.exception("Communication spec failed for %s; using a fallback sketch", name)
-            protocol = str(svc.get("proposed_api_type") or svc.get("api_type") or "REST")
+            logger.exception("Entity relationship map failed for %s; using a fallback sketch", name)
             updated = dict(svc)
-            updated["proposed_api_type"] = protocol
-            updated["api_type"] = protocol
-            updated["api_design"] = updated.get("api_design") or (
-                f"## {name} communication spec ({protocol})\n\n"
-                "- Honor the architect communication schemes for this service.\n"
-                "- Request/response for queries and commands this service owns.\n"
-                "- Pub/sub events when notifying peers of state changes.\n"
-                "- Do not invent a competing protocol that contradicts the architect package.\n"
+            sketch = (
+                f"## Entity relationships for {name}\n\n"
+                "### User (kind: user)\n"
+                "- We initiate: no. Callers initiate toward this service.\n"
+                "- Relationship: users/clients send commands and queries this service owns.\n\n"
+                "### Peer core microservices (kind: core_microservice)\n"
+                "- We initiate: yes when this service must fetch or notify a collaborator.\n"
+                "- Relationship: collaborators are invoked by name only; their APIs are not designed here.\n\n"
+                "### Datastore (kind: infra)\n"
+                "- We initiate: yes.\n"
+                "- Relationship: this service owns its system of record and reads/writes it.\n"
             )
-            if not comms_are_concrete(updated["api_design"]):
-                updated["api_design"] += (
-                    "\n### Assumed REST surface\n"
-                    f"- `POST /v1/{name.lower()}` create\n"
-                    f"- `GET /v1/{name.lower()}/{{id}}` read\n"
-                    f"- `PATCH /v1/{name.lower()}/{{id}}` update\n"
+            updated["entity_relationships"] = updated.get("entity_relationships") or sketch
+            updated["api_design"] = updated["entity_relationships"]
+            if not relations_are_concrete(updated["entity_relationships"]):
+                updated["entity_relationships"] += (
+                    "\n### API gateway (kind: infra)\n"
+                    "- We initiate: no. The gateway initiates toward this service on behalf of users.\n"
+                    "- Relationship: edge routing only; no protocol lock in this plan.\n"
                 )
-            updated["status"] = "awaiting_comms"
+                updated["api_design"] = updated["entity_relationships"]
+            updated["status"] = "awaiting_relations"
             fallback = close_user_message(
-                f"Could not parse a communication spec from the model; starting from "
-                f"the architect schemes for **{name}**. Complete the spec, then approve.",
+                f"Could not parse an entity map from the model; starting from "
+                f"architect collaborators for **{name}**. Complete who this service "
+                "talks to (and who initiates), then approve.",
                 svc=updated,
             )
             msgs = list(updated.get("messages") or [])
@@ -290,8 +296,8 @@ def prime_all_services_node(state: dict[str, Any]) -> dict[str, Any]:
     names = ", ".join((s.get("names") or ["service"])[-1] for s in live) or "none"
     notice = close_user_message(
         f"Opened planning tiles for {len(live)} microservice(s) at once: {names}. "
-        "Complete each service's communication spec from the architect protocols, then "
-        "interview features, then stack. Each tile can hand off independently.",
+        "Complete each service's related-entity map (who it talks to and who initiates), then "
+        "interview features, then stack. Do not lock protocols here. Each tile can hand off independently.",
         mode="idle",
         can_approve=False,
     )

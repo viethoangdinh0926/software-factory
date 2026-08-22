@@ -14,6 +14,7 @@ wheels/
 data/sessions/*.json
 data/handoffs/*.md
 data/plan_specs/*.md
+data/secrets/
 data/checkpoints.sqlite
 data/checkpoints.sqlite-*
 

@@ -200,3 +200,79 @@ def send_suspend(
         design_version=design_version,
         microservice_id=microservice_id,
     )
+
+
+def send_git_access(
+    *,
+    design_session_id: str,
+    git_repo_url: str,
+    ssh_private_key: str,
+) -> EngineerHandoff:
+    """POST git URL + SSH key to the engineer. Never writes the private key to plan_specs."""
+    settings = get_settings()
+    handoff_id = str(uuid.uuid4())
+    target = (settings.engineer_agent_url or "").strip() or None
+    if not target:
+        return EngineerHandoff(
+            status="failed",
+            handoff_id=handoff_id,
+            path="",
+            target_url=None,
+            detail="Engineer agent is not configured (ENGINEER_AGENT_URL). Save the key, then resend once the engineer is running.",
+            at=_now(),
+            action="git",
+            design_session_id=design_session_id,
+            design_version=0,
+            microservice_id=None,
+        )
+    try:
+        detail = _post_git(target, design_session_id, git_repo_url, ssh_private_key)
+        logger.info("Sent git access for session %s to engineer", design_session_id)
+        return EngineerHandoff(
+            status="sent",
+            handoff_id=handoff_id,
+            path="",
+            target_url=target,
+            detail=detail[:2000],
+            at=_now(),
+            action="git",
+            design_session_id=design_session_id,
+            design_version=0,
+            microservice_id=None,
+        )
+    except Exception:
+        logger.exception("Failed to send git access for session %s", design_session_id)
+        return EngineerHandoff(
+            status="failed",
+            handoff_id=handoff_id,
+            path="",
+            target_url=target,
+            detail="Could not deliver git access to the engineer. You can resend.",
+            at=_now(),
+            action="git",
+            design_session_id=design_session_id,
+            design_version=0,
+            microservice_id=None,
+        )
+
+
+def _post_git(target_url: str, design_session_id: str, git_repo_url: str, ssh_private_key: str) -> str:
+    import httpx
+
+    settings = get_settings()
+    url = target_url.rstrip("/") + "/api/git"
+    with httpx.Client(timeout=30.0, verify=settings.ssl_verify) as client:
+        response = client.post(
+            url,
+            json={
+                "design_session_id": design_session_id,
+                "git_repo_url": git_repo_url,
+                "ssh_private_key": ssh_private_key,
+            },
+        )
+        response.raise_for_status()
+        try:
+            payload = response.json()
+        except Exception:
+            return "Engineer accepted git access."
+        return str(payload.get("message") or "Engineer stored git access for this design session.")

@@ -31,15 +31,14 @@ CHAT DEPTH (assistant_message) — write like a Staff Engineer briefing the team
 - Target 200-500 words of substance. NEVER a bare status line such as "Plan updated.",
   "Tech stack selected." or "Extracted the services." A recap with no reasoning is a
   FAILED turn.
-- Every recommendation you surface (topology, communication spec, features, tech stack,
+- Every recommendation you surface (topology, entity relationships, features, tech stack,
   plan spec, service split) must justify itself by covering:
-  1. WHAT you decided, naming concrete elements — service names, protocols, METHOD /path
-     or RPCs/topics when the locked scheme is request/response, libraries with their role,
-     data stores — not "the stack" or "the design".
+  1. WHAT you decided, naming concrete elements — service names, related entities,
+     who initiates each relationship, libraries with their role, data stores —
+     not "the stack" or "the design". Do not lock REST vs gRPC vs topic catalogs.
   2. WHY it fits THIS service/system: the driving forces from the architect package
-     (owned objects, communication schemes, traffic profile, latency budget, consistency).
-  3. ALTERNATIVES considered and the explicit reason each was rejected (e.g. "gRPC
-     rejected at the browser edge: REST+JSON matches the architect user↔system scheme").
+     (owned objects, communication schemes as context, traffic profile, latency, consistency).
+  3. ALTERNATIVES considered and the explicit reason each was rejected.
   4. TRADE-OFFS accepted — operational cost, added latency, lock-in, learning curve —
      and why they are acceptable here.
   5. ASSUMPTIONS made where the package was silent, each labeled with your default.
@@ -55,17 +54,19 @@ CHAT DEPTH (assistant_message) — write like a Staff Engineer briefing the team
 
 APPROVE_LABELS = {
     "confirm_topology": "Confirm topology",
-    "approve_comms": "Approve communication spec",
+    "approve_relations": "Approve relationships",
+    "approve_comms": "Approve relationships",
     "approve_features": "Approve features",
-    "decide_api_type": "Approve communication spec",
-    "approve_api_design": "Approve communication spec",
+    "decide_api_type": "Approve relationships",
+    "approve_api_design": "Approve relationships",
     "approve_plan": "Approve plan",
 }
 
 STATUS_APPROVE_KIND = {
-    "awaiting_comms": "approve_comms",
-    "awaiting_api_type": "approve_comms",
-    "awaiting_api_design": "approve_comms",
+    "awaiting_relations": "approve_relations",
+    "awaiting_comms": "approve_relations",
+    "awaiting_api_type": "approve_relations",
+    "awaiting_api_design": "approve_relations",
     "awaiting_features": "approve_features",
     "awaiting_stack": "approve_plan",
 }
@@ -81,31 +82,46 @@ def features_are_concrete(text: str) -> bool:
     return (bullets + numbered) >= 4
 
 
-def comms_are_concrete(text: str) -> bool:
-    """Require a completed communication spec for the locked protocol(s)."""
+def relation_artifact(svc: dict[str, Any] | None) -> str:
+    """Entity-relationship markdown for a service (legacy api_design is a fallback)."""
+    if not svc:
+        return ""
+    return str(svc.get("entity_relationships") or svc.get("api_design") or "").strip()
+
+
+def relations_are_concrete(text: str) -> bool:
+    """Require a real inventory of related entities and who initiates each link."""
     body = (text or "").strip()
     if len(body) < 280:
         return False
+    headings = len(re.findall(r"(?m)^#{2,3}\s+", body))
+    bullets = len(re.findall(r"(?m)^\s*[-*]", body))
     lower = body.lower()
-    has_protocol = any(
+    has_entity = any(
         k in lower
         for k in (
-            "rest",
-            "grpc",
-            "graphql",
-            "websocket",
+            "user",
+            "client",
+            "infra",
+            "postgres",
+            "datastore",
+            "gateway",
+            "microservice",
+            "peer",
             "kafka",
-            "pubsub",
-            "pub/sub",
-            "event",
-            "stream",
-            "rpc",
+            "object store",
         )
     )
-    bullets = len(re.findall(r"(?m)^\s*[-*#]", body))
-    endpoints = len(re.findall(r"\b(GET|POST|PUT|PATCH|DELETE)\s+/", body, re.I))
-    rpcs = len(re.findall(r"(?i)\b(rpc|topic|event|stream)\b", body))
-    return has_protocol and (bullets >= 4 or endpoints >= 3 or rpcs >= 3)
+    has_dir = any(
+        k in lower
+        for k in ("initiate", "initiator", "calls", "invokes", "depends", "relationship")
+    )
+    return headings >= 2 and bullets >= 4 and has_entity and has_dir
+
+
+def comms_are_concrete(text: str) -> bool:
+    """Backward-compatible alias: relationships, not protocol catalogs."""
+    return relations_are_concrete(text)
 
 
 def approve_label(kind: str) -> str:
@@ -125,9 +141,12 @@ def decorate_service(svc: dict[str, Any], *, finalized: bool = False) -> dict[st
     out["can_approve"] = bool(kind) and open_disc
     if status == "awaiting_features" and not features_are_concrete(out.get("feature_spec") or ""):
         out["can_approve"] = False
-    if status in {"awaiting_comms", "awaiting_api_type", "awaiting_api_design"} and not comms_are_concrete(
-        out.get("api_design") or ""
-    ):
+    if status in {
+        "awaiting_relations",
+        "awaiting_comms",
+        "awaiting_api_type",
+        "awaiting_api_design",
+    } and not relations_are_concrete(relation_artifact(out)):
         out["can_approve"] = False
     out["approve_kind"] = kind if out["can_approve"] else ""
     out["approve_label"] = approve_label(kind) if out["can_approve"] else ""
@@ -246,6 +265,7 @@ def empty_service(
         "role_key": role_key,
         "architect_api_contract": contract,
         "feature_spec": "",
+        "entity_relationships": "",
         "api_type": "",
         "api_type_recommendation": "",
         "proposed_api_type": "",
@@ -367,13 +387,14 @@ def service_focus_system(name: str) -> str:
     """System prefix so a planning tile stays on one microservice."""
     return (
         f"You are planning ONE microservice: {name}. This tile is not the platform design.\n"
-        f"Stay on {name}'s communication spec, features, behavior, and its own data/runtime.\n"
+        f"Stay on {name}'s related entities, features, behavior, and its own data/runtime.\n"
         "Do not restate overall architecture. Do not design other microservices.\n"
-        "Do not prescribe shared infra (CDN, load balancers, Kafka, Redis, object storage, "
-        "search clusters) unless this service itself owns that store or must call it as a client.\n"
-        "Peer services may be invoked; do not specify their internals or tech choices.\n"
+        "Do not dictate communication schemes, protocols, or API catalogs (METHOD /path, "
+        "gRPC RPCs, Kafka topics). Those are owned later by engineer sub-agents.\n"
+        "Name related entities (users, peer core microservices, infra) and who initiates "
+        "each relationship. Peer services appear only as collaborators to invoke.\n"
         "If the user asked a question, answer it in assistant_message with concrete facts "
-        "(methods, paths, fields). Do not reply with a status recap like 'I finalized the design'. "
+        "(entity names, who initiates, what data/events flow). Do not reply with a status recap.\n"
         "If they raised a concern or asked to change something, update this service's artifact, "
         "list **Updates to this proposal**, then invite Approve for that version."
     )
@@ -401,7 +422,6 @@ def service_focus_user_block(
     package = str(state.get("package_markdown") or "")
     section = service_contract_section(package, names) or contract
     comms = service_comms_excerpt(package, names)
-    protocol = str(svc.get("api_type") or svc.get("proposed_api_type") or "").strip()
     spec = str(svc.get("api_design") or "").strip()
     history_lines: list[str] = []
     for msg in list(svc.get("messages") or [])[-6:]:
@@ -416,9 +436,8 @@ def service_focus_user_block(
         f"Role: {svc.get('role_key') or ''}",
         f"Peer microservices (call them; do not plan them): {', '.join(peers) or '(none)'}",
         f"Architect sketch for {name} only:\n{section or '(none)'}",
-        f"Architect communication schemes:\n{comms or '(none)'}",
-        f"Locked protocol(s): {protocol or '(not yet locked)'}",
-        f"Agreed communication spec:\n{spec or '(not yet agreed)'}",
+        f"Architect communication schemes (context only — do not lock protocols):\n{comms or '(none)'}",
+        f"Agreed entity relationships:\n{relation_artifact(svc) or spec or '(not yet agreed)'}",
         f"Agreed features / functionality:\n{features or '(not yet agreed)'}",
         "Recent tile conversation:\n" + ("\n".join(history_lines) if history_lines else "(none)"),
         f"Latest user message:\n{pending or '(none)'}",

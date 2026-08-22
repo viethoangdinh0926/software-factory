@@ -128,15 +128,16 @@ def wait_node(state: dict[str, Any]) -> dict[str, Any]:
 
         if action == "chat":
             chat_route = {
-                "planning": "comms_spec",
-                "awaiting_comms": "comms_spec",
-                "awaiting_api_type": "comms_spec",
-                "awaiting_api_design": "comms_spec",
+                "planning": "relations",
+                "awaiting_relations": "relations",
+                "awaiting_comms": "relations",
+                "awaiting_api_type": "relations",
+                "awaiting_api_design": "relations",
                 "discussing_features": "feature_discuss",
                 "awaiting_features": "feature_discuss",
                 "awaiting_stack": "stack_research",
-                "sent": "comms_spec",
-                "approved": "comms_spec",
+                "sent": "relations",
+                "approved": "relations",
             }.get(status, "wait")
             return {
                 "services": services,
@@ -150,14 +151,12 @@ def wait_node(state: dict[str, Any]) -> dict[str, Any]:
         if action == "approve":
             if status in {
                 "planning",
+                "awaiting_relations",
                 "awaiting_comms",
                 "awaiting_api_type",
                 "awaiting_api_design",
             }:
                 updated = dict(svc)
-                updated["api_type"] = (
-                    updated.get("proposed_api_type") or updated.get("api_type") or "REST"
-                )
                 updated["status"] = "planning"
                 return {
                     "services": replace_service(services, updated),
@@ -183,7 +182,7 @@ def wait_node(state: dict[str, Any]) -> dict[str, Any]:
                     "messages": msgs,
                 }
             note = close_user_message(
-                "Chat on this tile to revise the communication spec, then approve through "
+                "Chat on this tile to revise entity relationships, then approve through "
                 "a new engineer handoff.",
                 mode="handoff",
                 can_approve=False,
@@ -229,8 +228,8 @@ def wait_node(state: dict[str, Any]) -> dict[str, Any]:
             "confirm_topology": "classify",
             "approve_features": "feature_discuss",
             "discuss_features": "feature_discuss",
-            "decide_api_type": "api_type_research",
-            "approve_api_design": "api_design_propose",
+            "decide_api_type": "relations",
+            "approve_api_design": "relations",
             "approve_plan": "stack_research",
         }.get(wait_kind, "wait")
         return {

@@ -18,8 +18,8 @@ def build_agent_card() -> AgentCard:
         name="Orchestrator Planning",
         description=(
             "Accept an architect design-package markdown keyed by design_session_id. "
-            "Classify stand-alone vs distributed, plan tech stacks (and per-service APIs), "
-            "then hand plan specs to the Engineer agent."
+            "Classify stand-alone vs distributed, map per-service entity relationships "
+            "and stacks, then hand plan specs to the Engineer agent."
         ),
         tags=["orchestration", "planning", "software-factory"],
         examples=[

@@ -23,6 +23,7 @@ export type MicroservicePlan = {
   role_key: string;
   architect_api_contract: string;
   feature_spec: string;
+  entity_relationships: string;
   api_type: string;
   api_type_recommendation: string;
   proposed_api_type: string;
@@ -67,6 +68,13 @@ export type WorkflowSession = {
   approve_label: string;
   discussion_locked: boolean;
   finalized: boolean;
+  git_repo_url: string;
+  git_key_configured: boolean;
+  git_key_fingerprint: string;
+  git_send_status: string;
+  git_send_error: string;
+  git_sent_at: string;
+  can_send_git: boolean;
 };
 
 export type WorkflowSummary = {
@@ -139,6 +147,39 @@ export async function endSession(sessionId: string): Promise<WorkflowSession> {
 export async function retryIngest(sessionId: string): Promise<WorkflowSession> {
   const res = await fetch(`/api/sessions/${sessionId}/retry-ingest`, { method: "POST" });
   if (!res.ok) throw new Error(await readError(res));
+  return res.json() as Promise<WorkflowSession>;
+}
+
+async function readGitError(res: Response): Promise<string> {
+  try {
+    const data = (await res.json()) as { detail?: string };
+    if (typeof data.detail === "string" && data.detail.trim()) return data.detail;
+  } catch {
+    // fall through
+  }
+  return "Something went wrong. Please try again.";
+}
+
+export async function saveGit(
+  sessionId: string,
+  gitRepoUrl: string,
+  sshPrivateKey: string,
+): Promise<WorkflowSession> {
+  const res = await fetch(`/api/sessions/${sessionId}/git`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      git_repo_url: gitRepoUrl,
+      ssh_private_key: sshPrivateKey || null,
+    }),
+  });
+  if (!res.ok) throw new Error(await readGitError(res));
+  return res.json() as Promise<WorkflowSession>;
+}
+
+export async function sendGit(sessionId: string): Promise<WorkflowSession> {
+  const res = await fetch(`/api/sessions/${sessionId}/git/send`, { method: "POST" });
+  if (!res.ok) throw new Error(await readGitError(res));
   return res.json() as Promise<WorkflowSession>;
 }
 
