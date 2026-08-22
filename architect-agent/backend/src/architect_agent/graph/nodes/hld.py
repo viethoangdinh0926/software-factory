@@ -17,6 +17,7 @@ from architect_agent.graph.nodes.common import (
     HLD_STEP_TITLES,
     answer_before_approve,
     approve_label,
+    ensure_step_briefing,
     invoke_json,
     is_design_approve_step,
 )
@@ -25,6 +26,7 @@ from architect_agent.json_util import coerce_diagram_text
 from architect_agent.mermaid_sanitize import sanitize_mermaid
 from architect_agent.query_intent import (
     FEEDBACK_RESOLUTION_RULES,
+    USER_MESSAGE_FIRST_RULES,
     is_advance_request,
     is_informational_query,
     promote_chat_to_approve,
@@ -468,8 +470,10 @@ def hld_step_node(state: DesignGraphState) -> dict[str, Any]:
             f"{INTERVIEW_TECHNIQUE_DIGEST}\n\n"
             f"{JSON_OUTPUT_DIGEST}\n\n"
             f"Current HLD step: {step} — {_STEP_TITLES.get(step, '')}.\n"
+            f"{USER_MESSAGE_FIRST_RULES if pending else ''}"
             "Fill this step's primary artifact completely on this turn using labeled "
             "assumptions. The interviewer should only need to click Approve.\n"
+            "If the user just commented, address that comment before restating the step.\n"
             "Do not skip steps unless the user explicitly directs it.\n"
             f"{step_rules}"
             "Respond ONLY with JSON:\n"
@@ -489,6 +493,10 @@ def hld_step_node(state: DesignGraphState) -> dict[str, Any]:
             "}\n"
             "If you rewrite the primary field, it must meet the depth bar so "
             "ready_to_advance can be true. Empty primary field is a failure.\n"
+            "assistant_message MUST brief what this step completed: name the numbers, "
+            "objects, services, protocols, or failure modes you wrote, why, what you "
+            "rejected, and what it costs. Never write a status line such as "
+            "\"HLD step 1 update.\" or \"Here is the diagram.\"\n"
             f"{FEEDBACK_RESOLUTION_RULES if pending else ''}"
         ),
         user=(
@@ -548,7 +556,32 @@ def hld_step_node(state: DesignGraphState) -> dict[str, Any]:
         diagram=diagram,
     )
 
-    assistant = result.get("assistant_message") or f"HLD step {step} update."
+    primary_field = {
+        1: "scale_estimates",
+        2: "business_spec",
+        3: "api_contracts",
+        4: "communication_schemes",
+        5: "fmea_notes",
+        6: "design_justification",
+    }.get(step, "scale_estimates")
+    assistant = ensure_step_briefing(
+        str(result.get("assistant_message") or ""),
+        track="hld",
+        step=step,
+        title=_STEP_TITLES.get(step, "High-level design"),
+        artifacts={
+            "business_spec": str(result.get("updated_business_spec") or business_spec),
+            "tradeoff_ledger": ledger,
+            "scale_estimates": scale,
+            "api_contracts": apis,
+            "communication_schemes": comms,
+            "fmea_notes": fmea,
+            "design_diagram": diagram,
+            "design_justification": justification,
+        },
+        primary_field=primary_field,
+        pending=pending,
+    )
     if pending:
         changed = (
             scale != prior_scale
@@ -627,9 +660,7 @@ def hld_wait_node(state: DesignGraphState) -> dict[str, Any]:
     if user_text:
         msgs.append({"role": "user", "content": user_text, "node": "hld"})
 
-    if action == "approve" and (
-        design_approve or (advance_now and is_design_approve_step("hld", step))
-    ):
+    if action == "approve" and is_design_approve_step("hld", step):
         msg = (
             "Wrapping up this step and moving on. "
             "Design version queued for market evaluation, then handoff to the "
@@ -654,7 +685,7 @@ def hld_wait_node(state: DesignGraphState) -> dict[str, Any]:
             "messages": msgs,
         }
 
-    if action == "approve" and (ready or advance_now) and step < 6:
+    if action == "approve" and step < 6:
         next_step = step + 1
         title = _STEP_TITLES.get(next_step, "")
         msg = (

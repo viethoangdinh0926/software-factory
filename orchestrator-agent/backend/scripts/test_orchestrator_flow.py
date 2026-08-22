@@ -106,6 +106,7 @@ assert wants_endpoint_list("Show me all URL enpoints we aggreed on")
 assert not is_revision_request("Show me all URL endpoints we agreed on")
 assert is_revision_request("Add a health check endpoint")
 assert is_revision_request("Why is there no rate limiting?")
+assert not is_revision_request("Approve")
 assert is_step_approval_message("Approve")
 assert is_step_approval_message("Looks good.")
 assert is_step_approval_message("next step")
@@ -174,7 +175,7 @@ assert "Updates to this proposal" in ident["messages"][-1]["content"]
 assert "None" in ident["messages"][-1]["content"]
 assert NEXT_PROMPT_HEADER in ident["messages"][-1]["content"]
 
-s = store.approve(SESSION, service_id=identity_id)
+s = store.chat(SESSION, "Approve", service_id=identity_id)
 ident = next(x for x in s.to_public()["services"] if x["microservice_id"] == identity_id)
 cat = next(x for x in s.to_public()["services"] if x["microservice_id"] == catalog_id)
 print("  after identity features", ident["status"], cat["status"], flush=True)

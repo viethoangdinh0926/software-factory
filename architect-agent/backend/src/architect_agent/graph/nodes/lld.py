@@ -16,6 +16,7 @@ from architect_agent.graph.nodes.common import (
     LLD_STEP_TITLES,
     answer_before_approve,
     approve_label,
+    ensure_step_briefing,
     invoke_json,
     is_design_approve_step,
 )
@@ -24,6 +25,7 @@ from architect_agent.json_util import coerce_diagram_text
 from architect_agent.mermaid_sanitize import sanitize_mermaid
 from architect_agent.query_intent import (
     FEEDBACK_RESOLUTION_RULES,
+    USER_MESSAGE_FIRST_RULES,
     is_advance_request,
     is_informational_query,
     promote_chat_to_approve,
@@ -52,7 +54,9 @@ def lld_step_node(state: DesignGraphState) -> dict[str, Any]:
             f"{INTERVIEW_TECHNIQUE_DIGEST}\n\n"
             f"{JSON_OUTPUT_DIGEST}\n\n"
             f"Current LLD step: {step} — {_STEP_TITLES.get(step, '')}.\n"
+            f"{USER_MESSAGE_FIRST_RULES if pending else ''}"
             "Fill THIS step's primary artifact in full using recommended defaults. "
+            "If the user just commented, address that comment before restating the step.\n"
             "Do not stall on missing details.\n"
             "Step 1 primary: updated_business_spec — business rules, concurrency, "
             "lifecycle, invariants. ready_to_advance=true when spec is structured.\n"
@@ -62,6 +66,10 @@ def lld_step_node(state: DesignGraphState) -> dict[str, Any]:
             "design_ready_to_approve=true when blueprint is coherent. Invite Approve & send.\n"
             "Leave non-primary fields as \"\" / [] to preserve prior values, EXCEPT you "
             "must always fill the primary field(s) for this step (never empty).\n"
+            "assistant_message MUST brief what this step completed: name the rules, "
+            "types, or diagram nodes you wrote, why those defaults, what you rejected, "
+            "and what it costs. Never write a status line such as "
+            "\"LLD step 1 update.\" or \"LLD step 2 update.\"\n"
             "Respond ONLY with JSON:\n"
             "{\n"
             '  "updated_business_spec": string,\n'
@@ -96,7 +104,24 @@ def lld_step_node(state: DesignGraphState) -> dict[str, Any]:
     )
     if step >= 3:
         ready_advance = design_ready
-    assistant = result.get("assistant_message") or f"LLD step {step} update."
+    primary_field = {1: "business_spec", 2: "design_justification", 3: "design_justification"}.get(
+        step, "business_spec"
+    )
+    new_spec = str(result.get("updated_business_spec") or business_spec)
+    assistant = ensure_step_briefing(
+        str(result.get("assistant_message") or ""),
+        track="lld",
+        step=step,
+        title=_STEP_TITLES.get(step, "Low-level design"),
+        artifacts={
+            "business_spec": new_spec,
+            "tradeoff_ledger": str(result.get("tradeoff_ledger") or ledger),
+            "design_diagram": new_diagram,
+            "design_justification": new_just,
+        },
+        primary_field=primary_field if step != 2 or new_just.strip() else "design_diagram",
+        pending=pending,
+    )
     if pending:
         changed = (
             str(result.get("updated_business_spec") or business_spec) != business_spec
@@ -164,9 +189,7 @@ def lld_wait_node(state: DesignGraphState) -> dict[str, Any]:
     if user_text:
         msgs.append({"role": "user", "content": user_text, "node": "lld"})
 
-    if action == "approve" and (
-        design_approve or (advance_now and is_design_approve_step("lld", step))
-    ):
+    if action == "approve" and is_design_approve_step("lld", step):
         msg = (
             "Wrapping up this step and moving on. "
             "Design version queued for market evaluation, then handoff to the "
@@ -191,7 +214,7 @@ def lld_wait_node(state: DesignGraphState) -> dict[str, Any]:
             "messages": msgs,
         }
 
-    if action == "approve" and (ready or advance_now) and step < 3:
+    if action == "approve" and step < 3:
         next_step = step + 1
         title = _STEP_TITLES.get(next_step, "")
         msg = (

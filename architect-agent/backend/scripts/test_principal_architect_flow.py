@@ -20,25 +20,34 @@ from architect_agent.llm import get_chat_model
 from architect_agent.graph import reset_graph
 from architect_agent.query_intent import (
     NEXT_PROMPT_HEADER,
+    classify_user_message,
     is_advance_request,
     is_informational_query,
     is_revision_request,
     is_step_approval_message,
+    promote_chat_to_approve,
     with_next_prompt,
 )
 from architect_agent.json_util import parse_llm_json_object
+from architect_agent.graph.nodes.common import assistant_message_is_thin, ensure_step_briefing
 from architect_agent.sessions import SessionStore, _legacy_map
 
 get_settings.cache_clear()
 get_chat_model.cache_clear()
 reset_graph()
 
+assert classify_user_message("Approve") == ("command", "approve")
+assert classify_user_message("I'm happy with this, let's continue") == ("command", "approve")
+assert classify_user_message("Why is this HLD rather than LLD?") == ("information", "answer")
+assert classify_user_message("Show me all URL endpoints we agreed on") == ("information", "answer")
+assert classify_user_message("Add a health check endpoint") == ("command", "revise")
 assert is_informational_query("Why is this HLD rather than LLD?")
 assert is_informational_query("Show me all URL endpoints we agreed on")
 assert is_revision_request("Please switch to a modular monolith")
 assert is_revision_request("Add a health check endpoint")
 assert is_revision_request("Why is there no rate limiting?")
 assert not is_revision_request("Why is this HLD rather than LLD?")
+assert not is_revision_request("Approve")
 assert is_step_approval_message("Approve")
 assert is_step_approval_message("Looks good")
 assert is_step_approval_message("lgtm")
@@ -51,9 +60,28 @@ assert not is_advance_request("What's the next step?")
 assert not is_step_approval_message("Why should I approve REST?")
 assert not is_step_approval_message("Looks good, add a health check")
 assert not is_step_approval_message("next step, add a health check")
+assert promote_chat_to_approve("chat", "Approve", can_approve=False) == "approve"
 assert NEXT_PROMPT_HEADER in with_next_prompt("Here is the proposal.")
 assert with_next_prompt(with_next_prompt("Here is the proposal.")).count(NEXT_PROMPT_HEADER) == 1
 assert "Session marked done." == with_next_prompt("Session marked done.")
+assert assistant_message_is_thin("LLD step 1 update.")
+assert assistant_message_is_thin("HLD step 2 update.")
+assert assistant_message_is_thin("Design updated.")
+assert not assistant_message_is_thin(
+    "HLD step 1 locked a 50k DAU / 120k read-QPS plan because catalog reads dominate "
+    "writes; a single-region monolith was rejected for tenant isolation. "
+    "Postgres stays the system of record; Redis is a read-through cache only."
+)
+brief = ensure_step_briefing(
+    "LLD step 1 update.",
+    track="lld",
+    step=1,
+    title="Information gathering",
+    artifacts={"business_spec": "## Invariants\n- No silent stock loss\n- Quotes are deterministic\n"},
+    primary_field="business_spec",
+)
+assert "No silent stock loss" in brief
+assert "LLD step 1 update." not in brief
 
 latex_json = r'{"assistant_message": "DAU $\text{assumed}$ is $\approx$ 5k"}'
 latex_msg = parse_llm_json_object(latex_json)["assistant_message"]
@@ -88,10 +116,18 @@ s = store.chat(s.session_id, "Looks good")
 print("  after phase0", s.phase, s.design_track, s.design_step, flush=True)
 assert s.design_track == "hld", s.design_track
 assert s.phase == "hld" and s.design_step == 1, (s.phase, s.design_step)
+hld1 = s.messages[-1]["content"]
+assert "HLD step 1 update." not in hld1, hld1[:200]
+assert not assistant_message_is_thin(hld1.split("**What you can do next**")[0]), hld1[:400]
 
 for step in range(1, 7):
     assert s.phase == "hld" and s.design_step == step, (s.phase, s.design_step)
     assert s.to_public()["can_approve"], s.to_public()
+    last_hld = s.messages[-1]["content"]
+    assert f"HLD step {step} update." not in last_hld, last_hld[:240]
+    assert "locked in" in last_hld.lower() or not assistant_message_is_thin(
+        last_hld.split("**What you can do next**")[0]
+    ), last_hld[:400]
     if step == 1:
         s = store.chat(s.session_id, "next step")
         print(f"  after next-step chat@{step}", s.phase, s.design_step, flush=True)
@@ -126,6 +162,12 @@ for step in range(1, 7):
         assert s.messages[-1]["role"] == "assistant"
         assert s.messages[-1]["content"].strip()
         assert NEXT_PROMPT_HEADER in s.messages[-1]["content"]
+        s = store.chat(s.session_id, "I'm worried the grade ignored compliance.")
+        print("  market concern", s.phase, flush=True)
+        assert s.phase == "market_research", s.phase
+        market_last = s.messages[-1]["content"]
+        assert "compliance" in market_last.lower() or "worried" in market_last.lower(), market_last[:400]
+        assert s.to_public()["can_approve"]
 
 version_before = s.design_version
 s = store.approve(s.session_id)
@@ -155,12 +197,47 @@ print("  after phase0", s2.phase, s2.design_track, s2.design_step, flush=True)
 assert s2.design_track == "lld", s2.design_track
 for step in range(1, 4):
     assert s2.design_step == step
-    s2 = store2.approve(s2.session_id)
+    last_lld = s2.messages[-1]["content"]
+    assert f"LLD step {step} update." not in last_lld, last_lld[:240]
+    assert "locked in" in last_lld.lower() or "step" in last_lld.lower(), last_lld[:240]
+    if step == 1:
+        s2 = store2.chat(s2.session_id, "Approve")
+        advanced = s2.messages[-1]["content"]
+        assert "I applied your latest comments" not in advanced, advanced[:400]
+        assert s2.design_step == 2, (s2.phase, s2.design_step)
+    else:
+        s2 = store2.approve(s2.session_id)
     print(f"  after approve@{step}", s2.phase, s2.design_step, flush=True)
 assert s2.phase == "market_research"
 s2 = store2.approve(s2.session_id)
 assert s2.phase == "lld" and s2.design_step == 3
 assert s2.design_version >= 1
+
+print("phase0 interview addresses concerns…", flush=True)
+get_settings.cache_clear()
+get_chat_model.cache_clear()
+reset_graph()
+store3 = SessionStore()
+s3 = store3.start("I want an app like youtube")
+assert s3.phase == "phase0"
+s3 = store3.chat(
+    s3.session_id,
+    "I'm worried about GDPR and we should only allow EU users at first. Why no data residency?",
+)
+last3 = s3.messages[-1]["content"]
+assert s3.phase == "phase0"
+assert "GDPR" in last3 or "residenc" in last3.lower() or "EU" in last3, last3[:400]
+assert "Updates to this proposal" in last3, last3[:400]
+# Must not be only the next canned question.
+assert len(last3) > 120, last3
+
+print("hld concern is addressed…", flush=True)
+s = store.chat(s.session_id, "We should add rate limiting at the gateway.")
+# After market continue, s is at hld step 4
+assert s.phase == "hld", s.phase
+hld_last = s.messages[-1]["content"]
+assert "rate limit" in hld_last.lower() or "Addressed your comment" in hld_last, hld_last[:400]
+assert "Updates to this proposal" in hld_last, hld_last[:400]
 
 print("legacy map…", flush=True)
 mapped = _legacy_map({"phase": "spec_interview"})

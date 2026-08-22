@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Callable
 from typing import Any
 
@@ -17,6 +18,7 @@ from architect_agent.llm import get_chat_model
 from architect_agent.query_intent import (
     extract_http_endpoints,
     format_agreed_endpoints,
+    is_revision_request,
     wants_endpoint_list,
     with_resolution_close,
 )
@@ -158,7 +160,7 @@ def answer_open_query(state: dict[str, Any], question: str, *, node: str) -> str
             extract_http_endpoints(apis, str(state.get("design_justification") or ""))
         )
     grade = str(state.get("market_evaluation_grade") or "").strip()
-    if grade and "grade" in q.lower():
+    if grade and "grade" in q.lower() and not is_revision_request(q):
         return f"The market evaluation grade for this design version is **{grade}**."
     result = invoke_json(
         system=(
@@ -173,6 +175,8 @@ def answer_open_query(state: dict[str, Any], question: str, *, node: str) -> str
             "alternatives rejected, the trade-offs accepted — and name the relevant pattern "
             "or principle so the user leaves understanding the architecture.\n"
             "Do not invite Approve. Do not say you finalized or updated the design.\n"
+            "If they raised a concern, address that concern directly — do not ignore it "
+            "to restate the current step.\n"
             "Do not rewrite artifacts. assistant_message is the full answer.\n"
             'Respond ONLY with JSON: {"assistant_message": string}'
         ),
@@ -270,3 +274,146 @@ def approve_label(phase: str, track: str, step: int, *, design_ready: bool = Fal
 
 def is_design_approve_step(track: str, step: int) -> bool:
     return (track == "lld" and step >= 3) or (track == "hld" and step >= 6)
+
+
+_THIN_STATUS_RE = re.compile(
+    r"(?is)^\s*(?:"
+    r"(?:lld|hld)?\s*step\s+\d+\s+(?:update|complete|done|ready)\.?"
+    r"|design updated\.?"
+    r"|here is the diagram\.?"
+    r"|step\s+\d+\s+complete\.?"
+    r")\s*$"
+)
+
+_NEXT_STEP_HINT = {
+    ("lld", 1): "Next we draw the class/structure blueprint from these rules.",
+    ("lld", 2): "Next we verify the blueprint against the spec invariants.",
+    ("lld", 3): "Approve to run market evaluation and hand the package off.",
+    ("hld", 1): "Next we model the domain objects those numbers imply.",
+    ("hld", 2): "Next we split owned objects into core microservices.",
+    ("hld", 3): "Next we name communication schemes and draw the system diagram.",
+    ("hld", 4): "Next we run FMEA against this topology.",
+    ("hld", 5): "Next we synthesize the session and wrap up.",
+    ("hld", 6): "Approve to run market evaluation and hand the package off.",
+}
+
+
+def assistant_message_is_thin(text: str) -> bool:
+    """True when chat is a status line, not a briefing of what this step completed."""
+    body = (text or "").strip()
+    if not body:
+        return True
+    if _THIN_STATUS_RE.match(body):
+        return True
+    # Strip the system next-action footer if a caller already appended it.
+    core = re.split(r"\n\*\*What you can do next\*\*", body, maxsplit=1)[0].strip()
+    core = re.split(r"\n\*\*Updates to this proposal\*\*", core, maxsplit=1)[0].strip()
+    words = core.split()
+    if len(words) < 28:
+        return True
+    return False
+
+
+def _artifact_highlights(text: str, *, max_items: int = 6) -> list[str]:
+    items: list[str] = []
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith("#"):
+            title = line.lstrip("#").strip()
+            if title:
+                items.append(title)
+        elif line.startswith(("-", "*")):
+            items.append(line.lstrip("-* ").strip()[:180])
+        elif re.match(r"^\d+\.\s+", line):
+            items.append(re.sub(r"^\d+\.\s+", "", line)[:180])
+        elif line.startswith("|") and "---" not in line and not re.match(r"^\|\s*[-:]+", line):
+            cells = [c.strip() for c in line.strip("|").split("|") if c.strip()]
+            if cells:
+                items.append(" — ".join(cells[:3])[:180])
+        if len(items) >= max_items:
+            break
+    if not items:
+        compact = re.sub(r"\s+", " ", (text or "").strip())
+        if compact:
+            items.append(compact[:220])
+    return items[:max_items]
+
+
+def synthesize_step_briefing(
+    *,
+    track: str,
+    step: int,
+    title: str,
+    artifacts: dict[str, str],
+    primary_field: str,
+    pending: str = "",
+) -> str:
+    """Explain what this LLD/HLD step actually produced, from the artifacts."""
+    label = track.upper()
+    primary = artifacts.get(primary_field) or ""
+    highlights = _artifact_highlights(primary)
+    if not highlights:
+        for key in (
+            "scale_estimates",
+            "api_contracts",
+            "communication_schemes",
+            "fmea_notes",
+            "design_justification",
+            "business_spec",
+            "tradeoff_ledger",
+            "design_diagram",
+        ):
+            if key == primary_field:
+                continue
+            highlights = _artifact_highlights(artifacts.get(key) or "", max_items=4)
+            if highlights:
+                break
+    bullets = "\n".join(f"- {item}" for item in highlights) or "- (artifact captured on this step)"
+    extra = ""
+    diagram = artifacts.get("design_diagram") or ""
+    if track == "lld" and step >= 2 and diagram.strip():
+        nodes = len(set(re.findall(r"\b([A-Za-z][\w]*)\s*(?:\[|\(|\{)", diagram)))
+        extra = f"\n\nThe class/structure diagram now has about **{nodes or 'several'}** named nodes."
+    if track == "hld" and step == 4 and diagram.strip():
+        nodes = len(set(re.findall(r"\b([A-Za-z][\w]*)\s*(?:\[|\(|\{)", diagram)))
+        extra = f"\n\nThe system diagram now has about **{nodes or 'several'}** named nodes (clients, gateway, services, stores)."
+    nxt = _NEXT_STEP_HINT.get((track, step), "Approve to continue, or tell me what to change.")
+    heard = ""
+    pending_text = (pending or "").strip()
+    if (
+        pending_text
+        and not pending_text.startswith("(none")
+        and is_revision_request(pending_text)
+    ):
+        heard = f"I applied your latest comments ({pending_text[:180]}).\n\n"
+    return (
+        f"{heard}**{label} step {step} — {title}** is complete enough to review.\n\n"
+        f"Here is what this step locked in:\n\n{bullets}{extra}\n\n"
+        f"{nxt}"
+    )
+
+
+def ensure_step_briefing(
+    message: str,
+    *,
+    track: str,
+    step: int,
+    title: str,
+    artifacts: dict[str, str],
+    primary_field: str,
+    pending: str = "",
+) -> str:
+    """Replace empty/status-line chat with a briefing of what the step completed."""
+    raw = (message or "").strip()
+    if not assistant_message_is_thin(raw):
+        return raw
+    return synthesize_step_briefing(
+        track=track,
+        step=step,
+        title=title,
+        artifacts=artifacts,
+        primary_field=primary_field,
+        pending=pending,
+    )

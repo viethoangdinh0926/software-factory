@@ -34,7 +34,9 @@ class StubChatModel(BaseChatModel):
     ) -> ChatResult:
         blob = "\n".join(str(m.content) for m in messages)
         lower = blob.lower()
-        if "answering a question about" in lower:
+        if "user turn intent classifier" in lower:
+            payload = _stub_turn_intent(blob)
+        elif "answering a question about" in lower:
             payload = {"assistant_message": _stub_qa(blob)}
         elif "engineer execution planner" in lower:
             payload = _stub_execution_plan(blob)
@@ -68,6 +70,57 @@ def _slug(name: str) -> str:
     slug = re.sub(r"Service$", "", name)
     slug = re.sub(r"(?<!^)(?=[A-Z])", "-", slug).lower()
     return slug or "resource"
+
+
+def _stub_turn_intent(blob: str) -> dict[str, str]:
+    user = ""
+    for marker in ("User message:", "Latest user message:"):
+        if marker in blob:
+            user = blob.split(marker, 1)[1].strip()
+            break
+    if not user:
+        user = blob
+    compact = re.sub(r"\s+", " ", user).strip().lower().rstrip(".!")
+    if re.search(r"\bwhy should i approve\b", compact) or (
+        "?" in user and re.search(r"\bapprove\b", compact) and "rate" not in compact
+    ):
+        return {"category": "information", "action": "answer"}
+    if (
+        re.search(r"\b(next step|move on|wrap up|go ahead|proceed)\b", compact)
+        and "?" not in user
+        and "add " not in compact
+        and "change " not in compact
+    ):
+        return {"category": "command", "action": "approve"}
+    if re.search(r"\b(pause|stop execution|hold on)\b", compact) and "approve" not in compact:
+        return {"category": "command", "action": "pause"}
+    if re.search(r"\b(execute|run the plan|start coding)\b", compact):
+        return {"category": "command", "action": "execute"}
+    if any(
+        hint in compact
+        for hint in (
+            "add ",
+            "change ",
+            "switch ",
+            "worried",
+            "missing",
+            "rate limit",
+            "we should",
+            "we need",
+        )
+    ):
+        return {"category": "command", "action": "revise"}
+    if re.search(
+        r"\b(approve|lgtm|looks good|next step|move on|wrap up|go ahead|proceed|"
+        r"let'?s continue|happy with this|ship it)\b",
+        compact,
+    ) and "?" not in user:
+        return {"category": "command", "action": "approve"}
+    if "?" in user or compact.startswith(
+        ("why", "what", "which", "how", "show", "list", "explain")
+    ):
+        return {"category": "information", "action": "answer"}
+    return {"category": "command", "action": "revise"}
 
 
 def _stub_qa(blob: str) -> str:

@@ -22,7 +22,7 @@ from orchestrator_agent.git_access import (
 from orchestrator_agent.graph import build_graph, initial_state
 from orchestrator_agent.graph.nodes.common import decorate_service
 from orchestrator_agent.package_parse import ParsedPackage, parse_design_package
-from orchestrator_agent.query_intent import is_advance_request, is_step_approval_message
+from orchestrator_agent.query_intent import classify_user_message
 from orchestrator_agent.secrets_store import load_git_secrets, save_git_secrets
 
 logger = logging.getLogger(__name__)
@@ -401,7 +401,11 @@ class SessionStore:
             )
         else:
             can_approve = bool(session.to_public().get("can_approve"))
-        if is_advance_request(text) or (can_approve and is_step_approval_message(text)):
+        context = (
+            f"Orchestrator phase={session.phase} wait={session.wait_kind} "
+            f"service={service_id or 'session'} can_approve={can_approve}."
+        )
+        if classify_user_message(text, context)[1] == "approve":
             return self.resume(session_id, action="approve", text=text, service_id=service_id)
         return self.resume(session_id, action="chat", text=text, service_id=service_id)
 

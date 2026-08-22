@@ -1,8 +1,12 @@
-"""Detect informational Q&A vs artifact-revision chat before Approve."""
+"""Understand user turns as command (act) vs information (answer), via the LLM."""
 
 from __future__ import annotations
 
+import logging
 import re
+from functools import lru_cache
+
+logger = logging.getLogger(__name__)
 
 _REVISION_HINTS = (
     "add ",
@@ -134,21 +138,128 @@ FEEDBACK_RESOLUTION_RULES = (
 )
 
 
+_TURN_INTENT_SYSTEM = (
+    "You are the USER TURN INTENT CLASSIFIER for a software-factory agent.\n"
+    "Read the user message as a human would. Do not decide from isolated keywords.\n"
+    "Classify into exactly one category:\n"
+    "- command: they want the agent to ACT in the workflow (approve/advance a step, "
+    "apply a design change, pause or execute work).\n"
+    "- information: they want an explanation, list, reminder, comparison, or Q&A. "
+    "Do not change artifacts and do not advance the workflow.\n"
+    "If category is command, set action to one of:\n"
+    "- approve: accept the current step and move on (Approve, looks good, next step, "
+    "I'm happy with this, ship it, proceed, wrap up, continue to the next phase).\n"
+    "- revise: change the spec, design, or plan from their comment or concern.\n"
+    "- pause: pause in-flight execution.\n"
+    "- execute: start or resume an execution plan.\n"
+    "- none: some other command.\n"
+    "If category is information, action must be answer.\n"
+    "A question about whether/why they should approve something is information.\n"
+    "A concern that implies a missing feature (e.g. 'why is there no rate limiting?') "
+    "is command/revise.\n"
+    "Respond ONLY with JSON:\n"
+    '{"category":"command|information","action":"approve|revise|pause|execute|answer|none"}'
+)
+_VALID_CATEGORIES = frozenset({"command", "information"})
+_VALID_ACTIONS = frozenset({"approve", "revise", "pause", "execute", "answer", "none"})
+
+
+def _compact_user_text(text: str) -> str:
+    return re.sub(r"\s+", " ", (text or "").strip()).rstrip(".!")
+
+
+def _heuristic_approval(text: str) -> bool:
+    raw = (text or "").strip()
+    if not raw or "?" in raw:
+        return False
+    compact = _compact_user_text(raw).lower()
+    if not compact or any(hint in compact for hint in _REVISION_HINTS):
+        return False
+    if _ADVANCE_RE.search(compact):
+        return True
+    if any(hint in compact for hint in _CONCERN_HINTS):
+        return False
+    if compact in _APPROVAL_EXACT:
+        return True
+    return bool(_APPROVAL_PREFIX_RE.match(compact) or _APPROVAL_DIRECT_RE.match(compact))
+
+
+def _heuristic_turn_intent(text: str) -> tuple[str, str]:
+    raw = (text or "").strip()
+    compact = _compact_user_text(raw).lower()
+    if not compact:
+        return "information", "none"
+    if "?" in raw and any(hint in compact for hint in _CONCERN_HINTS):
+        return "command", "revise"
+    if _heuristic_approval(raw):
+        return "command", "approve"
+    if any(hint in compact for hint in _REVISION_HINTS) or any(
+        hint in compact for hint in _CONCERN_HINTS
+    ):
+        return "command", "revise"
+    if compact in _ACKNOWLEDGEMENTS:
+        return ("command", "approve") if compact in _APPROVAL_EXACT else ("information", "answer")
+    if any(marker in compact for marker in _QUESTION_MARKERS) or "?" in raw:
+        return "information", "answer"
+    return "command", "revise"
+
+
+def _llm_turn_intent(text: str, context: str) -> tuple[str, str] | None:
+    try:
+        from langchain_core.messages import HumanMessage, SystemMessage
+
+        from orchestrator_agent.json_util import parse_llm_json_object
+        from orchestrator_agent.llm import get_chat_model
+
+        model = get_chat_model()
+        response = model.invoke(
+            [
+                SystemMessage(content=_TURN_INTENT_SYSTEM),
+                HumanMessage(
+                    content=(
+                        f"Workflow context:\n{context or '(none)'}\n\n"
+                        f"User message:\n{text}\n"
+                    )
+                ),
+            ]
+        )
+        content = response.content
+        if isinstance(content, list):
+            content = "".join(
+                block.get("text", "") if isinstance(block, dict) else str(block)
+                for block in content
+            )
+        parsed = parse_llm_json_object(str(content))
+        category = str(parsed.get("category") or "").strip().lower()
+        action = str(parsed.get("action") or "").strip().lower()
+        if category not in _VALID_CATEGORIES:
+            return None
+        if category == "information":
+            return "information", "answer"
+        if action not in _VALID_ACTIONS or action == "answer":
+            action = "none"
+        return "command", action
+    except Exception as exc:
+        logger.warning("Turn intent classifier failed; using fallback: %s", exc)
+        return None
+
+
+@lru_cache(maxsize=256)
+def classify_user_message(text: str, context: str = "") -> tuple[str, str]:
+    raw = (text or "").strip()
+    if not raw:
+        return "information", "none"
+    classified = _llm_turn_intent(raw, context)
+    if classified is not None:
+        return classified
+    return _heuristic_turn_intent(raw)
+
+
 def needs_artifact_update(text: str) -> bool:
     """True when comments/concerns should rewrite the current proposal before Approve."""
-    t = (text or "").lower().strip()
-    if not t:
+    if not (text or "").strip():
         return False
-    if any(hint in t for hint in _REVISION_HINTS):
-        return True
-    if any(hint in t for hint in _CONCERN_HINTS):
-        return True
-    compact = t.rstrip(".!")
-    if compact in _ACKNOWLEDGEMENTS:
-        return False
-    if any(marker in t for marker in _QUESTION_MARKERS):
-        return False
-    return True
+    return classify_user_message(text) == ("command", "revise")
 
 
 def is_informational_query(text: str) -> bool:
@@ -156,14 +267,14 @@ def is_informational_query(text: str) -> bool:
     t = (text or "").strip()
     if not t:
         return False
-    return not needs_artifact_update(t)
+    return classify_user_message(t)[0] == "information"
 
 
 def is_revision_request(text: str) -> bool:
     t = (text or "").strip()
     if not t:
         return True
-    return needs_artifact_update(t)
+    return classify_user_message(t) == ("command", "revise")
 
 
 def wants_endpoint_list(text: str) -> bool:
@@ -223,7 +334,9 @@ _APPROVAL_PREFIX_RE = re.compile(
     re.I,
 )
 _APPROVAL_DIRECT_RE = re.compile(
-    r"^(?:i(?:'m| am) )?(?:happy to |ready to )?approve\b",
+    r"^(?:(?:yes|yep|yeah|ok|okay|please)[,.]?\s+)?"
+    r"(?:i(?:'m| am)?\s+)?(?:would like to\s+|want to\s+)?"
+    r"(?:happy to\s+|ready to\s+)?(?:approve|accept)\b",
     re.I,
 )
 _ADVANCE_RE = re.compile(
@@ -250,41 +363,27 @@ _ADVANCE_RE = re.compile(
 def is_advance_request(text: str) -> bool:
     """True when chat asks to wrap up this step and go to the next one immediately."""
     raw = (text or "").strip()
-    if not raw or "?" in raw:
+    if not raw:
         return False
-    compact = re.sub(r"\s+", " ", raw.lower()).rstrip(".!")
-    if not compact:
-        return False
-    if any(hint in compact for hint in _REVISION_HINTS):
-        return False
-    return bool(_ADVANCE_RE.search(compact))
+    category, action = classify_user_message(raw)
+    if category == "command" and action == "approve":
+        return bool(_ADVANCE_RE.search(_compact_user_text(raw).lower()))
+    return False
 
 
 def is_step_approval_message(text: str) -> bool:
-    """True when chat is an approval to advance the current step (same as the Approve button)."""
+    """True when chat is a command to accept the current step and move on."""
     raw = (text or "").strip()
-    if not raw or "?" in raw:
+    if not raw:
         return False
-    compact = re.sub(r"\s+", " ", raw.lower()).rstrip(".!")
-    if not compact:
-        return False
-    if any(hint in compact for hint in _REVISION_HINTS):
-        return False
-    if is_advance_request(raw):
-        return True
-    if any(hint in compact for hint in _CONCERN_HINTS):
-        return False
-    if compact in _APPROVAL_EXACT:
-        return True
-    return bool(_APPROVAL_PREFIX_RE.match(compact) or _APPROVAL_DIRECT_RE.match(compact))
+    return classify_user_message(raw) == ("command", "approve")
 
 
-def promote_chat_to_approve(action: str, text: str, *, can_approve: bool) -> str:
+def promote_chat_to_approve(action: str, text: str, *, can_approve: bool = True) -> str:
+    del can_approve
     if action != "chat":
         return action
-    if is_advance_request(text):
-        return "approve"
-    if can_approve and is_step_approval_message(text):
+    if is_step_approval_message(text):
         return "approve"
     return action
 

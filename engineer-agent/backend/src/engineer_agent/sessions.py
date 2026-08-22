@@ -23,10 +23,7 @@ from engineer_agent.execution import (
 from engineer_agent.llm import invoke_json
 from engineer_agent.plan_parse import ParsedHandoff, parse_handoff, parse_related_entities, sub_agent_id
 from engineer_agent.query_intent import (
-    is_execute_request,
-    is_pause_request,
-    is_revision_request,
-    is_step_approval_message,
+    classify_user_message,
     with_next_prompt,
     with_resolution_close,
 )
@@ -418,32 +415,34 @@ class SessionStore:
                 raise ValueError("message is required")
             status = str(sub.get("status") or "")
             decorated = decorate_sub(sub)
+            context = (
+                f"Engineer sub-status={status} can_approve={bool(decorated.get('can_approve'))}."
+            )
+            _category, action = classify_user_message(text, context)
 
             if status == "executing":
-                if is_pause_request(text):
+                if action == "pause":
                     return self._pause_locked(session, sub)
-                if is_execute_request(text) or is_step_approval_message(text):
+                if action in {"approve", "execute"}:
                     return self._chat_locked(
                         session,
                         sub,
                         text,
                         "The execution plan is already running. Pause it if you need to change it.",
                     )
-                if is_revision_request(text) and not _is_peer_data_request(text):
+                if action == "revise" and not _is_peer_data_request(text):
                     raise PermissionError("Pause execution before updating the plan.")
                 if _is_peer_data_request(text):
                     return self._chat_apply(session, sub, text, self._handle_peer_data_request(session, dict(sub), text))
                 return self._chat_apply(session, sub, text, self._answer(sub, text))
 
-            if is_pause_request(text):
+            if action == "pause":
                 return self._chat_locked(session, sub, text, "Nothing is executing, so there is nothing to pause.")
 
-            if status == "paused" and is_execute_request(text):
+            if status == "paused" and action == "execute":
                 return self._execute_locked(session, sub)
 
-            if decorated.get("can_approve") and (
-                is_step_approval_message(text) or is_execute_request(text)
-            ):
+            if decorated.get("can_approve") and action in {"approve", "execute"}:
                 return self._approve_locked(session, sub)
 
             if _is_peer_data_request(text):
@@ -451,7 +450,7 @@ class SessionStore:
                     session, sub, text, self._handle_peer_data_request(session, dict(sub), text)
                 )
 
-            if status in PLAN_EDITABLE and is_revision_request(text):
+            if status in PLAN_EDITABLE and action == "revise":
                 return self._chat_apply(session, sub, text, self._revise_execution_plan(sub, text))
 
             return self._chat_apply(session, sub, text, self._answer(sub, text))

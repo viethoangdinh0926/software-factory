@@ -34,7 +34,9 @@ class StubChatModel(BaseChatModel):
         lower = blob.lower()
         turns = blob.count("User answer:") + blob.count("USER:")
 
-        if "this is q&a before they approve this workflow step" in lower:
+        if "user turn intent classifier" in lower:
+            payload = _stub_turn_intent(blob)
+        elif "this is q&a before they approve this workflow step" in lower:
             payload = {"assistant_message": _stub_qa(blob)}
         elif "compress a living business specification" in lower or "spec to compress:" in lower:
             payload = {"updated_business_spec": _compact_spec_stub(blob)}
@@ -55,6 +57,27 @@ class StubChatModel(BaseChatModel):
         ):
             # Merge without growing an unbounded interview-notes appendix.
             payload = {"updated_business_spec": _fold_answer_stub(blob)}
+        elif "phase 0 interview conductor" in lower:
+            payload = _stub_phase0_interview_turn(blob)
+        elif "phase 0 interview question generator" in lower:
+            payload = _stub_phase0_questions(blob)
+        elif "phase 0 spec compiler" in lower:
+            payload = {
+                "compiled_spec": _rich_spec(blob),
+                "assistant_message": (
+                    "Here is the compiled specification from your answers. "
+                    "Tell me what to change, or approve to classify LLD vs HLD."
+                ),
+            }
+        elif "phase 0 spec refiner" in lower:
+            feedback = _latest_feedback(blob)
+            payload = {
+                **_stub_phase0(blob),
+                "assistant_message": (
+                    f"I applied your comments ({feedback[:180] or 'noted'}). "
+                    "The spec is updated. Approve to start the classified track, or keep editing."
+                ),
+            }
         elif "phase 0 classifier" in lower or "classify the design scope" in lower:
             payload = _stub_phase0(blob)
         elif "lld track node" in lower or "current lld step" in lower:
@@ -116,6 +139,54 @@ class StubChatModel(BaseChatModel):
         )
 
 
+def _stub_turn_intent(blob: str) -> dict[str, str]:
+    """Deterministic command vs information classification for the stub model."""
+    user = ""
+    for marker in ("User message:", "Latest user message:"):
+        if marker in blob:
+            user = blob.split(marker, 1)[1].strip()
+            break
+    if not user:
+        user = blob
+    compact = re.sub(r"\s+", " ", user).strip().lower().rstrip(".!")
+    if re.search(r"\bwhy should i approve\b", compact) or (
+        "?" in user and re.search(r"\bapprove\b", compact) and "rate" not in compact
+    ):
+        return {"category": "information", "action": "answer"}
+    if (
+        re.search(r"\b(next step|move on|wrap up|go ahead|proceed)\b", compact)
+        and "?" not in user
+        and "add " not in compact
+        and "change " not in compact
+    ):
+        return {"category": "command", "action": "approve"}
+    if any(
+        hint in compact
+        for hint in (
+            "add ",
+            "change ",
+            "switch ",
+            "worried",
+            "missing",
+            "rate limit",
+            "we should",
+            "we need",
+        )
+    ):
+        return {"category": "command", "action": "revise"}
+    if re.search(
+        r"\b(approve|lgtm|looks good|next step|move on|wrap up|go ahead|proceed|"
+        r"let'?s continue|happy with this|ship it)\b",
+        compact,
+    ) and "?" not in user:
+        return {"category": "command", "action": "approve"}
+    if "?" in user or compact.startswith(
+        ("why", "what", "which", "how", "show", "list", "explain")
+    ):
+        return {"category": "information", "action": "answer"}
+    return {"category": "command", "action": "revise"}
+
+
 def _stub_qa(blob: str) -> str:
     lower = blob.lower()
     ask = lower
@@ -149,8 +220,24 @@ def _stub_qa(blob: str) -> str:
             "IdentityService owns User, Session, and Credential in the current core "
             "microservices artifact. Other headed services own their own domain objects."
         )
-    if "grade" in lower:
-        return "The market evaluation grade for this design version is in the report on this step."
+    if "gdpr" in ask or "residenc" in ask:
+        return (
+            "You raised GDPR / data-residency. I would keep EU-only processing as a "
+            "v1 invariant and call it out in the spec before we classify the track."
+        )
+    if "rate limit" in ask:
+        return (
+            "Rate limiting belongs on the edge/gateway for write-heavy APIs. "
+            "I can add it to this step's artifact if you want it locked in."
+        )
+    if "worried" in ask or "concern" in ask or "compliance" in ask:
+        snippet = ask.strip().splitlines()[0][:220]
+        return (
+            f"I hear that concern: {snippet} "
+            "Here is how the current artifacts speak to it, and what I would change if we revise."
+        )
+    if "grade" in ask:
+        return "The market evaluation grade for this design version is **B**."
     if "hld" in lower and "lld" in lower:
         return (
             "This is HLD because the spec describes a distributed, multi-service system "
@@ -188,14 +275,65 @@ def _stub_phase0(blob: str) -> dict[str, Any]:
         track = "hld"
     else:
         track = "lld"
+    feedback = _latest_feedback(blob)
+    addressed = (
+        f" I addressed your comment: {feedback[:160]}."
+        if feedback
+        else ""
+    )
     return {
         "design_track": track,
         "ready_to_advance": True,
+        "system_type": "video sharing platform" if "youtube" in lower else "system",
+        "search_query": "video sharing platform requirements" if "youtube" in lower else f"{track} architecture requirements",
         "updated_business_spec": _rich_spec(blob),
         "tradeoff_ledger": "- Scope classification pending user confirm.\n",
         "assistant_message": (
-            f"Scope looks like **{track.upper()}**. "
+            f"Scope looks like **{track.upper()}**.{addressed} "
             "Click approve to start that track, or tell me if this should be the other track."
+        ),
+    }
+
+
+def _stub_phase0_questions(blob: str) -> dict[str, Any]:
+    del blob
+    questions = [
+        {"id": "q1", "text": "Who are the primary daily users, and what job are they hiring this for?", "category": "users"},
+        {"id": "q2", "text": "What must never go wrong in v1 (safety, money, compliance, trust)?", "category": "constraints"},
+        {"id": "q3", "text": "Which 3 capabilities must ship in v1?", "category": "business"},
+        {"id": "q4", "text": "What will you explicitly not build in v1?", "category": "business"},
+        {"id": "q5", "text": "How will you know v1 succeeded?", "category": "success_metrics"},
+    ]
+    return {
+        "questions": questions,
+        "assistant_message": (
+            "I will gather just enough to classify LLD vs HLD. "
+            f"{questions[0]['text']}"
+        ),
+    }
+
+
+def _stub_phase0_interview_turn(blob: str) -> dict[str, Any]:
+    feedback = _latest_feedback(blob)
+    idx = 1
+    match = re.search(r"Current question index:\s*(\d+)", blob)
+    if match:
+        idx = min(int(match.group(1)) + 1, 5)
+    return {
+        "updated_business_spec": _rich_spec(blob)
+        + (f"\n- User comment: {feedback[:240]}\n" if feedback else ""),
+        "questions": _stub_phase0_questions(blob)["questions"],
+        "current_question_index": idx,
+        "interview_complete": idx >= 5,
+        "assistant_message": (
+            f"I heard you{': ' + feedback[:200] if feedback else ''}. "
+            "I folded that into the living spec (including any GDPR, residency, or "
+            "security concerns). "
+            + (
+                "I have enough to compile the specification."
+                if idx >= 5
+                else "Next, only if still needed: what 3 capabilities must ship in v1?"
+            )
         ),
     }
 
@@ -221,7 +359,12 @@ def _stub_lld(blob: str) -> dict[str, Any]:
         "ready_to_advance": True,
         "design_ready_to_approve": step >= 3,
         "assistant_message": (
-            f"LLD step {step} draft ready. "
+            (
+                f"Addressed your comment: {feedback[:180]}. "
+                if feedback
+                else ""
+            )
+            + f"LLD step {step} draft ready. "
             + (
                 "Approve to run market evaluation and hand off."
                 if step >= 3
@@ -367,7 +510,12 @@ def _stub_hld(blob: str) -> dict[str, Any]:
         "ready_to_advance": True,
         "design_ready_to_approve": step >= 6,
         "assistant_message": (
-            f"HLD step {step} draft ready. "
+            (
+                f"Addressed your comment: {feedback[:180]}. "
+                if feedback
+                else ""
+            )
+            + f"HLD step {step} draft ready. "
             + (
                 "Approve to run market evaluation and hand off."
                 if step >= 6
@@ -436,6 +584,8 @@ def _latest_feedback(blob: str) -> str:
     for marker in (
         "Latest user feedback to apply now:",
         "Latest user message:",
+        "User's requested changes:",
+        "User's final response:",
     ):
         if marker in blob:
             part = blob.split(marker, 1)[1].strip()

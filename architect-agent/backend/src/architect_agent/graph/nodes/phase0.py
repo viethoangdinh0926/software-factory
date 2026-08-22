@@ -16,8 +16,11 @@ from architect_agent.graph.nodes.common import answer_before_approve, approve_la
 from architect_agent.graph.state import DesignGraphState
 from architect_agent.query_intent import (
     FEEDBACK_RESOLUTION_RULES,
+    USER_MESSAGE_FIRST_RULES,
     is_advance_request,
     is_informational_query,
+    is_revision_request,
+    is_step_approval_message,
     promote_chat_to_approve,
     with_next_prompt,
     with_resolution_close,
@@ -74,16 +77,17 @@ def phase0_classify_node(state: DesignGraphState) -> dict[str, Any]:
     
     # If we have a compiled spec and user wants to proceed with classification
     if spec_compiled and interview_complete:
-        # Check if user wants to make final edits
-        if pending and pending.lower() in ["yes", "y", "add", "edit", "update", "modify"]:
-            # Process final edits
+        # Concerns / edits after the compiled spec must be applied, not skipped.
+        if pending and is_revision_request(pending) and not is_step_approval_message(pending):
             spec_update_result = invoke_json(
                 system=(
                     "You are the Architect agent's Phase 0 spec refiner (Principal Architect).\n"
                     f"{PRINCIPAL_ARCHITECT_DIGEST}\n\n"
                     f"{JSON_OUTPUT_DIGEST}\n\n"
-                    "Task: Update the business specification based on user's final edits.\n"
-                    "Integrate the user's requested changes into the spec.\n"
+                    f"{USER_MESSAGE_FIRST_RULES}\n"
+                    "Task: Update the business specification based on the user's comments.\n"
+                    "Address every concern in assistant_message, then integrate requested "
+                    "changes into the spec.\n"
                     "After updating, classify as LLD vs HLD and set ready_to_advance=true.\n"
                     "Respond ONLY with JSON:\n"
                     "{\n"
@@ -105,7 +109,12 @@ def phase0_classify_node(state: DesignGraphState) -> dict[str, Any]:
             ready = bool(spec_update_result.get("ready_to_advance")) and new_track in {"lld", "hld"}
             spec = spec_update_result.get("updated_business_spec") or business_spec
             assistant = str(spec_update_result.get("assistant_message") or "")
-            
+            if pending:
+                assistant = with_resolution_close(
+                    assistant or "Updated the specification from your comments.",
+                    changed=spec != business_spec,
+                )
+
             return {
                 "phase": "phase0",
                 "design_track": new_track,  # type: ignore[typeddict-item]
@@ -132,6 +141,7 @@ def phase0_classify_node(state: DesignGraphState) -> dict[str, Any]:
                     f"{PRINCIPAL_ARCHITECT_DIGEST}\n\n"
                     f"{INTERVIEW_TECHNIQUE_DIGEST}\n\n"
                     f"{JSON_OUTPUT_DIGEST}\n\n"
+                    f"{USER_MESSAGE_FIRST_RULES if pending else ''}\n"
                     "Task: classify LLD vs HLD from the compiled spec.\n"
                     "HLD if the idea is a product/platform spanning network, storage, CDN, "
                     "multi-user scale, or 'like YouTube/Uber/SaaS'. LLD if it is a library, CLI, "
@@ -146,8 +156,9 @@ def phase0_classify_node(state: DesignGraphState) -> dict[str, Any]:
                     '  "tradeoff_ledger": string,\n'
                     '  "assistant_message": string\n'
                     "}\n"
-                    "updated_business_spec: keep the spec as-is.\n"
+                    "updated_business_spec: apply any user comments; otherwise keep the spec.\n"
                     "tradeoff_ledger: one line noting the classification assumption.\n"
+                    f"{FEEDBACK_RESOLUTION_RULES if pending else ''}"
                 ),
                 user=(
                     f"Current living specification:\n\n{business_spec}\n\n"
@@ -165,7 +176,12 @@ def phase0_classify_node(state: DesignGraphState) -> dict[str, Any]:
                 result.get("assistant_message")
                 or f"Scope classified as **{new_track.upper()}**. Click approve to begin the track."
             )
-            
+            if pending:
+                assistant = with_resolution_close(
+                    str(assistant),
+                    changed=spec != business_spec or new_track != str(state.get("design_track") or "unset"),
+                )
+
             return {
                 "phase": "phase0",
                 "design_track": new_track,  # type: ignore[typeddict-item]
@@ -243,64 +259,7 @@ def phase0_classify_node(state: DesignGraphState) -> dict[str, Any]:
     
     # If we have interview questions, check if we need to ask the next one
     if interview_questions and current_question_index < len(interview_questions):
-        # User provided an answer to the current question
-        if pending:
-            current_question = interview_questions[current_question_index]
-            question_id = current_question.get("id", f"q{current_question_index}")
-            interview_answers[question_id] = pending
-            
-            # Move to next question
-            next_index = current_question_index + 1
-            
-            if next_index >= len(interview_questions):
-                # All questions answered, mark interview as complete
-                return {
-                    "phase": "phase0",
-                    "design_track": "unset",
-                    "design_step": 0,
-                    "business_spec": business_spec,
-                    "tradeoff_ledger": state.get("tradeoff_ledger") or "",
-                    "ready_to_advance": False,
-                    "ready_for_design": False,
-                    "design_ready_to_approve": False,
-                    "spec_enhanced": True,
-                    "interview_questions": interview_questions,
-                    "interview_answers": interview_answers,
-                    "current_question_index": next_index,
-                    "interview_complete": True,
-                    "spec_compiled": False,
-                    "pending_user_feedback": "",
-                    "pending_assistant_message": "Thank you for answering all the questions. I'll now compile your specification.",
-                    "publish_requested": False,
-                    "stay_on_interrupt": False,
-                    "messages": [{"role": "assistant", "content": "Thank you for answering all the questions. I'll now compile your specification.", "node": "phase0"}],
-                }
-            else:
-                # Ask next question
-                next_question = interview_questions[next_index]
-                return {
-                    "phase": "phase0",
-                    "design_track": "unset",
-                    "design_step": 0,
-                    "business_spec": business_spec,
-                    "tradeoff_ledger": state.get("tradeoff_ledger") or "",
-                    "ready_to_advance": False,
-                    "ready_for_design": False,
-                    "design_ready_to_approve": False,
-                    "spec_enhanced": True,
-                    "interview_questions": interview_questions,
-                    "interview_answers": interview_answers,
-                    "current_question_index": next_index,
-                    "interview_complete": False,
-                    "spec_compiled": False,
-                    "pending_user_feedback": "",
-                    "pending_assistant_message": next_question.get("text", ""),
-                    "publish_requested": False,
-                    "stay_on_interrupt": False,
-                    "messages": [{"role": "assistant", "content": next_question.get("text", ""), "node": "phase0"}],
-                }
-        else:
-            # Ask the current question
+        if not pending:
             current_question = interview_questions[current_question_index]
             return {
                 "phase": "phase0",
@@ -323,6 +282,90 @@ def phase0_classify_node(state: DesignGraphState) -> dict[str, Any]:
                 "stay_on_interrupt": False,
                 "messages": [{"role": "assistant", "content": current_question.get("text", ""), "node": "phase0"}],
             }
+
+        current_question = interview_questions[current_question_index]
+        question_id = current_question.get("id", f"q{current_question_index}")
+        answers = dict(interview_answers or {})
+        answers[question_id] = pending
+        turn = invoke_json(
+            system=(
+                "You are the Architect agent's Phase 0 interview conductor (Principal Architect).\n"
+                f"{PRINCIPAL_ARCHITECT_DIGEST}\n\n"
+                f"{INTERVIEW_TECHNIQUE_DIGEST}\n\n"
+                f"{JSON_OUTPUT_DIGEST}\n\n"
+                f"{USER_MESSAGE_FIRST_RULES}\n"
+                "The question list is a checklist, not a script. Address the user's "
+                "message first. Fold useful answers and concerns into the living spec. "
+                "You may stay on the current question, skip ahead, rewrite a later "
+                "question, or mark the interview complete — but never reply with only "
+                "the next canned question.\n"
+                "Respond ONLY with JSON:\n"
+                "{\n"
+                '  "updated_business_spec": string,\n'
+                '  "questions": [{"id": string, "text": string, "category": string}],\n'
+                '  "current_question_index": number,\n'
+                '  "interview_complete": boolean,\n'
+                '  "assistant_message": string\n'
+                "}\n"
+                "questions: return the full list (revised if needed). "
+                "current_question_index: index of the NEXT question to ask, or "
+                "len(questions) if complete.\n"
+                f"{FEEDBACK_RESOLUTION_RULES}"
+            ),
+            user=(
+                f"Current living specification:\n\n{business_spec}\n\n"
+                f"Interview checklist:\n{json.dumps(interview_questions, indent=2)}\n\n"
+                f"Answers so far:\n{json.dumps(answers, indent=2)}\n\n"
+                f"Current question index: {current_question_index}\n"
+                f"Current question: {current_question.get('text', '')}\n\n"
+                f"Recent Phase 0 turns:\n{history_tail}\n\n"
+                f"Latest user message:\n{pending}\n"
+            ),
+        )
+        questions = turn.get("questions") or interview_questions
+        if not isinstance(questions, list) or not questions:
+            questions = interview_questions
+        spec = str(turn.get("updated_business_spec") or business_spec)
+        try:
+            next_index = int(turn.get("current_question_index"))
+        except (TypeError, ValueError):
+            next_index = current_question_index + 1
+        next_index = max(0, min(next_index, len(questions)))
+        complete = bool(turn.get("interview_complete")) or next_index >= len(questions)
+        assistant = str(turn.get("assistant_message") or "").strip()
+        if not assistant:
+            if complete:
+                assistant = (
+                    "Thanks — I folded your comments into the spec and have enough to compile it."
+                )
+            else:
+                nxt = questions[next_index] if next_index < len(questions) else {}
+                assistant = (
+                    f"I heard you: {pending[:240]}. "
+                    f"{nxt.get('text') or 'What else should we lock for v1?'}"
+                )
+        assistant = with_resolution_close(assistant, changed=spec != business_spec or bool(pending))
+        return {
+            "phase": "phase0",
+            "design_track": "unset",
+            "design_step": 0,
+            "business_spec": spec,
+            "tradeoff_ledger": state.get("tradeoff_ledger") or "",
+            "ready_to_advance": False,
+            "ready_for_design": False,
+            "design_ready_to_approve": False,
+            "spec_enhanced": True,
+            "interview_questions": questions,
+            "interview_answers": answers,
+            "current_question_index": next_index,
+            "interview_complete": complete,
+            "spec_compiled": False,
+            "pending_user_feedback": "",
+            "pending_assistant_message": assistant,
+            "publish_requested": False,
+            "stay_on_interrupt": False,
+            "messages": [{"role": "assistant", "content": assistant, "node": "phase0"}],
+        }
     
     # If spec is already comprehensive, use original classification logic
     spec_comprehensive = _spec_looks_structured(business_spec)
@@ -333,6 +376,7 @@ def phase0_classify_node(state: DesignGraphState) -> dict[str, Any]:
                 f"{PRINCIPAL_ARCHITECT_DIGEST}\n\n"
                 f"{INTERVIEW_TECHNIQUE_DIGEST}\n\n"
                 f"{JSON_OUTPUT_DIGEST}\n\n"
+                f"{USER_MESSAGE_FIRST_RULES if pending else ''}\n"
                 "Task: classify LLD vs HLD from the spec on THIS turn if possible.\n"
                 "HLD if the idea is a product/platform spanning network, storage, CDN, "
                 "multi-user scale, or 'like YouTube/Uber/SaaS'. LLD if it is a library, CLI, "
@@ -540,7 +584,7 @@ def phase0_wait_node(state: DesignGraphState) -> dict[str, Any]:
     if user_text:
         msgs.append({"role": "user", "content": user_text, "node": "phase0"})
 
-    if action == "approve" and (ready or advance_now) and track in {"lld", "hld"}:
+    if action == "approve" and track in {"lld", "hld"}:
         enter_msg = (
             f"Wrapping up discovery and moving on. Starting **{track.upper()}** track."
             if advance_now

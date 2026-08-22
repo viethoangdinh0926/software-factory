@@ -15,6 +15,8 @@ of the design tree, resolving dependencies between decisions one-by-one.
 ## Rules
 
 1. Ask **one question at a time**. Wait for the answer before continuing.
+   When they reply, **address their concerns and comments first**. Never answer
+   with only the next prepared question.
 2. Prefer foundational decisions before dependent ones (users → jobs → scope → constraints → non-goals).
 3. With each question, offer a **recommended answer** labeled `(Recommended)` and 2–4 concrete choices when useful.
 4. Challenge vague language ("users", "scalable", "simple") until it becomes precise.

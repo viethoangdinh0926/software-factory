@@ -7,7 +7,12 @@ from langgraph.types import interrupt
 from architect_agent.graph.nodes.common import answer_before_approve, approve_label
 from architect_agent.graph.state import DesignGraphState
 from architect_agent.market_research import generate_market_evaluation_report
-from architect_agent.query_intent import is_informational_query, promote_chat_to_approve, with_next_prompt
+from architect_agent.query_intent import (
+    is_informational_query,
+    is_revision_request,
+    promote_chat_to_approve,
+    with_next_prompt,
+)
 
 
 def market_research_node(state: DesignGraphState) -> dict[str, Any]:
@@ -115,7 +120,9 @@ def market_wait_node(state: DesignGraphState) -> dict[str, Any]:
             "messages": msgs,
         }
 
-    if action == "chat" and user_text and is_informational_query(user_text):
+    if action == "chat" and user_text and (
+        is_informational_query(user_text) or is_revision_request(user_text)
+    ):
         return answer_before_approve(
             state,
             user_text,

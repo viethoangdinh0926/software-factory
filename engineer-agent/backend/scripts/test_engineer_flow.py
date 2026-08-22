@@ -131,7 +131,7 @@ assert "thumbnail_url" in (hit.get("offered_api") or "")
 assert NEXT_PROMPT_HEADER in (ident.get("messages") or [{}])[-1].get("content", "")
 
 print("approve identity plan…", flush=True)
-s = store.approve(SESSION, service_id=IDENTITY)
+s = store.chat(SESSION, "Approve", service_id=IDENTITY)
 ident = s.find(IDENTITY)
 assert ident is not None
 assert ident["status"] == "executing"
