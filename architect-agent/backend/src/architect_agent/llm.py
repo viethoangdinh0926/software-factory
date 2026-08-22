@@ -74,8 +74,8 @@ class StubChatModel(BaseChatModel):
             payload = {
                 **_stub_phase0(blob),
                 "assistant_message": (
-                    f"I applied your comments ({feedback[:180] or 'noted'}). "
-                    "The spec is updated. Approve to start the classified track, or keep editing."
+                    "The spec is updated from your comments. "
+                    "Approve to start the classified track, or keep editing."
                 ),
             }
         elif "phase 0 classifier" in lower or "classify the design scope" in lower:
@@ -231,10 +231,10 @@ def _stub_qa(blob: str) -> str:
             "I can add it to this step's artifact if you want it locked in."
         )
     if "worried" in ask or "concern" in ask or "compliance" in ask:
-        snippet = ask.strip().splitlines()[0][:220]
         return (
-            f"I hear that concern: {snippet} "
-            "Here is how the current artifacts speak to it, and what I would change if we revise."
+            "Compliance and similar worries belong in the market write-up and the spec "
+            "invariants. Here is how the current artifacts speak to that, and what I "
+            "would change if we revise."
         )
     if "grade" in ask:
         return "The market evaluation grade for this design version is **B**."
@@ -276,11 +276,7 @@ def _stub_phase0(blob: str) -> dict[str, Any]:
     else:
         track = "lld"
     feedback = _latest_feedback(blob)
-    addressed = (
-        f" I addressed your comment: {feedback[:160]}."
-        if feedback
-        else ""
-    )
+    addressed = " I addressed your comment in the spec." if feedback else ""
     return {
         "design_track": track,
         "ready_to_advance": True,
@@ -326,7 +322,6 @@ def _stub_phase0_interview_turn(blob: str) -> dict[str, Any]:
         "current_question_index": idx,
         "interview_complete": idx >= 5,
         "assistant_message": (
-            f"I heard you{': ' + feedback[:200] if feedback else ''}. "
             "I folded that into the living spec (including any GDPR, residency, or "
             "security concerns). "
             + (
@@ -359,11 +354,7 @@ def _stub_lld(blob: str) -> dict[str, Any]:
         "ready_to_advance": True,
         "design_ready_to_approve": step >= 3,
         "assistant_message": (
-            (
-                f"Addressed your comment: {feedback[:180]}. "
-                if feedback
-                else ""
-            )
+            ("I applied your comments to this step. " if feedback else "")
             + f"LLD step {step} draft ready. "
             + (
                 "Approve to run market evaluation and hand off."
@@ -458,6 +449,11 @@ def _stub_hld(blob: str) -> dict[str, Any]:
             "- CAP: prefer consistency on ownership/mutations; AP on view counters.\n"
             "- Pattern: API gateway + bounded-context services + async Kafka events.\n"
             "- Storage: Postgres for metadata (CP), object storage for media, Redis for hot reads.\n"
+            + (
+                "- Gateway rate limiting on writes to protect origin and auth.\n"
+                if "rate limit" in feedback.lower()
+                else ""
+            )
         ),
         "scale_estimates": (
             "### Capacity plan\n"
@@ -511,9 +507,11 @@ def _stub_hld(blob: str) -> dict[str, Any]:
         "design_ready_to_approve": step >= 6,
         "assistant_message": (
             (
-                f"Addressed your comment: {feedback[:180]}. "
-                if feedback
-                else ""
+                "Gateway rate limiting is now part of this step: writes are capped at the "
+                "edge so origin and auth are not flooded. A per-route token bucket on the "
+                "API gateway was chosen over service-local limiters to keep one policy. "
+                if "rate limit" in feedback.lower()
+                else ("I applied your comments to this step. " if feedback else "")
             )
             + f"HLD step {step} draft ready. "
             + (

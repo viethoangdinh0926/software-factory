@@ -20,6 +20,7 @@ from architect_agent.query_intent import (
     format_agreed_endpoints,
     is_revision_request,
     wants_endpoint_list,
+    without_user_echo,
     with_resolution_close,
 )
 
@@ -314,31 +315,25 @@ def assistant_message_is_thin(text: str) -> bool:
     return False
 
 
-def _artifact_highlights(text: str, *, max_items: int = 6) -> list[str]:
-    items: list[str] = []
-    for raw in (text or "").splitlines():
-        line = raw.strip()
-        if not line:
-            continue
-        if line.startswith("#"):
-            title = line.lstrip("#").strip()
-            if title:
-                items.append(title)
-        elif line.startswith(("-", "*")):
-            items.append(line.lstrip("-* ").strip()[:180])
-        elif re.match(r"^\d+\.\s+", line):
-            items.append(re.sub(r"^\d+\.\s+", "", line)[:180])
-        elif line.startswith("|") and "---" not in line and not re.match(r"^\|\s*[-:]+", line):
-            cells = [c.strip() for c in line.strip("|").split("|") if c.strip()]
-            if cells:
-                items.append(" — ".join(cells[:3])[:180])
-        if len(items) >= max_items:
-            break
-    if not items:
-        compact = re.sub(r"\s+", " ", (text or "").strip())
-        if compact:
-            items.append(compact[:220])
-    return items[:max_items]
+def _primary_artifact_body(artifacts: dict[str, str], primary_field: str) -> str:
+    """Full step artifact for chat — never a mid-word or mid-markup clip."""
+    body = (artifacts.get(primary_field) or "").strip()
+    if body:
+        return body
+    for key in (
+        "scale_estimates",
+        "api_contracts",
+        "communication_schemes",
+        "fmea_notes",
+        "design_justification",
+        "business_spec",
+        "tradeoff_ledger",
+        "design_diagram",
+    ):
+        body = (artifacts.get(key) or "").strip()
+        if body:
+            return body
+    return "(artifact captured on this step)"
 
 
 def synthesize_step_briefing(
@@ -350,27 +345,10 @@ def synthesize_step_briefing(
     primary_field: str,
     pending: str = "",
 ) -> str:
-    """Explain what this LLD/HLD step actually produced, from the artifacts."""
+    """Explain what this LLD/HLD step produced, using the full step artifact."""
+    del pending
     label = track.upper()
-    primary = artifacts.get(primary_field) or ""
-    highlights = _artifact_highlights(primary)
-    if not highlights:
-        for key in (
-            "scale_estimates",
-            "api_contracts",
-            "communication_schemes",
-            "fmea_notes",
-            "design_justification",
-            "business_spec",
-            "tradeoff_ledger",
-            "design_diagram",
-        ):
-            if key == primary_field:
-                continue
-            highlights = _artifact_highlights(artifacts.get(key) or "", max_items=4)
-            if highlights:
-                break
-    bullets = "\n".join(f"- {item}" for item in highlights) or "- (artifact captured on this step)"
+    body = _primary_artifact_body(artifacts, primary_field)
     extra = ""
     diagram = artifacts.get("design_diagram") or ""
     if track == "lld" and step >= 2 and diagram.strip():
@@ -380,17 +358,9 @@ def synthesize_step_briefing(
         nodes = len(set(re.findall(r"\b([A-Za-z][\w]*)\s*(?:\[|\(|\{)", diagram)))
         extra = f"\n\nThe system diagram now has about **{nodes or 'several'}** named nodes (clients, gateway, services, stores)."
     nxt = _NEXT_STEP_HINT.get((track, step), "Approve to continue, or tell me what to change.")
-    heard = ""
-    pending_text = (pending or "").strip()
-    if (
-        pending_text
-        and not pending_text.startswith("(none")
-        and is_revision_request(pending_text)
-    ):
-        heard = f"I applied your latest comments ({pending_text[:180]}).\n\n"
     return (
-        f"{heard}**{label} step {step} — {title}** is complete enough to review.\n\n"
-        f"Here is what this step locked in:\n\n{bullets}{extra}\n\n"
+        f"**{label} step {step} — {title}** is complete enough to review.\n\n"
+        f"Here is what this step locked in:\n\n{body}{extra}\n\n"
         f"{nxt}"
     )
 
@@ -406,7 +376,7 @@ def ensure_step_briefing(
     pending: str = "",
 ) -> str:
     """Replace empty/status-line chat with a briefing of what the step completed."""
-    raw = (message or "").strip()
+    raw = without_user_echo((message or "").strip(), pending)
     if not assistant_message_is_thin(raw):
         return raw
     return synthesize_step_briefing(

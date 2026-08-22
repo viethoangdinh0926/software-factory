@@ -151,13 +151,6 @@ def market_wait_node(state: DesignGraphState) -> dict[str, Any]:
         "Continuing after market evaluation: design package will be handed off, "
         f"then resume **{str(track).upper()}** at step {next_step}."
     )
-    if user_text:
-        proceed_msg = (
-            f"Noted: {user_text[:240]}"
-            + ("…" if len(user_text) > 240 else "")
-            + " "
-            + proceed_msg
-        )
     msgs.append({"role": "assistant", "content": proceed_msg, "node": "market_research"})
 
     return {

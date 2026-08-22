@@ -140,9 +140,12 @@ USER_MESSAGE_FIRST_RULES = (
     "3. If they asked to change the spec or design, apply it this turn.\n"
     "4. Only AFTER addressing them may you ask at most ONE follow-up, and only if "
     "it is still needed.\n"
-    "5. End assistant_message with:\n"
+    "5. Never quote, restate, or prefix with the user's own words. Do not write "
+    "'I heard you: …', 'Noted: …', 'I applied your comments (…)', or paste their "
+    "message back. Address the substance only.\n"
+    "6. End assistant_message with:\n"
     f"{UPDATES_HEADER}\n"
-    "- one bullet per change, tied to their comment\n"
+    "- one bullet per change, in your own words\n"
     "  (or a single bullet: None — with a one-line reason if the artifact is unchanged).\n"
 )
 
@@ -345,6 +348,34 @@ def format_next_prompt(
     return "\n".join(lines)
 
 
+_ECHO_PREFIX_RE = re.compile(
+    r"(?is)^\s*(?:"
+    r"I applied your (?:latest )?comments|"
+    r"I heard you|"
+    r"I addressed your comment|"
+    r"Addressed your comment|"
+    r"Noted"
+    r")\s*[:\(]\s*.{0,240}?(?:\)[.!]?\s*|[.!]+\s+)"
+)
+
+
+def without_user_echo(message: str, user_text: str = "") -> str:
+    """Drop verbatim restatements of the user's last message from an assistant reply."""
+    body = (message or "").strip()
+    if not body:
+        return body
+    cleaned = _ECHO_PREFIX_RE.sub("", body).strip()
+    quoted = re.sub(r"\s+", " ", (user_text or "").strip())
+    if quoted and len(quoted) >= 8:
+        for wrap in (f"({quoted})", f'"{quoted}"', f"'{quoted}'"):
+            cleaned = cleaned.replace(wrap, "")
+        if quoted in cleaned:
+            cleaned = cleaned.replace(quoted, "")
+        cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+        cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+    return cleaned or body
+
+
 def with_next_prompt(
     message: str,
     *,
@@ -353,7 +384,7 @@ def with_next_prompt(
     mode: str = "step",
 ) -> str:
     """Append a next-action prompt unless the message already has one or is a session-end note."""
-    body = (message or "").strip()
+    body = without_user_echo((message or "").strip())
     if not body or _DONE_MESSAGE_RE.search(body):
         return body
     if NEXT_PROMPT_HEADER.lower() in body.lower():

@@ -187,7 +187,7 @@ def recover_api_type_from_prose(text: str) -> dict[str, Any] | None:
         "recommended_api_type": api_type,
         "recommendation": rec,
         "rationale": cleaned[:1200],
-        "assistant_message": cleaned[:2000],
+        "assistant_message": cleaned,
     }
 
 
@@ -197,7 +197,7 @@ def recover_extract_from_prose(text: str) -> dict[str, Any] | None:
     logger.info("Recovered empty extract payload from non-JSON LLM reply")
     return {
         "services": [],
-        "assistant_message": (cleaned[:800] if cleaned else "") or "Extracted core microservices.",
+        "assistant_message": cleaned or "Extracted core microservices.",
     }
 
 
@@ -217,7 +217,7 @@ def recover_classify_from_prose(text: str) -> dict[str, Any] | None:
         "topology": topology,
         "certain": True,
         "rationale": cleaned[:800],
-        "assistant_message": cleaned[:800] or f"Classified topology as **{topology}**.",
+        "assistant_message": cleaned or f"Classified topology as **{topology}**.",
     }
 
 
@@ -228,7 +228,7 @@ def recover_markdown_field_from_prose(text: str, field: str) -> dict[str, Any] |
     if cleaned.lstrip().startswith("{") or cleaned.lstrip().startswith("```json"):
         return None
     logger.info("Recovered %s markdown from non-JSON LLM reply", field)
-    return {field: cleaned, "assistant_message": cleaned[:800]}
+    return {field: cleaned, "assistant_message": cleaned}
 
 
 def _candidate_blobs(cleaned: str) -> list[str]:

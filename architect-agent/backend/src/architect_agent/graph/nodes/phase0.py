@@ -22,6 +22,7 @@ from architect_agent.query_intent import (
     is_revision_request,
     is_step_approval_message,
     promote_chat_to_approve,
+    without_user_echo,
     with_next_prompt,
     with_resolution_close,
 )
@@ -108,7 +109,9 @@ def phase0_classify_node(state: DesignGraphState) -> dict[str, Any]:
                 new_track = "unset"
             ready = bool(spec_update_result.get("ready_to_advance")) and new_track in {"lld", "hld"}
             spec = spec_update_result.get("updated_business_spec") or business_spec
-            assistant = str(spec_update_result.get("assistant_message") or "")
+            assistant = without_user_echo(
+                str(spec_update_result.get("assistant_message") or ""), pending
+            )
             if pending:
                 assistant = with_resolution_close(
                     assistant or "Updated the specification from your comments.",
@@ -332,7 +335,7 @@ def phase0_classify_node(state: DesignGraphState) -> dict[str, Any]:
             next_index = current_question_index + 1
         next_index = max(0, min(next_index, len(questions)))
         complete = bool(turn.get("interview_complete")) or next_index >= len(questions)
-        assistant = str(turn.get("assistant_message") or "").strip()
+        assistant = without_user_echo(str(turn.get("assistant_message") or "").strip(), pending)
         if not assistant:
             if complete:
                 assistant = (
@@ -341,8 +344,7 @@ def phase0_classify_node(state: DesignGraphState) -> dict[str, Any]:
             else:
                 nxt = questions[next_index] if next_index < len(questions) else {}
                 assistant = (
-                    f"I heard you: {pending[:240]}. "
-                    f"{nxt.get('text') or 'What else should we lock for v1?'}"
+                    nxt.get("text") or "What else should we lock for v1?"
                 )
         assistant = with_resolution_close(assistant, changed=spec != business_spec or bool(pending))
         return {

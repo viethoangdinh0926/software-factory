@@ -302,6 +302,7 @@ def pick_assistant_message(
     preview_limit: int = 1600,
 ) -> str:
     """Never return empty: models often fill the artifact and leave assistant_message blank."""
+    del preview_limit
     data = payload or {}
     for key in ("assistant_message", "rationale", "summary", "message"):
         text = _as_visible_text(data.get(key))
@@ -309,14 +310,8 @@ def pick_assistant_message(
             return text
     for key in artifact_keys:
         text = _as_visible_text(data.get(key))
-        if not text:
-            continue
-        if len(text) <= preview_limit:
+        if text:
             return text
-        clipped = text[:preview_limit]
-        if "\n" in clipped:
-            clipped = clipped.rsplit("\n", 1)[0]
-        return clipped.rstrip() + "\n\n…"
     return (
         fallback.strip()
         or "Updated this service. Reply if you want changes, or approve to continue."

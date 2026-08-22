@@ -129,11 +129,12 @@ FEEDBACK_RESOLUTION_RULES = (
     "The user commented after you last asked them to Approve. You MUST:\n"
     "1. Address every query, concern, and comment in assistant_message (do not skip).\n"
     "2. Apply requested changes to this step's primary artifact; keep prior content otherwise.\n"
-    "3. End assistant_message with:\n"
+    "3. Never quote or restate the user's message. No 'I heard you: …' or 'Noted: …'.\n"
+    "4. End assistant_message with:\n"
     f"{UPDATES_HEADER}\n"
-    "- one bullet per change, tied to their comment\n"
+    "- one bullet per change, in your own words\n"
     "  (or a single bullet: None — with a one-line reason if the artifact is unchanged).\n"
-    "4. Then invite Approve for THIS updated version, not the previous one. "
+    "5. Then invite Approve for THIS updated version, not the previous one. "
     "A **What you can do next** prompt is appended by the system."
 )
 

@@ -27,6 +27,7 @@ from architect_agent.query_intent import (
     is_step_approval_message,
     promote_chat_to_approve,
     with_next_prompt,
+    without_user_echo,
 )
 from architect_agent.json_util import parse_llm_json_object
 from architect_agent.graph.nodes.common import assistant_message_is_thin, ensure_step_briefing
@@ -61,6 +62,13 @@ assert not is_step_approval_message("Why should I approve REST?")
 assert not is_step_approval_message("Looks good, add a health check")
 assert not is_step_approval_message("next step, add a health check")
 assert promote_chat_to_approve("chat", "Approve", can_approve=False) == "approve"
+echoed = without_user_echo(
+    "I applied your latest comments (We should add rate limiting).\n\nHLD step 1 is ready.",
+    "We should add rate limiting",
+)
+assert "We should add rate limiting" not in echoed
+assert "HLD step 1 is ready." in echoed
+assert "I heard you:" not in without_user_echo("I heard you: GDPR please.\nNext question?", "GDPR please")
 assert NEXT_PROMPT_HEADER in with_next_prompt("Here is the proposal.")
 assert with_next_prompt(with_next_prompt("Here is the proposal.")).count(NEXT_PROMPT_HEADER) == 1
 assert "Session marked done." == with_next_prompt("Session marked done.")
@@ -72,15 +80,27 @@ assert not assistant_message_is_thin(
     "writes; a single-region monolith was rejected for tenant isolation. "
     "Postgres stays the system of record; Redis is a read-through cache only."
 )
+long_rule = (
+    "The application must use a dependency management system (e.g., package manager) "
+    "that supports cross-platform compilation (e.g., Go modules, npm, or standard library vendors)."
+)
 brief = ensure_step_briefing(
     "LLD step 1 update.",
     track="lld",
     step=1,
     title="Information gathering",
-    artifacts={"business_spec": "## Invariants\n- No silent stock loss\n- Quotes are deterministic\n"},
+    artifacts={
+        "business_spec": (
+            "## Invariants\n- No silent stock loss\n- Quotes are deterministic\n"
+            f"**Dependency Management:** {long_rule}\n"
+        )
+    },
     primary_field="business_spec",
 )
 assert "No silent stock loss" in brief
+assert long_rule in brief
+assert "**Dependency Management:**" in brief
+assert "standar\n" not in brief
 assert "LLD step 1 update." not in brief
 
 latex_json = r'{"assistant_message": "DAU $\text{assumed}$ is $\approx$ 5k"}'
@@ -236,7 +256,8 @@ s = store.chat(s.session_id, "We should add rate limiting at the gateway.")
 # After market continue, s is at hld step 4
 assert s.phase == "hld", s.phase
 hld_last = s.messages[-1]["content"]
-assert "rate limit" in hld_last.lower() or "Addressed your comment" in hld_last, hld_last[:400]
+assert "rate limit" in hld_last.lower(), hld_last[:400]
+assert "We should add rate limiting at the gateway." not in hld_last, hld_last[:400]
 assert "Updates to this proposal" in hld_last, hld_last[:400]
 
 print("legacy map…", flush=True)
