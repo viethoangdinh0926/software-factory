@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { Link, useParams } from "react-router-dom";
 import mermaid from "mermaid";
+import { warmupMermaid } from "./mermaidRender";
 import {
   approve,
   chat,
@@ -13,6 +14,15 @@ import {
   trackStepLabel,
   type DesignSession,
 } from "./api";
+import {
+  catalogCoversDiagram,
+  chatDescribesComponents,
+  diagramIsDue,
+  extractSpecSection,
+  fallbackComponentCatalog,
+  fallbackDesignDiagram,
+  stripSpecSection,
+} from "./fallbackDiagram";
 import { MarkdownView } from "./MarkdownView";
 import { MermaidDiagram } from "./MermaidDiagram";
 
@@ -51,6 +61,7 @@ mermaid.initialize({
     fontWeight: "700",
   },
 });
+void warmupMermaid();
 
 export function SessionPage() {
   const { sessionId = "" } = useParams();
@@ -81,8 +92,30 @@ export function SessionPage() {
   }, [session?.messages, pendingUserText, chatBusy]);
 
   const inMarket = session?.phase === "market_research";
-  const showDiagram = Boolean(session?.design_diagram?.trim());
-  const showJustification = Boolean(session?.design_justification?.trim());
+  const diagramSource = session
+    ? session.design_diagram?.trim() ||
+      (diagramIsDue(session.phase, session.design_track, session.design_step)
+        ? fallbackDesignDiagram(session.business_spec, session.design_track)
+        : "")
+    : "";
+  const showDiagram = Boolean(diagramSource);
+  const componentCatalog = session && diagramSource
+    ? extractSpecSection(session.business_spec, "Diagram components")
+      ? `## Diagram components\n\n${extractSpecSection(session.business_spec, "Diagram components")}`
+      : catalogCoversDiagram(session.design_justification, diagramSource)
+        ? session.design_justification
+        : fallbackComponentCatalog(diagramSource, session.business_spec)
+    : "";
+  const showComponents = Boolean(componentCatalog.trim());
+  const specForPanel = session
+    ? stripSpecSection(session.business_spec, "Diagram components") || session.business_spec
+    : "";
+  const showComponentWalkthrough =
+    Boolean(session && showComponents && !chatDescribesComponents(session.messages, diagramSource));
+  const showJustification = Boolean(
+    session?.design_justification?.trim() &&
+      !(showComponents && catalogCoversDiagram(session.design_justification, diagramSource)),
+  );
   const trackChip = session ? trackStepLabel(session) : null;
 
   const nodeTitle = useMemo(() => {
@@ -384,6 +417,15 @@ export function SessionPage() {
                 </div>
               </div>
             ) : null}
+            {showComponentWalkthrough ? (
+              <div className="bubble assistant">
+                <span className="who">Architect · diagram</span>
+                <MarkdownView
+                  content={`Here is what each box on the **system design diagram** is responsible for.\n\n${componentCatalog}`}
+                  className="bubble-md"
+                />
+              </div>
+            ) : null}
             <div ref={messagesEndRef} />
           </div>
           {!session.finalized ? (
@@ -413,12 +455,30 @@ export function SessionPage() {
         </section>
 
         <section className="panel view-panel">
+          {showDiagram ? (
+            <div className="artifact diagram-artifact">
+              <div className="panel-head">
+                <h2>System design diagram</h2>
+                <span className="panel-kicker">Diagram</span>
+              </div>
+              <MermaidDiagram source={diagramSource} />
+            </div>
+          ) : null}
+          {showComponents ? (
+            <div className="artifact">
+              <div className="panel-head">
+                <h2>Diagram components</h2>
+                <span className="panel-kicker">Spec</span>
+              </div>
+              <MarkdownView content={componentCatalog} className="doc" />
+            </div>
+          ) : null}
           <div className="artifact">
             <div className="panel-head">
               <h2>Living business specification</h2>
               <span className="panel-kicker">Spec</span>
             </div>
-            <MarkdownView content={session.business_spec} className="doc" />
+            <MarkdownView content={specForPanel} className="doc" />
           </div>
           {showLedger ? (
             <div className="artifact">
@@ -488,16 +548,6 @@ export function SessionPage() {
             </div>
           ) : null}
         </section>
-
-        {showDiagram ? (
-          <section className="panel diagram-panel">
-            <div className="panel-head">
-              <h2>System design diagram</h2>
-              <span className="panel-kicker">Diagram</span>
-            </div>
-            <MermaidDiagram source={session.design_diagram} />
-          </section>
-        ) : null}
       </main>
     </div>
   );

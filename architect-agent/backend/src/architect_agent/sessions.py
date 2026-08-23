@@ -12,6 +12,15 @@ from langgraph.types import Command
 
 from architect_agent.a2a.orchestrator import HandoffResult, retry_design_package, send_design_package
 from architect_agent.config import get_settings
+from architect_agent.design_diagram import (
+    catalog_covers_diagram,
+    chat_describes_components,
+    diagram_is_due,
+    ensure_component_catalog,
+    ensure_design_diagram,
+    upsert_spec_section,
+    with_component_walkthrough,
+)
 from architect_agent.design_progress import NO_UPDATES_TO_DELIVER, package_fingerprint
 from architect_agent.graph import build_graph, initial_state
 from architect_agent.graph.nodes.common import approve_label, design_step_title
@@ -225,6 +234,7 @@ class SessionStore:
             )
 
         self._ensure_graph_resumable(session)
+        self._fill_missing_diagram(session)
         return session
 
     def _config(self, session_id: str) -> dict[str, Any]:
@@ -470,7 +480,61 @@ class SessionStore:
                 session.messages.append({"role": "assistant", "content": msg, "node": node})
 
         session.finalized = session.phase == "done"
+        self._fill_missing_diagram(session)
         self._persist(session)
+
+    def _fill_missing_diagram(self, session: DesignSession) -> None:
+        """Attach a sketch and component catalog once the track is past the diagram step."""
+        if not diagram_is_due(session.phase, session.design_track, session.design_step):
+            return
+        track = session.design_track if session.design_track in {"lld", "hld"} else "lld"
+        changed = False
+        if not (session.design_diagram or "").strip():
+            session.design_diagram = ensure_design_diagram(
+                session.business_spec,
+                "",
+                track=track,
+                allow_llm=False,
+            )
+            changed = bool(session.design_diagram.strip())
+        diagram = (session.design_diagram or "").strip()
+        if not diagram:
+            if changed:
+                self._persist(session)
+            return
+        catalog = ensure_component_catalog(
+            diagram,
+            session.business_spec,
+            session.design_justification,
+            allow_llm=False,
+        )
+        if catalog and not catalog_covers_diagram(session.design_justification, diagram):
+            session.design_justification = catalog
+            changed = True
+        if catalog:
+            next_spec = upsert_spec_section(
+                session.business_spec, "Diagram components", catalog
+            )
+            if next_spec != session.business_spec:
+                session.business_spec = next_spec
+                changed = True
+        if catalog and not chat_describes_components(session.messages, diagram):
+            session.messages.append(
+                {
+                    "role": "assistant",
+                    "content": with_component_walkthrough("", catalog),
+                    "node": session.phase if session.phase in {"lld", "hld", "market_research"} else "lld",
+                }
+            )
+            changed = True
+        if changed:
+            logger.info(
+                "Filled missing design diagram artifacts for session %s (%s step %s)",
+                session.session_id,
+                track,
+                session.design_step,
+            )
+            self._persist(session)
 
     def start(self, markdown: str) -> DesignSession:
         logger.info("SessionStore.start() called with markdown length: %d", len(markdown))

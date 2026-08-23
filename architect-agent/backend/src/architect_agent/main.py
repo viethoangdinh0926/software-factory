@@ -74,11 +74,17 @@ def create_app() -> FastAPI:
 
     @app.get("/", include_in_schema=False)
     async def spa_root() -> FileResponse:
-        return FileResponse(_spa_index(static_dir))
+        return FileResponse(
+            _spa_index(static_dir),
+            headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+        )
 
     @app.get("/sessions/{session_id}", include_in_schema=False)
     async def spa_session(session_id: str) -> FileResponse:
-        return FileResponse(_spa_index(static_dir))
+        return FileResponse(
+            _spa_index(static_dir),
+            headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+        )
 
     # Fallback for any other non-API client routes (Vite hashed files at root, etc.)
     @app.get("/{full_path:path}", include_in_schema=False)
@@ -89,7 +95,10 @@ def create_app() -> FastAPI:
         # Do not swallow API-ish paths that simply 404
         if full_path.startswith(("design", "sessions/", "docs", "openapi", "healthz", ".well-known")):
             raise HTTPException(status_code=404, detail="Not found")
-        return FileResponse(_spa_index(static_dir))
+        return FileResponse(
+            _spa_index(static_dir),
+            headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+        )
 
     app.state.settings = settings
     return app

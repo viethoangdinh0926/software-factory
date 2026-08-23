@@ -196,6 +196,7 @@ _SPEC_SECTIONS = (
     "Critical invariants",
     "Success criteria",
     "Assumptions & risks",
+    "Diagram components",
 )
 
 _SKIP_DIGEST_PENDING = {

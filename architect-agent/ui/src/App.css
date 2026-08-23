@@ -11,7 +11,6 @@
 }
 
 .flow-guide {
-  min-height: auto;
   margin-bottom: 1.25rem;
   animation: rise-in 0.6s ease-out 0.06s both;
 }
@@ -432,26 +431,16 @@ button.approve-btn:disabled {
   flex-shrink: 0;
 }
 
-.session-grid .diagram-panel {
-  grid-column: 1 / -1;
-  min-height: 0;
-  max-height: none;
-  height: auto;
-  overflow: visible;
-}
-
-.session-grid .diagram-panel .diagram,
-.session-grid .diagram-panel .diagram-interactive {
+.session-grid .view-panel .diagram-artifact .diagram,
+.session-grid .view-panel .diagram-artifact .diagram-interactive {
   flex: 0 0 auto;
   min-height: 0;
 }
 
-.session-grid .diagram-panel .diagram-canvas {
-  /* Absolute SVG does not contribute height; size the viewport explicitly and
-     do not flex-shrink inside a short parent. */
+.session-grid .view-panel .diagram-artifact .diagram-canvas {
   flex: 0 0 auto;
-  height: min(78vh, 860px);
-  min-height: 560px;
+  height: min(48vh, 520px);
+  min-height: 320px;
   max-height: none;
 }
 
@@ -464,10 +453,6 @@ button.approve-btn:disabled {
   .session-grid .view-panel {
     height: auto;
     max-height: min(70vh, 640px);
-  }
-
-  .session-grid .diagram-panel {
-    grid-column: 1;
   }
 
   .top {
@@ -505,8 +490,14 @@ button.approve-btn:disabled {
   opacity: 0.8;
 }
 
+.panel.flow-guide,
+.panel.start-panel {
+  min-height: 0;
+  height: auto;
+  flex: 0 0 auto;
+}
+
 .start-panel {
-  min-height: auto;
   animation: rise-in 0.65s ease-out 0.12s both;
 }
 
@@ -656,6 +647,10 @@ textarea:disabled {
 
 textarea::placeholder {
   color: color-mix(in srgb, var(--muted) 80%, transparent);
+}
+
+.start-panel textarea:focus::placeholder {
+  color: transparent;
 }
 
 .finalize-note {

@@ -33,6 +33,17 @@ from architect_agent.query_intent import (
 )
 from architect_agent.json_util import parse_llm_json_object
 from architect_agent.graph.nodes.common import assistant_message_is_thin, ensure_step_briefing
+from architect_agent.design_diagram import (
+    catalog_covers_diagram,
+    diagram_is_due,
+    diagram_node_count,
+    ensure_component_catalog,
+    ensure_design_diagram,
+    extract_spec_section,
+    upsert_spec_section,
+    with_component_walkthrough,
+)
+from architect_agent.graph.state import _keep_nonempty_str
 from architect_agent.design_progress import classify_rewind_stage, design_position, package_fingerprint
 from architect_agent.scope import recommend_design_track, resolve_design_track, wants_standalone
 from architect_agent.sessions import SessionStore, _legacy_map
@@ -605,6 +616,33 @@ round_edit = s.messages[-1]["content"]
 assert "We should add rate limiting at the gateway." not in round_edit, round_edit[:400]
 assert "rate limit" in round_edit.lower() or "updated" in round_edit.lower(), round_edit[:400]
 assert "Updates to this proposal" not in round_edit, round_edit[:400]
+
+print("diagram keep + fallback…", flush=True)
+assert _keep_nonempty_str("flowchart LR\n  A[A] --> B[B]", "") == "flowchart LR\n  A[A] --> B[B]"
+assert _keep_nonempty_str("old", "flowchart LR\n  A[A]") == "flowchart LR\n  A[A]"
+assert diagram_is_due("lld", "lld", 2)
+assert diagram_is_due("market_research", "lld", 3)
+assert not diagram_is_due("phase0", "unset", 0)
+sketch = ensure_design_diagram(
+    "## Persistence\nSQLite collections and request history. Tokens stored locally.",
+    "",
+    track="lld",
+    allow_llm=False,
+)
+assert diagram_node_count(sketch) >= 6, sketch
+assert "Sqlite" in sketch and "Http" in sketch
+assert "Creds" in sketch
+catalog = ensure_component_catalog(sketch, "SQLite collections. Tokens stored locally.", allow_llm=False)
+assert "## Diagram components" in catalog
+assert "### Desktop UI" in catalog
+assert "### Application Shell" in catalog
+assert catalog_covers_diagram(catalog, sketch)
+spec_with = upsert_spec_section("# Spec\n\n## Goals\n- ship", "Diagram components", catalog)
+assert extract_spec_section(spec_with, "Diagram components")
+assert spec_with.count("## Diagram components") == 1
+walked = with_component_walkthrough("LLD step 2 is ready.", catalog)
+assert "Desktop UI" in walked and "Diagram components" in walked
+assert with_component_walkthrough(walked, catalog) == walked
 
 print("legacy map…", flush=True)
 mapped = _legacy_map({"phase": "spec_interview"})

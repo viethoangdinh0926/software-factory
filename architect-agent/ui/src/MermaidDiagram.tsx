@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import mermaid from "mermaid";
+import { diagramLoadErrorMessage, renderMermaid } from "./mermaidRender";
 import { sanitizeMermaidSource } from "./sanitizeMermaid";
 
 type Props = { source: string };
@@ -99,7 +99,7 @@ export function MermaidDiagram({ source }: Props) {
       }
 
       try {
-        const { svg } = await mermaid.render(`mmd-${reactId}-${Date.now()}`, sanitized);
+        const { svg } = await renderMermaid(`mmd-${reactId}-${Date.now()}`, sanitized);
         if (cancelled || !hostRef.current) return;
 
         hostRef.current.innerHTML = svg;
@@ -155,7 +155,7 @@ export function MermaidDiagram({ source }: Props) {
           nodesRef.current = new Map();
           // Clean up hit paths
           hostRef.current.querySelectorAll<SVGPathElement>("[data-hit-path='true']").forEach(p => p.remove());
-          setError(err instanceof Error ? err.message : String(err));
+          setError(diagramLoadErrorMessage(err));
           setReady(false);
           setEmpty(false);
         }

@@ -29,6 +29,14 @@ from architect_agent.design_progress import (
     should_keep_and_patch,
     with_rewind_notice,
 )
+from architect_agent.design_diagram import (
+    catalog_covers_diagram,
+    diagram_is_concrete,
+    ensure_component_catalog,
+    ensure_design_diagram,
+    upsert_spec_section,
+    with_component_walkthrough,
+)
 from architect_agent.graph.state import DesignGraphState
 from architect_agent.json_util import coerce_diagram_text
 from architect_agent.mermaid_sanitize import sanitize_mermaid
@@ -85,7 +93,8 @@ def lld_step_node(state: DesignGraphState) -> dict[str, Any]:
             "a keep-existing-artifacts instruction is in force.\n"
             "assistant_message MUST brief what this step completed: name the rules, "
             "types, or diagram nodes you wrote, why those defaults, what you rejected, "
-            "and what it costs. Never write a status line such as "
+            "and what it costs. On step 2, walk through EVERY diagram component by name "
+            "and say what it owns. Never write a status line such as "
             "\"LLD step 1 update.\" or \"LLD step 2 update.\"\n"
             "Respond ONLY with JSON:\n"
             "{\n"
@@ -113,10 +122,17 @@ def lld_step_node(state: DesignGraphState) -> dict[str, Any]:
     )
 
     new_diagram = sanitize_mermaid(
-        coerce_diagram_text(result, fallback="" if keep_mode else diagram)
+        coerce_diagram_text(result, fallback=diagram)
     )
+    new_diagram = sanitize_mermaid(keep_or_patch(new_diagram, diagram))
+    if step >= 2 and not diagram_is_concrete(new_diagram):
+        new_diagram = ensure_design_diagram(
+            business_spec,
+            new_diagram or diagram,
+            track="lld",
+            allow_llm=True,
+        )
     if keep_mode:
-        new_diagram = sanitize_mermaid(keep_or_patch(new_diagram, diagram))
         new_just = maybe_compact_design_justification(
             keep_or_patch(str(result.get("design_justification") or ""), justification)
         )
@@ -129,8 +145,10 @@ def lld_step_node(state: DesignGraphState) -> dict[str, Any]:
         new_spec = str(result.get("updated_business_spec") or business_spec)
         new_ledger = str(result.get("tradeoff_ledger") or ledger)
     ready_advance = bool(result.get("ready_to_advance"))
+    if step == 2:
+        ready_advance = diagram_is_concrete(new_diagram)
     design_ready = bool(result.get("design_ready_to_approve")) or (
-        step >= 3 and bool(new_diagram.strip())
+        step >= 3 and diagram_is_concrete(new_diagram)
     )
     if step >= 3:
         ready_advance = design_ready
@@ -139,9 +157,20 @@ def lld_step_node(state: DesignGraphState) -> dict[str, Any]:
         if step >= 3:
             design_ready = True
             ready_advance = True
-    primary_field = {1: "business_spec", 2: "design_justification", 3: "design_justification"}.get(
+    primary_field = {1: "business_spec", 2: "design_diagram", 3: "design_justification"}.get(
         step, "business_spec"
     )
+    catalog = ""
+    if step >= 2 and diagram_is_concrete(new_diagram):
+        catalog = ensure_component_catalog(
+            new_diagram,
+            new_spec,
+            new_just,
+            allow_llm=True,
+        )
+        if not catalog_covers_diagram(new_just, new_diagram):
+            new_just = catalog
+        new_spec = upsert_spec_section(new_spec, "Diagram components", catalog)
     assistant = ensure_step_briefing(
         str(result.get("assistant_message") or ""),
         track="lld",
@@ -151,11 +180,13 @@ def lld_step_node(state: DesignGraphState) -> dict[str, Any]:
             "business_spec": new_spec,
             "tradeoff_ledger": new_ledger,
             "design_diagram": new_diagram,
-            "design_justification": new_just,
+            "design_justification": catalog or new_just,
         },
-        primary_field=primary_field if step != 2 or new_just.strip() else "design_diagram",
+        primary_field="design_justification" if step == 2 and catalog else primary_field,
         pending=pending,
     )
+    if catalog:
+        assistant = with_component_walkthrough(assistant, catalog)
     if pending:
         changed = (
             new_spec != business_spec

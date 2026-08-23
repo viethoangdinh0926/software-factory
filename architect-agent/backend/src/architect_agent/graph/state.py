@@ -40,6 +40,13 @@ def _replace_str(left: str | None, right: str | None) -> str:
     return right
 
 
+def _keep_nonempty_str(left: str | None, right: str | None) -> str:
+    """Keep the prior value when a node returns blank (LLM omitted the artifact)."""
+    if right is None or not str(right).strip():
+        return left or ""
+    return right
+
+
 def _replace_bool(left: bool | None, right: bool | None) -> bool:
     if right is None:
         return bool(left)
@@ -67,7 +74,7 @@ class DesignGraphState(TypedDict):
     ready_to_advance: bool
     design_ready_to_approve: bool
     spec_approved: bool
-    design_diagram: Annotated[str, _replace_str]
+    design_diagram: Annotated[str, _keep_nonempty_str]
     design_justification: Annotated[str, _replace_str]
     design_approved: bool
     pending_user_feedback: Annotated[str, _replace_str]

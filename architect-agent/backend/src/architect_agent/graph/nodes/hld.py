@@ -30,6 +30,14 @@ from architect_agent.design_progress import (
     should_keep_and_patch,
     with_rewind_notice,
 )
+from architect_agent.design_diagram import (
+    catalog_covers_diagram,
+    diagram_is_concrete,
+    ensure_component_catalog,
+    ensure_design_diagram,
+    upsert_spec_section,
+    with_component_walkthrough,
+)
 from architect_agent.graph.state import DesignGraphState
 from architect_agent.json_util import coerce_diagram_text
 from architect_agent.mermaid_sanitize import sanitize_mermaid
@@ -560,6 +568,13 @@ def hld_step_node(state: DesignGraphState) -> dict[str, Any]:
         diagram = sanitize_mermaid(keep_or_patch(new_diagram, prior_diagram))
     else:
         diagram = sanitize_mermaid(_prefer_diagram(new_diagram, prior_diagram, apis))
+    if step >= 4 and not diagram_is_concrete(diagram, minimum=8):
+        diagram = ensure_design_diagram(
+            business_spec,
+            diagram or prior_diagram,
+            track="hld",
+            allow_llm=True,
+        )
     justification = maybe_compact_design_justification(
         keep_or_patch(
             str(result.get("design_justification") or ""),
@@ -573,6 +588,17 @@ def hld_step_node(state: DesignGraphState) -> dict[str, Any]:
         if keep_mode
         else (result.get("updated_business_spec") or business_spec)
     )
+    catalog = ""
+    if step >= 4 and diagram_is_concrete(diagram, minimum=6):
+        catalog = ensure_component_catalog(
+            diagram,
+            str(spec_out),
+            justification,
+            allow_llm=True,
+        )
+        if not catalog_covers_diagram(justification, diagram):
+            justification = catalog
+        spec_out = upsert_spec_section(str(spec_out), "Diagram components", catalog)
 
     ready_advance = bool(result.get("ready_to_advance"))
     design_ready = bool(result.get("design_ready_to_approve"))
@@ -617,11 +643,13 @@ def hld_step_node(state: DesignGraphState) -> dict[str, Any]:
             "communication_schemes": comms,
             "fmea_notes": fmea,
             "design_diagram": diagram,
-            "design_justification": justification,
+            "design_justification": catalog or justification,
         },
-        primary_field=primary_field,
+        primary_field="design_justification" if step == 4 and catalog else primary_field,
         pending=pending,
     )
+    if catalog:
+        assistant = with_component_walkthrough(assistant, catalog)
     if pending:
         changed = (
             scale != prior_scale

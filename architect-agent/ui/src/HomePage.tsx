@@ -25,11 +25,13 @@ const FLOW_STEPS = [
   },
 ];
 
+const SPEC_PLACEHOLDER =
+  "# Business Specification\n\nDescribe the software system you want to design.";
+
 export function HomePage() {
   const navigate = useNavigate();
-  const [markdown, setMarkdown] = useState(
-    "# Business Specification\n\nDescribe the software system you want to design.\n",
-  );
+  const [markdown, setMarkdown] = useState("");
+  const [showPlaceholder, setShowPlaceholder] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -100,7 +102,19 @@ export function HomePage() {
         </ul>
       </section>
 
-      <form className="panel start-panel" onSubmit={onSubmit}>
+      <form
+        className="panel start-panel"
+        onSubmit={onSubmit}
+        onMouseDown={(e) => {
+          const target = e.target as HTMLElement;
+          if (target.closest("textarea, button, a")) return;
+          const field = e.currentTarget.querySelector("textarea");
+          if (field && document.activeElement !== field) {
+            e.preventDefault();
+            field.focus();
+          }
+        }}
+      >
         <div className="panel-head">
           <h2>Business specification</h2>
           <span className="panel-kicker">Markdown</span>
@@ -108,10 +122,15 @@ export function HomePage() {
         <textarea
           value={markdown}
           onChange={(e) => setMarkdown(e.target.value)}
+          onMouseDown={() => setShowPlaceholder(false)}
+          onFocus={() => setShowPlaceholder(false)}
+          onBlur={() => {
+            if (!markdown.trim()) setShowPlaceholder(true);
+          }}
           rows={18}
           required
           disabled={busy}
-          placeholder="# Business Specification&#10;&#10;Your idea…"
+          placeholder={showPlaceholder ? SPEC_PLACEHOLDER : ""}
         />
         {error ? <p className="error">{error}</p> : null}
         <button className="btn primary" type="submit" disabled={busy}>
