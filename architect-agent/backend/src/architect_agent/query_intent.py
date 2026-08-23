@@ -34,6 +34,10 @@ _REVISION_HINTS = (
     "update the",
     "rewrite",
     "revise",
+    "stand-alone",
+    "standalone",
+    "self-contained",
+    "self contained",
 )
 
 _ACKNOWLEDGEMENTS = {
@@ -131,9 +135,11 @@ _DONE_MESSAGE_RE = re.compile(
 
 USER_MESSAGE_FIRST_RULES = (
     "USER MESSAGE FIRST (non-negotiable):\n"
-    "The latest user message is the work of this turn. You MUST:\n"
-    "1. Address every question, concern, objection, preference, and comment in "
-    "assistant_message. Do not skip any of them.\n"
+    "The labeled Latest user message is the work of this turn. Discussion memory "
+    "and the recent transcript are context, not a reason to ignore that message. "
+    "You MUST:\n"
+    "1. Address every question, concern, objection, preference, confirmation, and "
+    "comment in assistant_message. Do not skip any of them.\n"
     "2. Do NOT reply with only the next prepared interview question or the next "
     "step script. A canned next-question with no response to what they just said "
     "is a FAILED turn.\n"
@@ -147,11 +153,18 @@ USER_MESSAGE_FIRST_RULES = (
     "5. Never quote, restate, or prefix with the user's own words. Do not write "
     "'I heard you: …', 'Noted: …', 'I applied your comments (…)', or paste their "
     "message back. Address the substance only.\n"
-    "6. End assistant_message with:\n"
-    f"{UPDATES_HEADER}\n"
-    "- one bullet per change, in your own words\n"
-    "  (or a single bullet: None — with a one-line reason if the artifact is unchanged).\n"
+    "6. Do not add an **Updates to this proposal** section.\n"
+    "7. Do not start a new interview or re-introduce the process as if this were "
+    "the first turn. Do not stall with 'I need more information to proceed' or "
+    "'tell me more about your system'. Reply as a continuation of this conversation.\n"
 )
+
+
+def user_message_first_block(pending: str) -> str:
+    """System-prompt fragment: only when the user actually said something this turn."""
+    if not (pending or "").strip():
+        return ""
+    return f"{USER_MESSAGE_FIRST_RULES}\n"
 
 ASK_TO_CONFIRM_RULES = (
     "When the step is ready, ask them to confirm, approve, or agree so you can "
@@ -438,6 +451,7 @@ def with_next_prompt(
     body = without_user_echo((message or "").strip())
     if not body or _DONE_MESSAGE_RE.search(body):
         return body
+    body = re.split(r"(?i)\n*\*\*Updates to this proposal\*\*", body, maxsplit=1)[0].strip()
     return re.split(r"(?i)\n*\*\*What you can do next\*\*", body, maxsplit=1)[0].strip()
 
 
@@ -449,22 +463,9 @@ def with_resolution_close(
     approve_label: str = "",
     can_approve: bool = True,
 ) -> str:
-    """Ensure a changelog and a next-action prompt after resolving user comments."""
-    body = (message or "").strip()
-    if UPDATES_HEADER.lower() not in body.lower():
-        if changed:
-            lines = change_lines or [
-                "Applied your latest comments to this step's proposal (see the artifact)."
-            ]
-        else:
-            lines = [
-                "None — the current proposal is unchanged since the last approval request."
-            ]
-        section = UPDATES_HEADER + "\n" + "\n".join(
-            f"- {line.lstrip('- ').strip()}" for line in lines if str(line).strip()
-        )
-        body = f"{body}\n\n{section}".strip()
-    return with_next_prompt(body, approve_label=approve_label, can_approve=can_approve)
+    """Sanitize the reply after resolving user comments — no changelog footer."""
+    del changed, change_lines
+    return with_next_prompt(message, approve_label=approve_label, can_approve=can_approve)
 
 
 def wants_endpoint_list(text: str) -> bool:

@@ -7,7 +7,9 @@ from orchestrator_agent.graph.nodes.common import (
     approve_label,
     close_user_message,
     invoke_json,
+    session_phase_context,
     skill_digest,
+    with_session_digest,
 )
 from orchestrator_agent.json_util import recover_classify_from_prose
 from orchestrator_agent.query_intent import FEEDBACK_RESOLUTION_RULES, is_revision_request, with_resolution_close
@@ -32,20 +34,27 @@ def classify_node(state: dict[str, Any]) -> dict[str, Any]:
                 f"Last assistant note:\n{(state.get('pending_assistant_message') or '')[:1500]}\n"
                 f"Design package excerpt:\n{package[:8000]}"
             ),
+            digest=str(state.get("discussion_digest") or ""),
         )
-        return {
-            "topology": topology,
-            "topology_certain": bool(state.get("topology_certain")),
-            "pending_user_feedback": "",
-            "pending_assistant_message": assistant,
-            "phase": "classify",
-            "route": "wait",
-            "wait_kind": "confirm_topology",
-            "can_approve": True,
-            "approve_kind": "confirm_topology",
-            "approve_label": approve_label("confirm_topology"),
-            "messages": [{"role": "assistant", "content": assistant, "node": "classify"}],
-        }
+        return with_session_digest(
+            state,
+            {
+                "topology": topology,
+                "topology_certain": bool(state.get("topology_certain")),
+                "pending_user_feedback": "",
+                "pending_assistant_message": assistant,
+                "phase": "classify",
+                "route": "wait",
+                "wait_kind": "confirm_topology",
+                "can_approve": True,
+                "approve_kind": "confirm_topology",
+                "approve_label": approve_label("confirm_topology"),
+                "messages": [{"role": "assistant", "content": assistant, "node": "classify"}],
+            },
+            pending=pending,
+            assistant=assistant,
+            phase="classify",
+        )
     result = invoke_json(
         system=(
             "You are the orchestrator topology classifier.\n"
@@ -64,8 +73,9 @@ def classify_node(state: dict[str, Any]) -> dict[str, Any]:
             "}\n"
         ),
         user=(
+            f"{session_phase_context(state, 'classify')}\n\n"
             f"Architect track: `{track}`\n\n"
-            f"User correction (if any):\n{pending or '(none)'}\n\n"
+            f"Latest user message:\n{pending or '(none)'}\n\n"
             f"Design package:\n{package[:12000]}\n"
         ),
         recover_prose=recover_classify_from_prose,
@@ -96,27 +106,39 @@ def classify_node(state: dict[str, Any]) -> dict[str, Any]:
     )
     msgs = [{"role": "assistant", "content": assistant, "node": "classify"}]
     if certain:
-        return {
+        return with_session_digest(
+            state,
+            {
+                "topology": topology,
+                "topology_certain": True,
+                "pending_user_feedback": "",
+                "pending_assistant_message": assistant,
+                "phase": "classify",
+                "route": "handle_update",
+                "wait_kind": "",
+                "can_approve": False,
+                "messages": msgs,
+            },
+            pending=pending,
+            assistant=assistant,
+            phase="classify",
+        )
+    return with_session_digest(
+        state,
+        {
             "topology": topology,
-            "topology_certain": True,
+            "topology_certain": False,
             "pending_user_feedback": "",
             "pending_assistant_message": assistant,
             "phase": "classify",
-            "route": "handle_update",
-            "wait_kind": "",
-            "can_approve": False,
+            "route": "wait",
+            "wait_kind": "confirm_topology",
+            "can_approve": True,
+            "approve_kind": "confirm_topology",
+            "approve_label": approve_label("confirm_topology"),
             "messages": msgs,
-        }
-    return {
-        "topology": topology,
-        "topology_certain": False,
-        "pending_user_feedback": "",
-        "pending_assistant_message": assistant,
-        "phase": "classify",
-        "route": "wait",
-        "wait_kind": "confirm_topology",
-        "can_approve": True,
-        "approve_kind": "confirm_topology",
-        "approve_label": approve_label("confirm_topology"),
-        "messages": msgs,
-    }
+        },
+        pending=pending,
+        assistant=assistant,
+        phase="classify",
+    )

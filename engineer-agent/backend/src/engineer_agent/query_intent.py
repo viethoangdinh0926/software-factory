@@ -125,17 +125,46 @@ _DONE_MESSAGE_RE = re.compile(
     r"(?i)^\s*session (marked )?done\.?\s*$|^\s*session ended\.?\s*$"
 )
 
+USER_MESSAGE_FIRST_RULES = (
+    "USER MESSAGE FIRST (non-negotiable):\n"
+    "The labeled Latest user message is the work of this turn. Discussion memory "
+    "and the recent transcript are context, not a reason to ignore that message. "
+    "You MUST:\n"
+    "1. Address every question, concern, objection, preference, confirmation, and "
+    "comment in assistant_message. Do not skip any of them.\n"
+    "2. Do NOT reply with only the next prepared plan item or a canned status. A "
+    "scripted next-step with no response to what they just said is a FAILED turn.\n"
+    "2b. If they asked for help answering questions YOU asked (candidate options, "
+    "a recommended pick, or a draft reply): give 2–3 concrete options per open "
+    "question and mark one (Recommended). Do not treat that request as their "
+    "answer. Do not skip to a new question.\n"
+    "3. If they asked to change the plan, offered API, or instructions, apply it "
+    "this turn.\n"
+    "4. Only AFTER addressing them may you ask at most ONE follow-up, and only if "
+    "it is still needed.\n"
+    "5. Never quote, restate, or prefix with the user's own words. Do not write "
+    "'I heard you: …', 'Noted: …', 'I applied your comments (…)', or paste their "
+    "message back. Address the substance only.\n"
+    "6. Do not add an **Updates to this proposal** section.\n"
+    "7. Do not re-introduce this sub-engineer as if this were the first turn. Do "
+    "not stall with 'I need more information' or 'tell me more'. Reply as a "
+    "continuation of this conversation.\n"
+)
+
+
+def user_message_first_block(pending: str) -> str:
+    """System-prompt fragment: only when the user actually said something this turn."""
+    if not (pending or "").strip():
+        return ""
+    return f"{USER_MESSAGE_FIRST_RULES}\n"
+
+
 FEEDBACK_RESOLUTION_RULES = (
-    "The user commented after you last asked them to Approve. You MUST:\n"
-    "1. Address every query, concern, and comment in assistant_message (do not skip).\n"
-    "2. Apply requested changes to this step's primary artifact; keep prior content otherwise.\n"
-    "3. Never quote or restate the user's message. No 'I heard you: …' or 'Noted: …'.\n"
-    "4. End assistant_message with:\n"
-    f"{UPDATES_HEADER}\n"
-    "- one bullet per change, in your own words\n"
-    "  (or a single bullet: None — with a one-line reason if the artifact is unchanged).\n"
-    "5. Then ask them to confirm, approve, or agree for THIS updated version, "
-    "not the previous one. Never tell them to click a button."
+    "The user commented after you last asked them to Approve. You MUST follow "
+    "USER MESSAGE FIRST.\n"
+    f"{USER_MESSAGE_FIRST_RULES}\n"
+    "Then ask them to confirm, approve, or agree for THIS updated version, not the "
+    "previous one. Never tell them to click a button."
 )
 
 ASK_TO_CONFIRM_RULES = (
@@ -572,6 +601,7 @@ def with_next_prompt(
     body = without_click_instruction((message or "").strip())
     if not body or _DONE_MESSAGE_RE.search(body):
         return body
+    body = re.split(r"(?i)\n*\*\*Updates to this proposal\*\*", body, maxsplit=1)[0].strip()
     return re.split(r"(?i)\n*\*\*What you can do next\*\*", body, maxsplit=1)[0].strip()
 
 
@@ -584,19 +614,8 @@ def with_resolution_close(
     can_approve: bool = True,
     mode: str = "step",
 ) -> str:
-    """Ensure a changelog and a next-action prompt after resolving user comments."""
-    body = (message or "").strip()
-    if UPDATES_HEADER.lower() not in body.lower():
-        if changed:
-            lines = change_lines or [
-                "Applied your latest comments to this step's proposal (see the artifact)."
-            ]
-        else:
-            lines = [
-                "None — the current proposal is unchanged since the last approval request."
-            ]
-        section = UPDATES_HEADER + "\n" + "\n".join(
-            f"- {line.lstrip('- ').strip()}" for line in lines if str(line).strip()
-        )
-        body = f"{body}\n\n{section}".strip()
-    return with_next_prompt(body, approve_label=approve_label, can_approve=can_approve, mode=mode)
+    """Sanitize the reply after resolving user comments — no changelog footer."""
+    del changed, change_lines
+    return with_next_prompt(
+        message, approve_label=approve_label, can_approve=can_approve, mode=mode
+    )

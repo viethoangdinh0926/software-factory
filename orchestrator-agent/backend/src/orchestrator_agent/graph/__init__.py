@@ -155,6 +155,7 @@ def initial_state(session_id: str, markdown: str) -> dict[str, Any]:
         "entity_relationships": "",
         "app_status": "",
         "search_notes": "",
+        "discussion_digest": "",
         "messages": [],
         "phase": "ingest",
         "wait_kind": "",

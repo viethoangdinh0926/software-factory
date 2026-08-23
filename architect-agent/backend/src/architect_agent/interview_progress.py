@@ -215,6 +215,139 @@ def fallback_question(spec: str, asked_titles: list[str]) -> tuple[str, bool]:
     )
 
 
+_VAGUE_STALL_RE = re.compile(
+    r"(?is)("
+    r"need more information to proceed"
+    r"|provide more details about (?:your )?(?:the )?system"
+    r"|tell me more about (?:your )?(?:the )?system"
+    r"|please (?:share|provide|give) more details"
+    r"|please share more detail"
+    r"|need a bit more detail"
+    r"|describe (?:your|the) (?:system|application|app) in more detail"
+    r"|what else should we lock for v1\?"
+    r")"
+)
+
+def is_vague_question(text: str) -> bool:
+    """True when chat stalls on a generic 'tell me more' instead of a concrete choice."""
+    body = (text or "").strip()
+    if not body:
+        return True
+    core = re.split(r"\n\*\*Updates to this proposal\*\*", body, maxsplit=1)[0]
+    core = re.split(r"\n\*\*What you can do next\*\*", core, maxsplit=1)[0].strip()
+    if not _VAGUE_STALL_RE.search(core):
+        return False
+    if "❓" in core:
+        return False
+    words = core.split()
+    if len(words) > 80 and "?" in core:
+        return False
+    return True
+
+
+def lock_notice_for_pending(pending: str) -> str:
+    """One-sentence lock when the user confirms dropping a concern we raised."""
+    p = (pending or "").strip()
+    if not p:
+        return ""
+    lower = p.lower()
+    dropping = any(
+        token in lower
+        for token in (
+            "ignor",
+            "skip",
+            "don't need",
+            "do not need",
+            "dont need",
+            "no need",
+            "without",
+            "not needed",
+            "out of scope",
+        )
+    )
+    if not dropping:
+        return ""
+    bits: list[str] = []
+    if "sync" in lower:
+        bits.append("no remote / cross-device synchronization in v1")
+    if "secur" in lower:
+        bits.append(
+            "no extra credential-vault or encryption work in v1 beyond ordinary OS file access"
+        )
+    if not bits:
+        bits.append("the constraints you confirmed dropping")
+    joined = "; ".join(bits)
+    return (
+        f"Locked: **{joined}**. I will not keep arguing those — they are accepted "
+        f"v1 constraints, recorded in the spec.\n\n"
+    )
+
+
+def specific_followup_message(
+    spec: str,
+    pending: str = "",
+    asked_titles: list[str] | None = None,
+) -> tuple[str, bool]:
+    """Lock confirmed drop-decisions, then ask the next uncovered concrete question."""
+    follow, ready = fallback_question(spec, asked_titles or [])
+    notice = lock_notice_for_pending(pending)
+    if notice:
+        return f"{notice}{follow}", ready
+    return follow, ready
+
+
+def ensure_specific_question(
+    text: str,
+    *,
+    spec: str,
+    pending: str = "",
+    asked_titles: list[str] | None = None,
+) -> str:
+    """Replace a generic stall with a concrete next question; keep long substance."""
+    asked = asked_titles or []
+    follow, _ready = specific_followup_message(spec, pending, asked)
+    notice = lock_notice_for_pending(pending)
+    body = (text or "").strip()
+    if not body:
+        return follow
+    lower = body.lower()
+    still_arguing_dropped = bool(notice) and (
+        (
+            "synchronization" in notice.lower()
+            and any(
+                w in lower
+                for w in (
+                    "saga",
+                    "outbox",
+                    "eventual consistency",
+                    "must design for synchronization",
+                    "we must still implement",
+                )
+            )
+        )
+        or (
+            "encryption" in notice.lower()
+            and any(
+                w in lower
+                for w in ("dpapi", "keyring", "defense-in-depth", "must decouple")
+            )
+        )
+    )
+    if still_arguing_dropped:
+        return follow
+    if not is_vague_question(body):
+        if notice and notice.strip()[:24].lower() not in lower:
+            return f"{notice}{body}"
+        return body
+    core = re.split(r"\n\*\*Updates to this proposal\*\*", body, maxsplit=1)[0]
+    core = re.split(r"\n\*\*What you can do next\*\*", core, maxsplit=1)[0].strip()
+    if len(core.split()) < 40:
+        return follow
+    if "❓" not in core:
+        return f"{core}\n\n{follow}"
+    return follow
+
+
 def format_asked_block(asked_titles: list[str]) -> str:
     if not asked_titles:
         return "(none yet)"
@@ -334,3 +467,133 @@ def message_for_user_stop(spec: str, *, approve_anyway: bool = False) -> tuple[s
         "- say **approve anyway** if you want a speculative first design draft.",
         False,
     )
+
+
+_SCAFFOLD_HINTS = ("## problem", "## actors", "## in scope")
+_PLACEHOLDER_BULLET_RE = re.compile(
+    r"(?im)^-\s*(?:\(to be (?:captured|classified after discovery)\)|to be refined|tbd)\s*$"
+)
+
+
+def living_spec_scaffold(spec: str) -> str:
+    """Turn a one-line request into a sectioned living spec the UI can update in place."""
+    body = (spec or "").strip()
+    lower = body.lower()
+    if sum(1 for hint in _SCAFFOLD_HINTS if hint in lower) >= 2:
+        return body
+    problem = body or "To be refined during discovery."
+    if len(problem) > 2000:
+        problem = problem[:2000].rstrip() + "…"
+    return (
+        "# Business Specification\n\n"
+        f"## Problem\n{problem}\n\n"
+        "## Actors\n- (to be captured)\n\n"
+        "## Goals\n- (to be captured)\n\n"
+        "## In scope (v1)\n- (to be captured)\n\n"
+        "## Out of scope\n- (to be captured)\n\n"
+        "## Deployment topology\n- (to be classified after discovery)\n\n"
+        "## Critical invariants\n- (to be captured)\n\n"
+        "## Success criteria\n- (to be captured)\n\n"
+        "## Assumptions & risks\n- (to be captured)\n"
+    )
+
+
+def guess_spec_section(answer: str) -> str:
+    """Pick the living-spec heading a decision should land under."""
+    lower = (answer or "").lower()
+    if any(
+        token in lower
+        for token in (
+            "gdpr",
+            "residenc",
+            "eu user",
+            "eu-only",
+            "compliance",
+            "must never",
+            "invariant",
+            "safety",
+            "trust",
+            "security",
+        )
+    ):
+        return "## Critical invariants"
+    if any(
+        token in lower
+        for token in (
+            "ignor",
+            "skip",
+            "not build",
+            "out of scope",
+            "don't need",
+            "do not need",
+            "dont need",
+            "not in v1",
+            "no remote",
+            "no extra",
+            "synchronization",
+        )
+    ):
+        return "## Out of scope"
+    if any(
+        token in lower
+        for token in ("actor", "user", "clerk", "operator", "who uses", "customer", "role")
+    ):
+        return "## Actors"
+    if any(token in lower for token in ("success", "metric", "kpi", "done when", "know v1")):
+        return "## Success criteria"
+    if any(
+        token in lower
+        for token in ("stand-alone", "standalone", "self-contained", "distributed", "deploy")
+    ):
+        return "## Deployment topology"
+    if any(token in lower for token in ("must ship", "capability", "in scope", "v1")):
+        return "## In scope (v1)"
+    return "## Goals"
+
+
+def append_spec_bullet(spec: str, heading: str, text: str) -> str:
+    """Add a decision bullet under a markdown heading without dropping earlier bullets."""
+    body = living_spec_scaffold(spec)
+    bullet = re.sub(r"\s+", " ", (text or "").strip()).strip(" -")
+    if not bullet:
+        return body
+    line = f"- {bullet}"
+    compact = line.lower()
+    if compact[:96] in body.lower():
+        return body
+    if heading not in body:
+        return body.rstrip() + f"\n\n{heading}\n{line}\n"
+    idx = body.find(heading)
+    rest = body[idx + len(heading) :]
+    nxt = re.search(r"\n## ", rest)
+    section = rest if nxt is None else rest[: nxt.start()]
+    after = "" if nxt is None else rest[nxt.start() :]
+    stripped = section.rstrip()
+    if _PLACEHOLDER_BULLET_RE.search(stripped):
+        stripped = _PLACEHOLDER_BULLET_RE.sub(line, stripped, count=1)
+    else:
+        stripped = f"{stripped}\n{line}"
+    tail = after.lstrip("\n")
+    return f"{body[:idx]}{heading}{stripped}\n{tail}"
+
+
+def record_dropped_constraints(spec: str, pending: str) -> str:
+    """Write confirmed drop-decisions into Out of scope so the artifact matches chat."""
+    notice = lock_notice_for_pending(pending)
+    if not notice:
+        return spec
+    updated = spec
+    lower = (pending or "").lower()
+    if "sync" in lower:
+        updated = append_spec_bullet(
+            updated,
+            "## Out of scope",
+            "No remote / cross-device synchronization in v1",
+        )
+    if "secur" in lower:
+        updated = append_spec_bullet(
+            updated,
+            "## Out of scope",
+            "No extra credential-vault or encryption work in v1 beyond ordinary OS file access",
+        )
+    return updated

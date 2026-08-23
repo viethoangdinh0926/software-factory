@@ -19,7 +19,11 @@ print("importing…", flush=True)
 from engineer_agent.config import get_settings
 from engineer_agent.llm import get_chat_model
 from engineer_agent.plan_parse import parse_handoff, parse_related_entities, sub_agent_id
-from engineer_agent.query_intent import NEXT_PROMPT_HEADER
+from engineer_agent.query_intent import (
+    NEXT_PROMPT_HEADER,
+    USER_MESSAGE_FIRST_RULES,
+    user_message_first_block,
+)
 import engineer_agent.sessions as sessions_mod
 from engineer_agent.sessions import SessionStore, reset_store
 from engineer_agent.workspace import private_dir_for, private_dir_name, run_workspace_tests, write_item_work
@@ -27,6 +31,10 @@ from engineer_agent.workspace import private_dir_for, private_dir_name, run_work
 get_settings.cache_clear()
 get_chat_model.cache_clear()
 reset_store()
+
+assert "Latest user message is the work" in USER_MESSAGE_FIRST_RULES
+assert user_message_first_block("add thumbnail_url")
+assert not user_message_first_block("")
 
 SESSION = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 IDENTITY = "11111111-1111-1111-1111-111111111111"
@@ -151,6 +159,18 @@ assert any(
 hit = next(c for c in ident.get("peer_consults") or [] if c.get("we_initiate"))
 assert "thumbnail_url" in (hit.get("offered_api") or "")
 assert NEXT_PROMPT_HEADER not in (ident.get("messages") or [{}])[-1].get("content", "")
+ident_digest = (ident.get("discussion_digest") or "").lower()
+cat_digest = (cat.get("discussion_digest") or "").lower()
+assert "thumbnail_url" in ident_digest, ident.get("discussion_digest")
+assert "thumbnail_url" in cat_digest, cat.get("discussion_digest")
+
+print("identity off-topic chat asks to clarify…", flush=True)
+s = store.chat(SESSION, "asdf what is the weather in paris", service_id=IDENTITY)
+ident = s.find(IDENTITY)
+assert ident is not None
+off = (ident.get("messages") or [{}])[-1].get("content", "")
+assert "previous message" in off.lower() or "open point" in off.lower() or "clarif" in off.lower(), off[:400]
+assert "weather" not in (ident.get("discussion_digest") or "").lower()
 
 print("approve identity plan…", flush=True)
 s = store.chat(SESSION, "Approve", service_id=IDENTITY)

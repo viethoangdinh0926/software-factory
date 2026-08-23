@@ -20,6 +20,7 @@ from architect_agent.llm import get_chat_model
 from architect_agent.graph import reset_graph
 from architect_agent.query_intent import (
     NEXT_PROMPT_HEADER,
+    UPDATES_HEADER,
     classify_user_message,
     is_advance_request,
     is_informational_query,
@@ -27,11 +28,13 @@ from architect_agent.query_intent import (
     is_step_approval_message,
     promote_chat_to_approve,
     with_next_prompt,
+    with_resolution_close,
     without_user_echo,
 )
 from architect_agent.json_util import parse_llm_json_object
 from architect_agent.graph.nodes.common import assistant_message_is_thin, ensure_step_briefing
 from architect_agent.design_progress import classify_rewind_stage, design_position, package_fingerprint
+from architect_agent.scope import recommend_design_track, resolve_design_track, wants_standalone
 from architect_agent.sessions import SessionStore, _legacy_map
 
 get_settings.cache_clear()
@@ -86,12 +89,53 @@ assert "confirm, approve, or agree" in without_user_echo(
 assert with_next_prompt(
     "Here is the proposal.\n\n**What you can do next**\n- Click **Approve**."
 ) == "Here is the proposal."
+assert UPDATES_HEADER not in with_next_prompt(
+    "Here is the proposal.\n\n**Updates to this proposal**\n- None — unchanged."
+)
+assert UPDATES_HEADER not in with_resolution_close("Here is the proposal.", changed=True)
 assert "Session marked done." == with_next_prompt("Session marked done.")
 assert assistant_message_is_thin("LLD step 1 update.")
 assert assistant_message_is_thin("HLD step 2 update.")
 assert assistant_message_is_thin("Design updated.")
 assert design_position("phase0", "hld", 0) == 0
 assert design_position("hld", "hld", 2) < design_position("hld", "hld", 4)
+assert wants_standalone("Make this a local self-contained stand-alone application")
+assert not wants_standalone("Please switch to a modular monolith")
+assert not wants_standalone("I want an app like youtube")
+assert (
+    resolve_design_track(
+        "hld",
+        pending="Route this to a local self-contained stand-alone application.",
+        spec="Distributed multi-tenant inventory tracker with microservices.",
+        prior="hld",
+    )
+    == "lld"
+)
+assert (
+    resolve_design_track(
+        "hld",
+        pending="We also need GDPR: EU-only users in v1.",
+        spec="Distributed multi-tenant inventory tracker with microservices.",
+        prior="hld",
+    )
+    == "hld"
+)
+assert recommend_design_track(spec="A local CLI for quote math in one OS process.") == "lld"
+assert (
+    recommend_design_track(
+        spec="Multi-tenant warehouse inventory SaaS with microservices."
+    )
+    == "hld"
+)
+assert recommend_design_track(spec="A vague product idea with no topology yet.") in {
+    "lld",
+    "hld",
+}
+assert classify_rewind_stage(
+    "Make this a local self-contained stand-alone application, not a distributed system.",
+    "phase=hld track=hld step=3",
+    "hld",
+) == "phase0"
 assert classify_rewind_stage(
     "We also need GDPR: EU-only users in v1.",
     "phase=hld track=hld step=2",
@@ -224,8 +268,7 @@ for step in range(1, 7):
         assert s.to_public()["can_approve"]
         last = s.messages[-1]["content"]
         assert "IdentityService" in last or "User" in last or "own" in last.lower(), last[:240]
-        assert "Updates to this proposal" in last, last[:400]
-        assert "None" in last, last[:400]
+        assert "Updates to this proposal" not in last, last[:400]
         assert NEXT_PROMPT_HEADER not in last, last[-400:]
     s = store.approve(s.session_id)
     print(f"  after approve@{step}", s.phase, s.design_step, flush=True)
@@ -326,6 +369,8 @@ s4 = store4.start("I want an app like youtube")
 assert s4.phase == "phase0"
 asked4 = s4.messages[-1]["content"]
 assert "?" in asked4 or "❓" in asked4, asked4[:400]
+assert "## Problem" in s4.business_spec, s4.business_spec[:400]
+assert "youtube" in s4.business_spec.lower(), s4.business_spec[:400]
 spec_before = s4.business_spec
 s4 = store4.chat(s4.session_id, "Draft some replies I can use.")
 last4 = s4.messages[-1]["content"]
@@ -343,6 +388,17 @@ reset_graph()
 store3 = SessionStore()
 s3 = store3.start("I want an app like youtube")
 assert s3.phase == "phase0"
+print("phase0 off-topic reply asks to clarify…", flush=True)
+s3 = store3.chat(s3.session_id, "asdf what is the weather in paris")
+off = s3.messages[-1]["content"]
+assert s3.phase == "phase0", s3.phase
+assert "need more information to proceed" not in off.lower(), off[:400]
+assert (
+    "previous message" in off.lower()
+    or "open point" in off.lower()
+    or "clarif" in off.lower()
+), off[:400]
+assert "weather" not in (s3.discussion_digest or "").lower()
 s3 = store3.chat(
     s3.session_id,
     "I'm worried about GDPR and we should only allow EU users at first. Why no data residency?",
@@ -350,20 +406,205 @@ s3 = store3.chat(
 last3 = s3.messages[-1]["content"]
 assert s3.phase == "phase0"
 assert "GDPR" in last3 or "residenc" in last3.lower() or "EU" in last3, last3[:400]
-assert "Updates to this proposal" in last3, last3[:400]
+assert "Updates to this proposal" not in last3, last3[:400]
 # Must not be only the next canned question.
 assert len(last3) > 120, last3
+digest3 = (s3.discussion_digest or "").lower()
+assert "gdpr" in digest3 or "residenc" in digest3 or "eu" in digest3, s3.discussion_digest[:400]
+spec_gdpr = s3.business_spec.lower()
+assert "gdpr" in spec_gdpr or "residenc" in spec_gdpr or "eu" in spec_gdpr, s3.business_spec[:600]
+assert "## critical invariants" in spec_gdpr or "## problem" in spec_gdpr, s3.business_spec[:400]
+
+print("phase0 confirmation locks and asks a specific next question…", flush=True)
+from architect_agent.interview_progress import (
+    ensure_specific_question,
+    is_vague_question,
+    specific_followup_message,
+)
+
+stall = (
+    "I need more information to proceed. Please provide more details about your system."
+)
+assert is_vague_question(stall)
+assert assistant_message_is_thin(stall)
+locked, _ready = specific_followup_message(
+    "Local REST collection manager.",
+    "I confirm on ignoring sync and security.",
+    [],
+)
+assert "Locked" in locked, locked
+assert "sync" in locked.lower()
+assert "❓" in locked or "?" in locked
+assert "more details about your system" not in locked.lower()
+replaced = ensure_specific_question(
+    stall,
+    spec="Local REST collection manager.",
+    pending="I confirm on ignoring sync and security.",
+    asked_titles=[],
+)
+assert "Locked" in replaced
+assert not is_vague_question(replaced)
+
+s3 = store3.chat(s3.session_id, "I confirm on ignoring sync and security.")
+last_lock = s3.messages[-1]["content"]
+assert "need more information to proceed" not in last_lock.lower(), last_lock[:400]
+assert "more details about your system" not in last_lock.lower(), last_lock[:400]
+assert "Locked" in last_lock or "sync" in last_lock.lower(), last_lock[:500]
+assert "?" in last_lock or "❓" in last_lock, last_lock[:400]
+spec_lock = s3.business_spec.lower()
+assert "gdpr" in spec_lock or "residenc" in spec_lock or "eu" in spec_lock, s3.business_spec[:600]
+assert "sync" in spec_lock or "synchronization" in spec_lock, s3.business_spec[:600]
+
+print("phase0 later turn with no checklist still replies to the user…", flush=True)
+from architect_agent.graph.nodes.phase0 import phase0_classify_node
+from architect_agent.query_intent import USER_MESSAGE_FIRST_RULES
+
+assert "Latest user message is the work" in USER_MESSAGE_FIRST_RULES
+assert "Do not start a new interview" in USER_MESSAGE_FIRST_RULES
+
+later = phase0_classify_node(
+    {
+        "session_id": "later-turn",
+        "business_spec": "Local REST collection manager.",
+        "messages": [
+            {
+                "role": "assistant",
+                "content": "Should we add sync between devices?",
+                "node": "phase0",
+            }
+        ],
+        "pending_user_feedback": "I confirm on ignoring sync and security.",
+        "interview_questions": [],
+        "current_question_index": 0,
+        "interview_answers": {},
+        "interview_complete": False,
+        "spec_compiled": False,
+        "design_track": "unset",
+        "design_step": 0,
+        "discussion_digest": "Architect raised sync and security.",
+        "tradeoff_ledger": "",
+        "rewind_notice": "",
+    }
+)
+later_msg = str(later.get("pending_assistant_message") or "")
+assert "need more information to proceed" not in later_msg.lower(), later_msg[:400]
+assert "more details about your system" not in later_msg.lower(), later_msg[:400]
+assert "I will gather just enough" not in later_msg, later_msg[:400]
+assert "Locked" in later_msg or "sync" in later_msg.lower(), later_msg[:500]
+later_spec = str(later.get("business_spec") or "").lower()
+assert "sync" in later_spec or "synchronization" in later_spec, later_spec[:600]
+
+print("phase0 interview compiles spec then classifies…", flush=True)
+questions = [
+    {"id": "q1", "text": "Who are the primary daily users?", "category": "users"},
+    {"id": "q2", "text": "What must never go wrong in v1?", "category": "constraints"},
+    {"id": "q3", "text": "Which 3 capabilities must ship in v1?", "category": "business"},
+    {"id": "q4", "text": "What will you explicitly not build in v1?", "category": "business"},
+    {"id": "q5", "text": "How will you know v1 succeeded?", "category": "success_metrics"},
+]
+compiled = phase0_classify_node(
+    {
+        "session_id": "compile-turn",
+        "business_spec": "Warehouse inventory tracker notes from the interview.",
+        "messages": [
+            {
+                "role": "assistant",
+                "content": questions[-1]["text"],
+                "node": "phase0",
+            }
+        ],
+        "pending_user_feedback": "Success is clerks finishing cycle counts without silent stock loss.",
+        "interview_questions": questions,
+        "current_question_index": 4,
+        "interview_answers": {
+            "q1": "Warehouse clerks",
+            "q2": "No silent stock loss",
+            "q3": "Receive, adjust, report",
+            "q4": "Accounting",
+        },
+        "interview_complete": False,
+        "spec_compiled": False,
+        "design_track": "unset",
+        "design_step": 0,
+        "discussion_digest": "",
+        "tradeoff_ledger": "",
+        "rewind_notice": "",
+    }
+)
+compiled_msg = str(compiled.get("pending_assistant_message") or "")
+assert compiled.get("interview_complete") is True, compiled
+assert compiled.get("spec_compiled") is True, compiled
+assert compiled.get("design_track") == "unset", compiled.get("design_track")
+assert compiled.get("ready_to_advance") is True, compiled
+assert "enough to compile" not in compiled_msg.lower(), compiled_msg[:400]
+assert "## Problem" in compiled_msg or "## Actors" in compiled_msg, compiled_msg[:500]
+assert "confirm, approve, or agree" in compiled_msg.lower(), compiled_msg[:400]
+assert "UNSET" not in compiled_msg
+
+classified = phase0_classify_node(
+    {
+        "session_id": "compile-turn",
+        "business_spec": str(compiled.get("business_spec") or ""),
+        "messages": list(compiled.get("messages") or []),
+        "pending_user_feedback": "Looks good",
+        "interview_questions": questions,
+        "current_question_index": 5,
+        "interview_answers": compiled.get("interview_answers") or {},
+        "interview_complete": True,
+        "spec_compiled": True,
+        "design_track": "unset",
+        "design_step": 0,
+        "discussion_digest": str(compiled.get("discussion_digest") or ""),
+        "tradeoff_ledger": "",
+        "rewind_notice": "",
+    }
+)
+classified_msg = str(classified.get("pending_assistant_message") or "")
+assert classified.get("design_track") in {"lld", "hld"}, classified.get("design_track")
+assert classified.get("ready_to_advance") is True, classified
+assert "UNSET" not in classified_msg, classified_msg[:400]
+assert "confirm, approve, or agree" in classified_msg.lower(), classified_msg[:400]
+assert classified.get("design_track").upper() in classified_msg, classified_msg[:400]
+
+print("stand-alone routing leaves HLD for LLD…", flush=True)
+get_settings.cache_clear()
+get_chat_model.cache_clear()
+reset_graph()
+store5 = SessionStore()
+s5 = store5.start(
+    "# Warehouse Inventory SaaS\n\n"
+    "Distributed multi-tenant inventory tracker with microservices.\n\n"
+    "## Actors\n- Warehouse clerk\n\n## In scope (v1)\n- receive/adjust/report\n\n"
+    "## Out of scope\n- accounting\n\n## Critical invariants\n- no silent stock loss\n\n"
+    "## Success criteria\n- clerks can adjust counts\n\n## Assumptions & risks\n- multi-region later\n"
+)
+assert s5.design_track == "hld", s5.design_track
+s5 = store5.approve(s5.session_id)
+assert s5.phase == "hld" and s5.design_step == 1, (s5.phase, s5.design_step)
+s5 = store5.chat(
+    s5.session_id,
+    "Make this a local self-contained stand-alone application, not a distributed system.",
+)
+print("  after stand-alone chat", s5.phase, s5.design_track, s5.design_step, flush=True)
+assert s5.phase == "phase0", s5.phase
+assert s5.design_track == "lld", s5.design_track
+assert s5.to_public()["can_approve"]
+digest5 = (s5.discussion_digest or "").lower()
+assert "stand-alone" in digest5 or "standalone" in digest5 or "lld" in digest5, s5.discussion_digest[:500]
+assert "deployment topology" in s5.business_spec.lower() or "stand-alone" in s5.business_spec.lower()
+last5 = s5.messages[-1]["content"]
+assert "lld" in last5.lower() or "stand-alone" in last5.lower() or "standalone" in last5.lower(), last5[:400]
+s5 = store5.approve(s5.session_id)
+print("  after stand-alone approve", s5.phase, s5.design_track, s5.design_step, flush=True)
+assert s5.phase == "lld" and s5.design_step == 1, (s5.phase, s5.design_track, s5.design_step)
 
 print("new-round spec update stays on phase0…", flush=True)
 s = store.chat(s.session_id, "We should add rate limiting at the gateway.")
 assert s.phase == "phase0", s.phase
 round_edit = s.messages[-1]["content"]
 assert "We should add rate limiting at the gateway." not in round_edit, round_edit[:400]
-assert (
-    "rate limit" in round_edit.lower()
-    or "updated" in round_edit.lower()
-    or "Updates to this proposal" in round_edit
-), round_edit[:400]
+assert "rate limit" in round_edit.lower() or "updated" in round_edit.lower(), round_edit[:400]
+assert "Updates to this proposal" not in round_edit, round_edit[:400]
 
 print("legacy map…", flush=True)
 mapped = _legacy_map({"phase": "spec_interview"})

@@ -54,6 +54,7 @@ class WorkflowSession:
     feature_spec: str = ""
     app_status: str = ""
     search_notes: str = ""
+    discussion_digest: str = ""
     services: list[dict[str, Any]] = field(default_factory=list)
     active_service_id: str = ""
     messages: list[dict[str, Any]] = field(default_factory=list)
@@ -108,6 +109,7 @@ class WorkflowSession:
             "feature_spec": self.feature_spec,
             "app_status": self.app_status,
             "search_notes": self.search_notes,
+            "discussion_digest": self.discussion_digest,
             "services": services,
             "active_service_id": interrupt.get("active_service_id") or self.active_service_id,
             "messages": self.messages,
@@ -149,6 +151,7 @@ class WorkflowSession:
             feature_spec=str(data.get("feature_spec") or ""),
             app_status=str(data.get("app_status") or ""),
             search_notes=str(data.get("search_notes") or ""),
+            discussion_digest=str(data.get("discussion_digest") or ""),
             services=list(data.get("services") or []),
             active_service_id=str(data.get("active_service_id") or ""),
             messages=list(data.get("messages") or []),
@@ -548,6 +551,7 @@ class SessionStore:
         session.entity_relationships = str(values.get("entity_relationships") or "")
         session.app_status = str(values.get("app_status") or "")
         session.search_notes = str(values.get("search_notes") or "")
+        session.discussion_digest = str(values.get("discussion_digest") or session.discussion_digest)
         session.services = list(values.get("services") or [])
         session.active_service_id = str(values.get("active_service_id") or "")
         session.messages = list(values.get("messages") or session.messages)

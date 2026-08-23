@@ -22,10 +22,12 @@ from orchestrator_agent.llm import get_chat_model
 from orchestrator_agent.package_parse import extract_http_endpoints, format_agreed_endpoints, service_contract_section
 from orchestrator_agent.query_intent import (
     NEXT_PROMPT_HEADER,
+    USER_MESSAGE_FIRST_RULES,
     is_advance_request,
     is_full_phase_request,
     is_revision_request,
     is_step_approval_message,
+    user_message_first_block,
     wants_endpoint_list,
 )
 from orchestrator_agent.sessions import SessionStore, reset_store
@@ -34,6 +36,10 @@ get_settings.cache_clear()
 get_chat_model.cache_clear()
 reset_graph()
 reset_store()
+
+assert "Latest user message is the work" in USER_MESSAGE_FIRST_RULES
+assert user_message_first_block("please drop Kafka") 
+assert not user_message_first_block("")
 
 print("reject package without design session id…", flush=True)
 try:
@@ -156,12 +162,25 @@ identity_id = first_ids["IdentityService"]
 print("  identity relations qa…", flush=True)
 s = store.chat(SESSION, "Who initiates toward VideoCatalogService?", service_id=identity_id)
 ident = next(x for x in s.to_public()["services"] if x["microservice_id"] == identity_id)
+cat = next(x for x in s.to_public()["services"] if x["microservice_id"] == catalog_id)
 assert ident["status"] == "awaiting_relations", ident["status"]
 assert ident["can_approve"]
 assert ident["messages"][-1]["content"].strip()
-assert "Updates to this proposal" in ident["messages"][-1]["content"]
-assert "None" in ident["messages"][-1]["content"]
+assert "Updates to this proposal" not in ident["messages"][-1]["content"]
 assert NEXT_PROMPT_HEADER not in ident["messages"][-1]["content"]
+ident_digest = (ident.get("discussion_digest") or "").lower()
+assert "videocatalog" in ident_digest or "initiate" in ident_digest, ident.get("discussion_digest")
+assert "who initiates toward videocatalogservice" not in (cat.get("discussion_digest") or "").lower()
+
+print("  identity off-topic chat asks to clarify…", flush=True)
+s = store.chat(SESSION, "asdf what is the weather in paris", service_id=identity_id)
+ident = next(x for x in s.to_public()["services"] if x["microservice_id"] == identity_id)
+cat = next(x for x in s.to_public()["services"] if x["microservice_id"] == catalog_id)
+off = ident["messages"][-1]["content"]
+assert ident["status"] == "awaiting_relations", ident["status"]
+assert "previous message" in off.lower() or "open point" in off.lower() or "clarif" in off.lower(), off[:400]
+assert "weather" not in (ident.get("discussion_digest") or "").lower()
+assert "weather" not in (cat.get("discussion_digest") or "").lower()
 
 s = store.chat(SESSION, "next step", service_id=identity_id)
 ident = next(x for x in s.to_public()["services"] if x["microservice_id"] == identity_id)
@@ -176,8 +195,7 @@ ident = next(x for x in s.to_public()["services"] if x["microservice_id"] == ide
 assert ident["status"] == "awaiting_features", ident["status"]
 assert ident["can_approve"]
 assert ident["messages"][-1]["content"].strip()
-assert "Updates to this proposal" in ident["messages"][-1]["content"]
-assert "None" in ident["messages"][-1]["content"]
+assert "Updates to this proposal" not in ident["messages"][-1]["content"]
 assert NEXT_PROMPT_HEADER not in ident["messages"][-1]["content"]
 
 s = store.chat(SESSION, "Approve", service_id=identity_id)
@@ -209,6 +227,10 @@ ident = next(x for x in s.to_public()["services"] if x["microservice_id"] == ide
 assert ident["status"] == "awaiting_spec_update", ident["status"]
 assert ident["can_approve"]
 assert "health check" in (ident.get("feature_spec") or "").lower()
+ident_digest = (ident.get("discussion_digest") or "").lower()
+assert "health check" in ident_digest, ident.get("discussion_digest")
+cat = next(x for x in s.to_public()["services"] if x["microservice_id"] == catalog_id)
+assert "health check" not in (cat.get("discussion_digest") or "").lower()
 s = store.approve(SESSION, service_id=identity_id)
 ident = next(x for x in s.services if x["microservice_id"] == identity_id)
 assert ident.get("status") == "sent"

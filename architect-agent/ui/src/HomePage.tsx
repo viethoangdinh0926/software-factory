@@ -6,7 +6,7 @@ const FLOW_STEPS = [
   {
     n: "0",
     title: "Phase 0 — Scope & spec",
-    body: "Clarify the product, actors, v1 scope, and invariants. Classify LLD (one process) vs HLD (distributed).",
+    body: "Clarify the product, actors, v1 scope, and invariants. Classify LLD (one process, including a local stand-alone app) vs HLD (distributed). Product analogies like YouTube do not override an explicit stand-alone request.",
   },
   {
     n: "1–N",

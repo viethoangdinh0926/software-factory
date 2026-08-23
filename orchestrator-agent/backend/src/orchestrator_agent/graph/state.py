@@ -35,6 +35,7 @@ class OrchestratorGraphState(TypedDict):
     entity_relationships: str
     app_status: str
     search_notes: str
+    discussion_digest: str
     messages: Annotated[list[dict[str, Any]], _append_messages]
     phase: str
     wait_kind: str

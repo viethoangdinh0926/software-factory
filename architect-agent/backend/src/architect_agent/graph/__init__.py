@@ -199,4 +199,5 @@ def initial_state(session_id: str, markdown: str) -> dict[str, Any]:
         "stay_on_interrupt": False,
         "carry_change": "",
         "rewalk_until_step": 0,
+        "discussion_digest": "",
     }

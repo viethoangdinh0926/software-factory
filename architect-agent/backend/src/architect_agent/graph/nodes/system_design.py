@@ -6,11 +6,13 @@ from langgraph.types import interrupt
 
 from architect_agent.context_budget import (
     EXPLANATION_DEPTH_DIGEST,
-    format_history_tail,
+    format_phase_context,
     maybe_compact_business_spec,
     maybe_compact_design_justification,
+    refresh_discussion_digest,
 )
 from architect_agent.graph.nodes.common import invoke_json
+from architect_agent.query_intent import user_message_first_block
 from architect_agent.graph.state import DesignGraphState
 from architect_agent.json_util import coerce_diagram_text
 from architect_agent.mermaid_sanitize import sanitize_mermaid
@@ -23,7 +25,9 @@ def system_design_node(state: DesignGraphState) -> dict[str, Any]:
     justification = maybe_compact_design_justification(state.get("design_justification") or "")
     pending_user_feedback = state.get("pending_user_feedback") or ""
     prior = [m for m in (state.get("messages") or []) if m.get("node") == "system_design"]
-    history_tail = format_history_tail(prior)
+    history_tail = format_phase_context(
+        str(state.get("discussion_digest") or ""), prior, "system_design"
+    )
 
     first_draft = not bool(diagram.strip())
     mode = (
@@ -43,6 +47,7 @@ def system_design_node(state: DesignGraphState) -> dict[str, Any]:
             "justification for every component.\n"
             "Keep design_justification concise: one short section per component.\n"
             "On every turn after the first draft, treat user chat as design change requests.\n"
+            f"{user_message_first_block(pending_user_feedback)}"
             f"{EXPLANATION_DEPTH_DIGEST}\n"
             "For this diagram step, assistant_message must walk the user through the design: "
             "the topology you chose and why, what each major node is responsible for, the "
@@ -80,7 +85,7 @@ def system_design_node(state: DesignGraphState) -> dict[str, Any]:
             f"Current diagram:\n{diagram or '(none — produce first draft)'}\n\n"
             f"Current justification:\n{justification or '(none)'}\n\n"
             f"Design conversation so far:\n{history_tail}\n\n"
-            f"Latest user feedback to apply now:\n{pending_user_feedback or '(none — initial draft)'}\n\n"
+            f"Latest user message:\n{pending_user_feedback or '(none — initial draft)'}\n\n"
             "Return the full updated design_diagram and design_justification."
         ),
     )
@@ -104,6 +109,13 @@ def system_design_node(state: DesignGraphState) -> dict[str, Any]:
         "pending_user_feedback": "",
         "publish_requested": False,
         "pending_assistant_message": assistant_message,
+        "discussion_digest": refresh_discussion_digest(
+            str(state.get("discussion_digest") or ""),
+            pending=pending_user_feedback,
+            assistant=assistant_message,
+            phase="system_design",
+            spec=business_spec,
+        ),
         "messages": [
             {"role": "assistant", "content": assistant_message, "node": "system_design"}
         ],

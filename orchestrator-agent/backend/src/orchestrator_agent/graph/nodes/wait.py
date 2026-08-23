@@ -6,13 +6,40 @@ from langgraph.types import interrupt
 
 from orchestrator_agent.graph.nodes.common import (
     active_service,
+    append_service_message,
     approve_label,
     close_user_message,
     decorate_service,
     replace_service,
     spec_delta_is_ready,
+    with_session_digest,
 )
+from orchestrator_agent.discussion_memory import consult_user_turn
 from orchestrator_agent.query_intent import promote_chat_to_approve
+
+
+def _last_assistant(messages: list[dict[str, Any]] | None, fallback: str = "") -> str:
+    last = (fallback or "").strip()
+    if last:
+        return last
+    for msg in reversed(messages or []):
+        if isinstance(msg, dict) and msg.get("role") == "assistant":
+            text = str(msg.get("content") or "").strip()
+            if text:
+                return text
+    return ""
+
+
+def _apply_service_keynotes(
+    services: list[dict[str, Any]], service_id: str, keynotes: str
+) -> list[dict[str, Any]]:
+    for svc in services:
+        if str(svc.get("microservice_id")) != service_id:
+            continue
+        updated = dict(svc)
+        updated["discussion_digest"] = keynotes
+        return replace_service(services, updated)
+    return services
 
 
 def _append_service_user(state: dict[str, Any], service_id: str, content: str) -> list[dict[str, Any]]:
@@ -86,17 +113,23 @@ def wait_node(state: dict[str, Any]) -> dict[str, Any]:
                     mode="idle",
                     can_approve=False,
                 )
-                return {
-                    "pending_assistant_message": note,
-                    "route": "wait",
-                    "wait_kind": "distributed",
-                    "can_approve": False,
-                    "messages": msgs
-                    + [
-                        {"role": "user", "content": user_text, "node": "distributed"},
-                        {"role": "assistant", "content": note, "node": "distributed"},
-                    ],
-                }
+                return with_session_digest(
+                    state,
+                    {
+                        "pending_assistant_message": note,
+                        "route": "wait",
+                        "wait_kind": "distributed",
+                        "can_approve": False,
+                        "messages": msgs
+                        + [
+                            {"role": "user", "content": user_text, "node": "distributed"},
+                            {"role": "assistant", "content": note, "node": "distributed"},
+                        ],
+                    },
+                    pending=user_text,
+                    assistant=note,
+                    phase="distributed",
+                )
             return {"route": "wait", "wait_kind": "distributed", "can_approve": False, "messages": msgs}
 
         patched_preview = dict(state)
@@ -105,6 +138,47 @@ def wait_node(state: dict[str, Any]) -> dict[str, Any]:
         tile_can_approve = bool(
             preview and decorate_service(preview).get("can_approve")
         )
+        if user_text and action == "chat" and preview:
+            consult = consult_user_turn(
+                pending=user_text,
+                last_assistant=_last_assistant(
+                    list(preview.get("messages") or []),
+                    str(preview.get("pending_assistant_message") or ""),
+                ),
+                keynotes=str(preview.get("discussion_digest") or ""),
+                phase=str(preview.get("status") or "tile"),
+            )
+            if consult.needs_clarification:
+                services = _append_service_user(state, service_id, user_text)
+                patched = dict(state)
+                patched["services"] = services
+                patched["active_service_id"] = service_id
+                svc = active_service(patched) or dict(preview)
+                note = close_user_message(
+                    consult.clarify_message,
+                    approve_kind=decorate_service(svc).get("approve_kind") or "",
+                    can_approve=bool(decorate_service(svc).get("can_approve")),
+                    mode="step",
+                )
+                updated = append_service_message(svc, note, node=str(svc.get("status") or "tile"))
+                updated["discussion_digest"] = consult.keynotes
+                return {
+                    "services": replace_service(services, updated),
+                    "active_service_id": service_id,
+                    "pending_user_feedback": "",
+                    "pending_assistant_message": note,
+                    "route": "wait",
+                    "wait_kind": "distributed",
+                    "messages": msgs,
+                }
+            services = _apply_service_keynotes(
+                list(state.get("services") or []), service_id, consult.keynotes
+            )
+            state = dict(state)
+            state["services"] = services
+            if consult.kind == "approve" and tile_can_approve:
+                action = "approve"
+
         action = promote_chat_to_approve(action, user_text, can_approve=tile_can_approve)
 
         if user_text and action == "chat":
@@ -192,8 +266,9 @@ def wait_node(state: dict[str, Any]) -> dict[str, Any]:
                         "architect design package.",
                         svc=svc,
                     )
+                    updated = append_service_message(svc, note, node="distributed", pending=user_text)
                     return {
-                        "services": services,
+                        "services": replace_service(services, updated),
                         "active_service_id": service_id,
                         "route": "wait",
                         "wait_kind": "distributed",
@@ -230,6 +305,46 @@ def wait_node(state: dict[str, Any]) -> dict[str, Any]:
             "messages": msgs,
         }
 
+    if user_text and action == "chat":
+        consult = consult_user_turn(
+            pending=user_text,
+            last_assistant=_last_assistant(
+                list(state.get("messages") or []),
+                str(state.get("pending_assistant_message") or ""),
+            ),
+            keynotes=str(state.get("discussion_digest") or ""),
+            phase=wait_kind or "session",
+        )
+        if consult.needs_clarification:
+            note = close_user_message(
+                consult.clarify_message,
+                approve_kind=wait_kind if session_can_approve else "",
+                can_approve=session_can_approve,
+                mode="step" if session_can_approve else "idle",
+            )
+            return with_session_digest(
+                {**state, "discussion_digest": consult.keynotes},
+                {
+                    "pending_user_feedback": "",
+                    "pending_assistant_message": note,
+                    "route": "wait",
+                    "wait_kind": wait_kind,
+                    "can_approve": session_can_approve,
+                    "messages": msgs
+                    + [
+                        {"role": "user", "content": user_text, "node": wait_kind or "chat"},
+                        {"role": "assistant", "content": note, "node": wait_kind or "chat"},
+                    ],
+                },
+                pending="",
+                assistant=note,
+                phase=wait_kind or "session",
+            )
+        state = dict(state)
+        state["discussion_digest"] = consult.keynotes
+        if consult.kind == "approve" and session_can_approve:
+            action = "approve"
+
     action = promote_chat_to_approve(action, user_text, can_approve=session_can_approve)
 
     if user_text and action == "chat":
@@ -244,13 +359,19 @@ def wait_node(state: dict[str, Any]) -> dict[str, Any]:
                 mode="idle",
                 can_approve=False,
             )
-            return {
-                "pending_assistant_message": note,
-                "route": "wait",
-                "wait_kind": "idle",
-                "can_approve": False,
-                "messages": msgs + [{"role": "assistant", "content": note, "node": "idle"}],
-            }
+            return with_session_digest(
+                state,
+                {
+                    "pending_assistant_message": note,
+                    "route": "wait",
+                    "wait_kind": "idle",
+                    "can_approve": False,
+                    "messages": msgs + [{"role": "assistant", "content": note, "node": "idle"}],
+                },
+                pending=user_text,
+                assistant=note,
+                phase="idle",
+            )
         chat_route = {
             "confirm_topology": "classify",
             "approve_features": "feature_discuss",
@@ -262,6 +383,7 @@ def wait_node(state: dict[str, Any]) -> dict[str, Any]:
         return {
             "pending_user_feedback": user_text,
             "route": chat_route,
+            "discussion_digest": str(state.get("discussion_digest") or ""),
             "messages": msgs,
         }
 

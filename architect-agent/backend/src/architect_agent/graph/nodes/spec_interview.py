@@ -9,8 +9,9 @@ from architect_agent.config import get_settings
 from architect_agent.context_budget import (
     GRILL_ME_DIGEST,
     estimate_tokens,
-    format_history_tail,
+    format_phase_context,
     maybe_compact_business_spec,
+    refresh_discussion_digest,
 )
 from architect_agent.graph.state import DesignGraphState
 from architect_agent.graph.nodes.common import invoke_json
@@ -20,12 +21,14 @@ from architect_agent.interview_progress import (
     format_asked_block,
     format_uncovered_block,
     is_repeat_question,
+    is_vague_question,
     message_for_user_stop,
     uncovered_checklist,
     user_requests_approve_anyway,
     user_requests_ready,
 )
 from architect_agent.json_util import recover_interview_payload_from_prose
+from architect_agent.query_intent import user_message_first_block
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +41,9 @@ def spec_interview_node(state: DesignGraphState) -> dict[str, Any]:
     business_spec = maybe_compact_business_spec(state.get("business_spec") or "")
     pending_user_feedback = state.get("pending_user_feedback") or ""
     prior = [m for m in (state.get("messages") or []) if m.get("node") == "spec_interview"]
-    history_tail = format_history_tail(prior)
+    history_tail = format_phase_context(
+        str(state.get("discussion_digest") or ""), prior, "spec_interview"
+    )
     asked_titles = extract_question_titles(prior)
     prior_assistant_texts = [
         str(m.get("content") or "") for m in prior if m.get("role") == "assistant"
@@ -50,6 +55,7 @@ def spec_interview_node(state: DesignGraphState) -> dict[str, Any]:
         fold = invoke_json(
             system=(
                 "Update the living business specification markdown from one interview answer.\n"
+                f"{user_message_first_block(pending_user_feedback)}"
                 "Merge the answer into the correct sections. Keep the document concise.\n"
                 "Do NOT append raw Q&A, interview transcripts, or growing 'notes' logs.\n"
                 "Prefer rewriting bullets over adding new narrative paragraphs.\n"
@@ -57,7 +63,7 @@ def spec_interview_node(state: DesignGraphState) -> dict[str, Any]:
             ),
             user=(
                 f"Spec:\n{business_spec}\n\n"
-                f"User answer:\n{pending_user_feedback}\n"
+                f"Latest user message:\n{pending_user_feedback}\n"
             ),
             recover_prose=recover_interview_payload_from_prose,
             prefer_prose=True,
@@ -72,13 +78,14 @@ def spec_interview_node(state: DesignGraphState) -> dict[str, Any]:
                 fold = invoke_json(
                     system=(
                         "Update the living business specification markdown from one interview answer.\n"
+                        f"{user_message_first_block(pending_user_feedback)}"
                         "Ignore pure process instructions like 'stop asking' / 'approve'.\n"
                         "Merge any real product decisions into the correct sections.\n"
                         'Return JSON: {"updated_business_spec": string}.'
                     ),
                     user=(
                         f"Spec:\n{business_spec}\n\n"
-                        f"User answer:\n{pending_user_feedback}\n"
+                        f"Latest user message:\n{pending_user_feedback}\n"
                     ),
                     recover_prose=recover_interview_payload_from_prose,
                     prefer_prose=True,
@@ -100,6 +107,13 @@ def spec_interview_node(state: DesignGraphState) -> dict[str, Any]:
             "pending_user_feedback": "",
             "pending_assistant_message": assistant_message,
             "publish_requested": False,
+            "discussion_digest": refresh_discussion_digest(
+                str(state.get("discussion_digest") or ""),
+                pending=pending_user_feedback,
+                assistant=assistant_message,
+                phase="spec_interview",
+                spec=business_spec,
+            ),
             "messages": [
                 {
                     "role": "assistant",
@@ -113,7 +127,8 @@ def spec_interview_node(state: DesignGraphState) -> dict[str, Any]:
         system=(
             "You are the Architect agent's specification interviewer "
             "(merged Business Analyst + Architect discovery).\n"
-            f"{GRILL_ME_DIGEST}\n\n"
+            f"{GRILL_ME_DIGEST}\n"
+            f"{user_message_first_block(pending_user_feedback)}\n"
             "Respond ONLY with a single JSON object.\n"
             "Escape newlines inside string values as \\n.\n"
             "{\n"
@@ -134,8 +149,7 @@ def spec_interview_node(state: DesignGraphState) -> dict[str, Any]:
             f"Uncovered checklist topics (ask the first/highest unless user answer unlocks ready):\n"
             f"{format_uncovered_block(open_items)}\n\n"
             f"Recent turns in this node:\n{history_tail}\n\n"
-            f"Latest user answer already folded into the spec (if any):\n"
-            f"{pending_user_feedback or '(none)'}\n\n"
+            f"Latest user message:\n{pending_user_feedback or '(none)'}\n\n"
             "If the user asked to stop questioning: do NOT ask another question. "
             "If the living spec is too thin to sketch a design, be honest about the gaps "
             "and set ready_for_design=false unless they said approve anyway.\n"
@@ -149,7 +163,7 @@ def spec_interview_node(state: DesignGraphState) -> dict[str, Any]:
     if estimate_tokens(business_spec) > get_settings().context_spec_soft_tokens:
         business_spec = maybe_compact_business_spec(business_spec)
 
-    assistant_message = assessment.get("assistant_message") or "Please share more detail."
+    assistant_message = assessment.get("assistant_message") or ""
     ready = bool(assessment.get("ready_for_design"))
     if user_requests_ready(pending_user_feedback):
         assistant_message, ready = message_for_user_stop(
@@ -169,6 +183,8 @@ def spec_interview_node(state: DesignGraphState) -> dict[str, Any]:
             assistant_message, ready = fallback_question(business_spec, asked_titles)
         elif (not ready) and not open_items and "❓" in assistant_message:
             assistant_message, ready = fallback_question(business_spec, asked_titles)
+        elif is_vague_question(assistant_message):
+            assistant_message, ready = fallback_question(business_spec, asked_titles)
 
     return {
         "business_spec": business_spec,
@@ -177,6 +193,13 @@ def spec_interview_node(state: DesignGraphState) -> dict[str, Any]:
         "pending_user_feedback": "",
         "pending_assistant_message": assistant_message,
         "publish_requested": False,
+        "discussion_digest": refresh_discussion_digest(
+            str(state.get("discussion_digest") or ""),
+            pending=pending_user_feedback,
+            assistant=assistant_message,
+            phase="spec_interview",
+            spec=business_spec,
+        ),
         "messages": [
             {"role": "assistant", "content": assistant_message, "node": "spec_interview"}
         ],

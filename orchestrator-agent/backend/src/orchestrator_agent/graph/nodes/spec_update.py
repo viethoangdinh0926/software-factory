@@ -7,6 +7,7 @@ from typing import Any
 from orchestrator_agent.graph.nodes.common import (
     active_service,
     answer_current_artifacts,
+    append_service_message,
     close_after_feedback,
     close_user_message,
     invoke_json,
@@ -37,17 +38,19 @@ def _distributed_wait() -> dict[str, Any]:
     }
 
 
-def _with_message(svc: dict[str, Any], assistant: str, *, node: str = "spec_update") -> tuple[dict[str, Any], str]:
+def _with_message(
+    svc: dict[str, Any], assistant: str, *, node: str = "spec_update", pending: str = ""
+) -> tuple[dict[str, Any], str]:
     updated = dict(svc)
     closed = close_user_message(assistant, svc=updated)
-    msgs = list(updated.get("messages") or [])
-    msgs.append({"role": "assistant", "content": closed, "node": node})
-    updated["messages"] = msgs
+    updated = append_service_message(updated, closed, node=node, pending=pending)
     return updated, closed
 
 
-def _finish(state: dict[str, Any], svc: dict[str, Any], assistant: str) -> dict[str, Any]:
-    updated, closed = _with_message(svc, assistant)
+def _finish(
+    state: dict[str, Any], svc: dict[str, Any], assistant: str, *, pending: str = ""
+) -> dict[str, Any]:
+    updated, closed = _with_message(svc, assistant, pending=pending)
     return {
         "services": replace_service(list(state.get("services") or []), updated),
         "pending_user_feedback": "",
@@ -143,7 +146,7 @@ def spec_update_node(state: dict[str, Any]) -> dict[str, Any]:
         }:
             kept["status"] = "sent"
         assistant = close_after_feedback(FULL_PHASE_REFUSAL, pending=pending, changed=False)
-        return _finish(state, kept, assistant)
+        return _finish(state, kept, assistant, pending=pending)
 
     existing_features = str(svc.get("feature_spec") or "").strip()
     existing_bugs = str(svc.get("bug_spec") or "").strip()
@@ -159,8 +162,9 @@ def spec_update_node(state: dict[str, Any]) -> dict[str, Any]:
                 f"Last shipped spec version: {version}"
             ),
             system_extra=service_focus_system(name),
+            digest=str(svc.get("discussion_digest") or ""),
         )
-        return _finish(state, svc, assistant)
+        return _finish(state, svc, assistant, pending=pending)
 
     if not pending and str(svc.get("status") or "") == "sent":
         assistant = (
@@ -169,7 +173,7 @@ def spec_update_node(state: dict[str, Any]) -> dict[str, Any]:
             "version. A full update that re-walks every planning phase waits for a "
             "new architect design package."
         )
-        return _finish(state, svc, assistant)
+        return _finish(state, svc, assistant, pending=pending)
 
     updated, assistant = discuss_spec_update_for(state, svc, pending)
-    return _finish(state, updated, assistant)
+    return _finish(state, updated, assistant, pending=pending)

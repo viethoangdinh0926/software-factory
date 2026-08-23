@@ -5,6 +5,7 @@ from typing import Any
 from orchestrator_agent.graph.nodes.common import (
     active_service,
     answer_current_artifacts,
+    append_service_message,
     close_after_feedback,
     close_user_message,
     invoke_json,
@@ -122,10 +123,7 @@ def draft_relations_for(
     updated = dict(svc)
     _store_relations(updated, spec)
     assistant = close_user_message(assistant, svc=updated)
-    svc_msgs = list(updated.get("messages") or [])
-    svc_msgs.append({"role": "assistant", "content": assistant, "node": "relations"})
-    updated["messages"] = svc_msgs
-    return updated
+    return append_service_message(updated, assistant, node="relations", pending=pending)
 
 
 draft_comms_for = draft_relations_for
@@ -144,6 +142,7 @@ def _answer_from_current_spec(
             f"Current entity relationships (source of truth):\n{existing[:12000]}"
         ),
         system_extra=service_focus_system(name),
+        digest=str(svc.get("discussion_digest") or ""),
     )
 
 
@@ -156,6 +155,7 @@ def _finish_service_turn(
     status: str | None = None,
     api_design: str | None = None,
     entity_relationships: str | None = None,
+    pending: str = "",
 ) -> dict[str, Any]:
     updated = dict(svc)
     spec = entity_relationships if entity_relationships is not None else api_design
@@ -165,9 +165,7 @@ def _finish_service_turn(
     if status is not None:
         updated["status"] = status
     assistant = close_user_message(assistant, svc=updated)
-    svc_msgs = list(updated.get("messages") or [])
-    svc_msgs.append({"role": "assistant", "content": assistant, "node": node})
-    updated["messages"] = svc_msgs
+    updated = append_service_message(updated, assistant, node=node, pending=pending)
     return {
         "services": replace_service(list(state.get("services") or []), updated),
         "pending_user_feedback": "",
@@ -186,7 +184,9 @@ def relations_node(state: dict[str, Any]) -> dict[str, Any]:
     prior_status = str(svc.get("status") or "awaiting_relations")
     if pending and existing and not is_revision_request(pending):
         assistant = _answer_from_current_spec(state, svc, pending, existing)
-        return _finish_service_turn(state, svc, assistant=assistant, node="relations")
+        return _finish_service_turn(
+            state, svc, assistant=assistant, node="relations", pending=pending
+        )
 
     updated = draft_relations_for(state, svc, pending)
     assistant = (updated.get("messages") or [{}])[-1].get("content") or ""

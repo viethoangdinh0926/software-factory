@@ -5,6 +5,7 @@ from typing import Any
 from orchestrator_agent.graph.nodes.common import (
     active_service,
     answer_current_artifacts,
+    append_service_message,
     approve_label,
     close_after_feedback,
     close_user_message,
@@ -13,8 +14,10 @@ from orchestrator_agent.graph.nodes.common import (
     replace_service,
     service_focus_system,
     service_focus_user_block,
+    session_phase_context,
     skill_digest,
     spec_delta_is_ready,
+    with_session_digest,
 )
 from orchestrator_agent.json_util import recover_markdown_field_from_prose
 from orchestrator_agent.query_intent import FEEDBACK_RESOLUTION_RULES, is_revision_request
@@ -40,12 +43,10 @@ def stack_research_node(state: dict[str, Any]) -> dict[str, Any]:
                     f"Current tech stack:\n{existing_stack[:6000]}"
                 ),
                 system_extra=service_focus_system(name),
+                digest=str(svc.get("discussion_digest") or ""),
             )
             assistant = close_user_message(assistant, svc=svc)
-            updated = dict(svc)
-            svc_msgs = list(updated.get("messages") or [])
-            svc_msgs.append({"role": "assistant", "content": assistant, "node": "stack"})
-            updated["messages"] = svc_msgs
+            updated = append_service_message(svc, assistant, node="stack", pending=pending)
             return {
                 "services": replace_service(list(state.get("services") or []), updated),
                 "pending_user_feedback": "",
@@ -72,18 +73,25 @@ def stack_research_node(state: dict[str, Any]) -> dict[str, Any]:
                     f"Current tech stack:\n{existing_stack[:6000]}\n"
                     f"Package excerpt:\n{(state.get('package_markdown') or '')[:4000]}"
                 ),
+                digest=str(state.get("discussion_digest") or ""),
             )
-            return {
-                "pending_user_feedback": "",
-                "pending_assistant_message": assistant,
-                "phase": "stack",
-                "route": "wait",
-                "wait_kind": "approve_plan",
-                "can_approve": True,
-                "approve_kind": "approve_plan",
-                "approve_label": approve_label("approve_plan"),
-                "messages": [{"role": "assistant", "content": assistant, "node": "stack"}],
-            }
+            return with_session_digest(
+                state,
+                {
+                    "pending_user_feedback": "",
+                    "pending_assistant_message": assistant,
+                    "phase": "stack",
+                    "route": "wait",
+                    "wait_kind": "approve_plan",
+                    "can_approve": True,
+                    "approve_kind": "approve_plan",
+                    "approve_label": approve_label("approve_plan"),
+                    "messages": [{"role": "assistant", "content": assistant, "node": "stack"}],
+                },
+                pending=pending,
+                assistant=assistant,
+                phase="stack",
+            )
         subject = "standalone application from the architect design package"
 
     query = f"popular tech stack development tools {subject}"
@@ -134,8 +142,9 @@ def stack_research_node(state: dict[str, Any]) -> dict[str, Any]:
             "}\n"
         )
         user = (
+            f"{session_phase_context(state, 'stack')}\n"
             f"Subject: {subject}\n"
-            f"User feedback:\n{pending or '(none)'}\n"
+            f"Latest user message:\n{pending or '(none)'}\n"
             f"Agreed features:\n{state.get('feature_spec') or '(none)'}\n"
             f"Prior stack:\n{state.get('tech_stack') or '(none)'}\n"
             f"Web search ({'live' if live else 'unavailable / stub'}):\n{search_text}\n"
@@ -176,9 +185,7 @@ def stack_research_node(state: dict[str, Any]) -> dict[str, Any]:
         updated["status"] = "awaiting_stack"
         assistant = close_user_message(assistant, svc=updated)
         msgs = [{"role": "assistant", "content": assistant, "node": "stack"}]
-        svc_msgs = list(updated.get("messages") or [])
-        svc_msgs.append({"role": "assistant", "content": assistant, "node": "stack"})
-        updated["messages"] = svc_msgs
+        updated = append_service_message(updated, assistant, node="stack", pending=pending)
         return {
             "services": replace_service(list(state.get("services") or []), updated),
             "pending_user_feedback": "",
@@ -195,20 +202,26 @@ def stack_research_node(state: dict[str, Any]) -> dict[str, Any]:
         assistant, approve_kind="approve_plan", can_approve=True
     )
     msgs = [{"role": "assistant", "content": assistant, "node": "stack"}]
-    return {
-        "tech_stack": stack,
-        "search_notes": notes,
-        "app_status": "awaiting_stack",
-        "pending_user_feedback": "",
-        "pending_assistant_message": assistant,
-        "phase": "stack",
-        "route": "wait",
-        "wait_kind": "approve_plan",
-        "can_approve": True,
-        "approve_kind": "approve_plan",
-        "approve_label": approve_label("approve_plan"),
-        "messages": msgs,
-    }
+    return with_session_digest(
+        state,
+        {
+            "tech_stack": stack,
+            "search_notes": notes,
+            "app_status": "awaiting_stack",
+            "pending_user_feedback": "",
+            "pending_assistant_message": assistant,
+            "phase": "stack",
+            "route": "wait",
+            "wait_kind": "approve_plan",
+            "can_approve": True,
+            "approve_kind": "approve_plan",
+            "approve_label": approve_label("approve_plan"),
+            "messages": msgs,
+        },
+        pending=pending,
+        assistant=assistant,
+        phase="stack",
+    )
 
 
 def emit_plan_node(state: dict[str, Any]) -> dict[str, Any]:
@@ -231,10 +244,7 @@ def emit_plan_node(state: dict[str, Any]) -> dict[str, Any]:
                 "first, or wait for a new architect design package for a full-phase update.",
                 svc=svc,
             )
-            updated = dict(svc)
-            svc_msgs = list(updated.get("messages") or [])
-            svc_msgs.append({"role": "assistant", "content": note, "node": "emit"})
-            updated["messages"] = svc_msgs
+            updated = append_service_message(svc, note, node="emit")
             return {
                 "services": replace_service(list(state.get("services") or []), updated),
                 "phase": "distributed",
@@ -280,14 +290,12 @@ def emit_plan_node(state: dict[str, Any]) -> dict[str, Any]:
         updated["shipped_feature_spec"] = str(svc.get("feature_spec") or "").strip()
         updated["shipped_bug_spec"] = str(svc.get("bug_spec") or "").strip()
         updated["spec_changelog"] = changelog
-        svc_msgs = list(updated.get("messages") or [])
         sent_msg = close_user_message(
             f"Plan spec v{spec_version} ({update_kind}) for **{name}** queued for the "
             f"engineer (design `{session_id}`, microservice `{mid}`).",
             svc=updated,
         )
-        svc_msgs.append({"role": "assistant", "content": sent_msg, "node": "emit"})
-        updated["messages"] = svc_msgs
+        updated = append_service_message(updated, sent_msg, node="emit")
         action = {
             "action": "plan",
             "design_session_id": session_id,
@@ -326,16 +334,21 @@ def emit_plan_node(state: dict[str, Any]) -> dict[str, Any]:
         "microservice_id": None,
         "markdown": spec,
     }
-    return {
-        "plan_spec": spec,
-        "app_status": "sent",
-        "pending_engineer_actions": [action],
-        "phase": "idle",
-        "route": "wait",
-        "wait_kind": "idle",
-        "can_approve": False,
-        "approve_kind": "",
-        "approve_label": "",
-        "pending_assistant_message": sent_msg,
-        "messages": [{"role": "assistant", "content": sent_msg, "node": "emit"}],
-    }
+    return with_session_digest(
+        state,
+        {
+            "plan_spec": spec,
+            "app_status": "sent",
+            "pending_engineer_actions": [action],
+            "phase": "idle",
+            "route": "wait",
+            "wait_kind": "idle",
+            "can_approve": False,
+            "approve_kind": "",
+            "approve_label": "",
+            "pending_assistant_message": sent_msg,
+            "messages": [{"role": "assistant", "content": sent_msg, "node": "emit"}],
+        },
+        assistant=sent_msg,
+        phase="emit",
+    )

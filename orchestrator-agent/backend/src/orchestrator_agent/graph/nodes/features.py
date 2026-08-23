@@ -7,6 +7,7 @@ from typing import Any
 from orchestrator_agent.graph.nodes.common import (
     active_service,
     answer_current_artifacts,
+    append_service_message,
     approve_label,
     close_after_feedback,
     close_user_message,
@@ -16,7 +17,9 @@ from orchestrator_agent.graph.nodes.common import (
     replace_service,
     service_focus_system,
     service_focus_user_block,
+    session_phase_context,
     skill_digest,
+    with_session_digest,
 )
 from orchestrator_agent.json_util import recover_markdown_field_from_prose
 from orchestrator_agent.query_intent import FEEDBACK_RESOLUTION_RULES, is_revision_request
@@ -121,10 +124,7 @@ def discuss_features_for(
     updated["search_notes"] = search_text[:1500]
     updated["status"] = status
     assistant = close_user_message(assistant, svc=updated)
-    svc_msgs = list(updated.get("messages") or [])
-    svc_msgs.append({"role": "assistant", "content": assistant, "node": "features"})
-    updated["messages"] = svc_msgs
-    return updated
+    return append_service_message(updated, assistant, node="features", pending=pending)
 
 
 def _standalone_wait(ready: bool) -> dict[str, Any]:
@@ -158,11 +158,9 @@ def feature_discuss_node(state: dict[str, Any]) -> dict[str, Any]:
                     f"Current v1 features / functionality:\n{existing[:8000]}"
                 ),
                 system_extra=service_focus_system(name),
+                digest=str(svc.get("discussion_digest") or ""),
             )
-            updated = dict(svc)
-            svc_msgs = list(updated.get("messages") or [])
-            svc_msgs.append({"role": "assistant", "content": assistant, "node": "features"})
-            updated["messages"] = svc_msgs
+            updated = append_service_message(svc, assistant, node="features", pending=pending)
             return {
                 "services": replace_service(list(state.get("services") or []), updated),
                 "pending_user_feedback": "",
@@ -189,14 +187,21 @@ def feature_discuss_node(state: dict[str, Any]) -> dict[str, Any]:
                 f"Current v1 features / functionality:\n{existing[:8000]}\n"
                 f"Package excerpt:\n{(state.get('package_markdown') or '')[:4000]}"
             ),
+            digest=str(state.get("discussion_digest") or ""),
         )
         ready = features_are_concrete(existing)
-        return {
-            "pending_user_feedback": "",
-            "pending_assistant_message": assistant,
-            "messages": [{"role": "assistant", "content": assistant, "node": "features"}],
-            **_standalone_wait(ready),
-        }
+        return with_session_digest(
+            state,
+            {
+                "pending_user_feedback": "",
+                "pending_assistant_message": assistant,
+                "messages": [{"role": "assistant", "content": assistant, "node": "features"}],
+                **_standalone_wait(ready),
+            },
+            pending=pending,
+            assistant=assistant,
+            phase="features",
+        )
 
     query = "standalone application product features capabilities similar systems"
     search_text, live = perform_web_search(query, num_results=5)
@@ -222,7 +227,8 @@ def feature_discuss_node(state: dict[str, Any]) -> dict[str, Any]:
             "}\n"
         ),
         user=(
-            f"User feedback:\n{pending or '(none)'}\n"
+            f"{session_phase_context(state, 'features')}\n\n"
+            f"Latest user message:\n{pending or '(none)'}\n"
             f"Prior agreed features:\n{existing or '(none — first pass)'}\n"
             f"Web search ({'live' if live else 'unavailable / stub'}):\n{search_text}\n"
             f"Package excerpt:\n{(state.get('package_markdown') or '')[:8000]}\n"
@@ -248,12 +254,18 @@ def feature_discuss_node(state: dict[str, Any]) -> dict[str, Any]:
         approve_kind="approve_features" if ready else "",
         can_approve=ready,
     )
-    return {
-        "feature_spec": spec,
-        "search_notes": str(result.get("search_notes") or search_text[:1200]),
-        "app_status": "awaiting_features" if ready else "discussing_features",
-        "pending_user_feedback": "",
-        "pending_assistant_message": assistant,
-        "messages": [{"role": "assistant", "content": assistant, "node": "features"}],
-        **_standalone_wait(ready),
-    }
+    return with_session_digest(
+        state,
+        {
+            "feature_spec": spec,
+            "search_notes": str(result.get("search_notes") or search_text[:1200]),
+            "app_status": "awaiting_features" if ready else "discussing_features",
+            "pending_user_feedback": "",
+            "pending_assistant_message": assistant,
+            "messages": [{"role": "assistant", "content": assistant, "node": "features"}],
+            **_standalone_wait(ready),
+        },
+        pending=pending,
+        assistant=assistant,
+        phase="features",
+    )

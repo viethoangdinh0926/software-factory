@@ -35,6 +35,10 @@ class StubChatModel(BaseChatModel):
         lower = blob.lower()
         if "user turn intent classifier" in lower:
             payload = _stub_turn_intent(blob)
+        elif "conversation keynotes consultant" in lower:
+            payload = _stub_user_turn_consult(blob)
+        elif "compress discussion memory" in lower or "prior discussion memory:" in lower:
+            payload = {"discussion_digest": _stub_discussion_digest(blob)}
         elif "answering a question about" in lower:
             payload = {
                 "assistant_message": _stub_qa(blob),
@@ -69,6 +73,118 @@ class StubChatModel(BaseChatModel):
         return ChatResult(
             generations=[ChatGeneration(message=AIMessage(content=json.dumps(payload)))]
         )
+
+
+def _stub_user_turn_consult(blob: str) -> dict[str, Any]:
+    pending = ""
+    if "Latest user message:" in blob:
+        pending = blob.rsplit("Latest user message:", 1)[-1].strip()
+        for stop in ("Current conversation keynotes:", "Previous assistant"):
+            if stop in pending:
+                pending = pending.split(stop, 1)[0].strip()
+    last = ""
+    if "Previous assistant message:" in blob:
+        last = blob.split("Previous assistant message:", 1)[1]
+        if "Latest user message:" in last:
+            last = last.split("Latest user message:", 1)[0]
+        last = last.strip()
+    prior = ""
+    if "Current conversation keynotes:" in blob:
+        prior = blob.split("Current conversation keynotes:", 1)[1].strip()
+        if prior == "(none)":
+            prior = ""
+    compact = re.sub(r"\s+", " ", pending).strip().lower().rstrip(".!")
+    last_l = last.lower()
+    asking_confirm = (
+        "confirm, approve, or agree" in last_l or "if this looks right" in last_l
+    )
+    if re.search(r"\b(weather|asdf|qwerty|lorem ipsum)\b", compact):
+        return {
+            "relevant": False,
+            "vague": False,
+            "kind": "unrelated",
+            "keynotes": prior,
+            "clarify_message": (
+                "That does not address the open point in my previous message. "
+                "Please answer that concern, or clarify what you meant, so I can continue."
+            ),
+        }
+    vague_only = compact in {
+        "maybe",
+        "idk",
+        "i don't know",
+        "i dont know",
+        "dunno",
+        "whatever",
+        "not sure",
+        "hmm",
+        "huh",
+    }
+    if vague_only or (compact in {"ok", "okay", "k"} and not asking_confirm):
+        return {
+            "relevant": True,
+            "vague": True,
+            "kind": "unclear",
+            "keynotes": prior,
+            "clarify_message": (
+                "I am not sure how that answers the open point in my previous message. "
+                "Please address that concern or spell out what you want changed."
+            ),
+        }
+    kind = "complement"
+    if compact in {
+        "looks good",
+        "lgtm",
+        "approve",
+        "approved",
+        "next step",
+        "move on",
+        "wrap up",
+    } or (compact in {"ok", "okay"} and asking_confirm):
+        kind = "approve"
+    elif "?" in pending or compact.startswith(("why", "what", "which", "how", "who")):
+        kind = "answer"
+    elif "worried" in compact or "concern" in compact:
+        kind = "concern"
+    lines = [prior] if prior else ["## Settled decisions"]
+    if pending:
+        item = f"- Settled from user: {pending[:400]}"
+        if item.lower() not in prior.lower():
+            lines.append(item)
+    return {
+        "relevant": True,
+        "vague": False,
+        "kind": kind,
+        "keynotes": "\n".join(line for line in lines if line).strip(),
+        "clarify_message": "",
+    }
+
+
+def _stub_discussion_digest(blob: str) -> str:
+    prior = ""
+    if "Prior discussion memory:" in blob:
+        prior = blob.split("Prior discussion memory:", 1)[1]
+        for marker in ("Phase:", "Latest user message:"):
+            if marker in prior:
+                prior = prior.split(marker, 1)[0]
+                break
+    prior = prior.strip()
+    latest = ""
+    if "Latest user message:" in blob:
+        latest = blob.split("Latest user message:", 1)[1]
+        for marker in ("Latest assistant note:", "Artifact excerpt:"):
+            if marker in latest:
+                latest = latest.split(marker, 1)[0]
+                break
+    latest = latest.strip()
+    if latest in {"(none)", ""}:
+        latest = ""
+    lines = [prior] if prior else ["## Settled decisions"]
+    if latest:
+        item = f"- Settled from user: {latest[:400]}"
+        if item.lower() not in prior.lower():
+            lines.append(item)
+    return "\n".join(line for line in lines if line).strip()
 
 
 def _stub_help_answering_questions(text: str) -> bool:

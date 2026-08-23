@@ -9,7 +9,12 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from architect_agent.context_budget import EXPLANATION_DEPTH_DIGEST
+from architect_agent.context_budget import (
+    EXPLANATION_DEPTH_DIGEST,
+    consult_user_turn,
+    format_phase_context,
+    refresh_discussion_digest,
+)
 from architect_agent.json_util import (
     parse_llm_json_object,
     recover_architecture_payload_from_prose,
@@ -17,6 +22,7 @@ from architect_agent.json_util import (
 from architect_agent.llm import get_chat_model
 from architect_agent.query_intent import (
     SUGGESTED_ANSWER_RULES,
+    USER_MESSAGE_FIRST_RULES,
     extract_http_endpoints,
     format_agreed_endpoints,
     is_revision_request,
@@ -146,6 +152,7 @@ def _artifacts_for_qa(state: dict[str, Any]) -> str:
         f"Core microservices:\n{(state.get('api_contracts') or '')[:6000]}",
         f"Communication schemes:\n{(state.get('communication_schemes') or '')[:4000]}",
         f"FMEA notes:\n{(state.get('fmea_notes') or '')[:2500]}",
+        f"Discussion memory:\n{(state.get('discussion_digest') or '')[:4000]}",
         f"Design diagram:\n{(state.get('design_diagram') or '')[:3000]}",
         f"Design justification:\n{(state.get('design_justification') or '')[:2500]}",
         f"Market grade: {state.get('market_evaluation_grade') or '(none)'}",
@@ -209,6 +216,56 @@ def _suggested_answer_context(state: dict[str, Any]) -> str:
     return "\n\n".join(parts)
 
 
+def gate_user_chat(
+    state: dict[str, Any],
+    user_text: str,
+    *,
+    action: str,
+    node: str,
+    stay: dict[str, Any],
+) -> tuple[str, str, dict[str, Any] | None]:
+    """Consult the LLM on this isolated-chat reply.
+
+    Returns (keynotes, kind, clarification_payload_or_None).
+    If the payload is set, the wait node must return it and not proceed.
+    """
+    keynotes = str(state.get("discussion_digest") or "")
+    if action != "chat" or not (user_text or "").strip():
+        return keynotes, "", None
+    last = _last_assistant_text(state)
+    if not last.strip():
+        return keynotes, "", None
+    consult = consult_user_turn(
+        pending=user_text,
+        last_assistant=last,
+        keynotes=keynotes,
+        phase=node,
+    )
+    if consult.needs_clarification:
+        msg = without_user_echo(
+            (consult.clarify_message or "").strip()
+            or (
+                "Please address the open point in my previous message, or clarify "
+                "what you meant, so I can continue this conversation."
+            ),
+            user_text,
+        )
+        payload = {
+            **stay,
+            "pending_user_feedback": "",
+            "pending_assistant_message": msg,
+            "stay_on_interrupt": True,
+            "publish_requested": False,
+            "discussion_digest": keynotes,
+            "messages": [
+                {"role": "user", "content": user_text, "node": node},
+                {"role": "assistant", "content": msg, "node": node},
+            ],
+        }
+        return keynotes, consult.kind, payload
+    return consult.keynotes or keynotes, consult.kind, None
+
+
 def answer_open_query(state: dict[str, Any], question: str, *, node: str) -> str:
     """Answer a user question from current artifacts without rewriting the step."""
     q = (question or "").strip()
@@ -221,11 +278,17 @@ def answer_open_query(state: dict[str, Any], question: str, *, node: str) -> str
     if grade and "grade" in q.lower() and not is_revision_request(q):
         return f"The market evaluation grade for this design version is **{grade}**."
     extra_user = f"\n\n{_suggested_answer_context(state)}"
+    history = format_phase_context(
+        str(state.get("discussion_digest") or ""),
+        [m for m in (state.get("messages") or []) if isinstance(m, dict) and m.get("node") == node],
+        node,
+    )
     result = invoke_json(
         system=(
             "Answer the user's question from the current artifacts. This is Q&A "
             "before they approve this workflow step.\n"
             f"Current node: {node}.\n"
+            f"{USER_MESSAGE_FIRST_RULES}\n"
             f"{SUGGESTED_ANSWER_RULES}\n"
             "Use concrete facts (numbers, service names, owned objects, communication "
             "schemes/protocols, CAP choices).\n"
@@ -241,7 +304,10 @@ def answer_open_query(state: dict[str, Any], question: str, *, node: str) -> str
             "Do not rewrite artifacts. assistant_message is the full answer.\n"
             'Respond ONLY with JSON: {"assistant_message": string}'
         ),
-        user=f"{_artifacts_for_qa(state)}{extra_user}\n\nUser question:\n{q}",
+        user=(
+            f"{history}\n\n{_artifacts_for_qa(state)}{extra_user}\n\n"
+            f"Latest user message:\n{q}"
+        ),
         recover_prose=_qa_recover,
         prefer_prose=True,
         retry_hint=_QA_RETRY_HINT,
@@ -264,12 +330,21 @@ def answer_before_approve(
         answer_open_query(state, user_text, node=node),
         changed=False,
     )
+    digest = refresh_discussion_digest(
+        str(state.get("discussion_digest") or ""),
+        pending=user_text,
+        assistant=answer,
+        phase=str(state.get("phase") or node),
+        track=str(state.get("design_track") or ""),
+        spec=str(state.get("business_spec") or ""),
+    )
     return {
         **base,
         "pending_user_feedback": "",
         "pending_assistant_message": answer,
         "stay_on_interrupt": True,
         "publish_requested": False,
+        "discussion_digest": digest,
         "messages": [
             {"role": "user", "content": user_text, "node": node},
             {"role": "assistant", "content": answer, "node": node},
@@ -365,6 +440,13 @@ def assistant_message_is_thin(text: str) -> bool:
     if not body:
         return True
     if _THIN_STATUS_RE.match(body):
+        return True
+    lower = body.lower()
+    if (
+        "need more information to proceed" in lower
+        or "provide more details about your system" in lower
+        or "please share more detail" in lower
+    ):
         return True
     # Strip the system next-action footer if a caller already appended it.
     core = re.split(r"\n\*\*What you can do next\*\*", body, maxsplit=1)[0].strip()

@@ -9,10 +9,17 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from orchestrator_agent.discussion_memory import (
+    DISCUSSION_MEMORY_RULES,
+    consult_user_turn,
+    format_phase_context,
+    refresh_discussion_digest,
+)
 from orchestrator_agent.json_util import parse_llm_json_object
 from orchestrator_agent.llm import get_chat_model
 from orchestrator_agent.query_intent import (
     SUGGESTED_ANSWER_RULES,
+    USER_MESSAGE_FIRST_RULES,
     with_next_prompt,
     with_resolution_close,
 )
@@ -54,7 +61,9 @@ CHAT DEPTH (assistant_message) — write like a Staff Engineer briefing the team
   Depth means information density, NOT padding — no filler, no restating the question.
 - Still ask them to confirm, approve, or agree once the artifact is ready. Never tell
   them to click a button. Elaboration replaces terseness; it does not replace the
-  approve flow.
+  approve flow. If you ask a question, name a concrete choice (who initiates, which
+  capability, which store) plus a recommended default — never "tell me more" or
+  "please provide more details".
 """.strip()
 
 APPROVE_LABELS = {
@@ -323,6 +332,7 @@ def empty_service(
         "status": "planning",
         "messages": [],
         "search_notes": "",
+        "discussion_digest": "",
     }
 
 
@@ -378,18 +388,28 @@ def answer_current_artifacts(
     question: str,
     artifacts: str,
     system_extra: str = "",
+    digest: str = "",
 ) -> str:
     """Answer a question from current artifacts without rewriting the step."""
     extra = f"{system_extra.strip()}\n" if system_extra.strip() else ""
     extra = f"{SUGGESTED_ANSWER_RULES}\n{extra}"
+    digest_s = (digest or "").strip()
+    digest_block = (
+        f"DISCUSSION MEMORY (do not re-open settled items):\n{digest_s}\n\n"
+        if digest_s
+        else ""
+    )
     result = invoke_json(
         system=(
             "You are answering a question about the current workflow step before the user "
             "approves it.\n"
+            f"{USER_MESSAGE_FIRST_RULES}\n"
             f"{extra}"
             "Answer with concrete facts from the artifacts. Quote METHOD /path, stack "
             "choices, and names when relevant.\n"
             f"{EXPLANATION_DEPTH_DIGEST}\n"
+            "Honor DISCUSSION MEMORY: do not re-open settled issues or re-suggest rejected "
+            "solutions from this conversation phase.\n"
             "Since this turn is an answer (not an artifact rewrite): explain the reasoning "
             "behind whatever they asked about — why it is shaped that way, what the "
             "alternatives were, and what it costs — so they learn the architecture, not "
@@ -397,7 +417,10 @@ def answer_current_artifacts(
             "Do not ask them to confirm in place of the answer. Do not say you finalized or updated anything.\n"
             'Respond ONLY with JSON: {"assistant_message": string}'
         ),
-        user=f"Current artifacts:\n{artifacts}\n\nUser question:\n{question}",
+        user=(
+            f"{digest_block}Current artifacts:\n{artifacts}\n\n"
+            f"Latest user message:\n{question}"
+        ),
         recover_prose=_qa_recover,
     )
     return with_resolution_close(
@@ -424,7 +447,7 @@ def skill_digest() -> str:
         text = path.read_text(encoding="utf-8")[:6000]
     except OSError:
         text = "You are the Software Factory Orchestrator."
-    return f"{text}\n\n{EXPLANATION_DEPTH_DIGEST}"
+    return f"{text}\n\n{EXPLANATION_DEPTH_DIGEST}\n\n{DISCUSSION_MEMORY_RULES}"
 
 
 def service_focus_system(name: str) -> str:
@@ -440,8 +463,8 @@ def service_focus_system(name: str) -> str:
         "If the user asked a question, answer it in assistant_message with concrete facts "
         "(entity names, who initiates, what data/events flow). Do not reply with a status recap.\n"
         "If they raised a concern or asked to change something, update this service's artifact, "
-        "list **Updates to this proposal**, then ask them to confirm, approve, or agree "
-        "for that version. Never tell them to click a button."
+        "then ask them to confirm, approve, or agree for that version. Never tell them "
+        "to click a button. Do not add an **Updates to this proposal** section."
     )
 
 
@@ -468,14 +491,13 @@ def service_focus_user_block(
     section = service_contract_section(package, names) or contract
     comms = service_comms_excerpt(package, names)
     spec = str(svc.get("api_design") or "").strip()
-    history_lines: list[str] = []
-    for msg in list(svc.get("messages") or [])[-6:]:
-        role = str(msg.get("role") or "assistant")
-        content = str(msg.get("content") or "").strip()
-        if not content:
-            continue
-        cap = 700 if role == "user" else 350
-        history_lines.append(f"{role}: {content[:cap]}")
+    history = format_phase_context(
+        str(svc.get("discussion_digest") or ""),
+        list(svc.get("messages") or []),
+        str(svc.get("status") or "tile"),
+        max_tokens=1200,
+        max_turns=6,
+    )
     parts = [
         f"Focus microservice: {name}",
         f"Role: {svc.get('role_key') or ''}",
@@ -485,9 +507,101 @@ def service_focus_user_block(
         f"Agreed entity relationships:\n{relation_artifact(svc) or spec or '(not yet agreed)'}",
         f"Agreed features / functionality:\n{features or '(not yet agreed)'}",
         f"Current bugs:\n{str(svc.get('bug_spec') or '').strip() or '(none)'}",
-        "Recent tile conversation:\n" + ("\n".join(history_lines) if history_lines else "(none)"),
+        history,
         f"Latest user message:\n{pending or '(none)'}",
     ]
     if extra.strip():
         parts.append(extra.strip())
     return "\n\n".join(parts)
+
+
+def session_phase_context(state: dict[str, Any], node: str = "session") -> str:
+    """Long-term session memory plus a short recent transcript (stand-alone / classify)."""
+    return format_phase_context(
+        str(state.get("discussion_digest") or ""),
+        list(state.get("messages") or []),
+        node,
+        max_tokens=1200,
+        max_turns=8,
+    )
+
+
+def remember_session(
+    state: dict[str, Any],
+    *,
+    pending: str = "",
+    assistant: str = "",
+    phase: str = "",
+) -> str:
+    return refresh_discussion_digest(
+        str(state.get("discussion_digest") or ""),
+        pending=pending,
+        assistant=assistant,
+        phase=phase or str(state.get("phase") or "session"),
+        extra=str(state.get("package_markdown") or "")[:800],
+    )
+
+
+def with_session_digest(
+    state: dict[str, Any],
+    payload: dict[str, Any],
+    *,
+    pending: str = "",
+    assistant: str = "",
+    phase: str = "",
+) -> dict[str, Any]:
+    """Attach refreshed session discussion memory. Use only for session-scoped turns."""
+    note = assistant or str(payload.get("pending_assistant_message") or "")
+    if not note:
+        msgs = payload.get("messages") or []
+        if msgs:
+            note = str((msgs[-1] or {}).get("content") or "")
+    out = dict(payload)
+    out["discussion_digest"] = remember_session(
+        state,
+        pending=pending,
+        assistant=note,
+        phase=phase or str(payload.get("phase") or state.get("phase") or ""),
+    )
+    return out
+
+
+def remember_service(
+    svc: dict[str, Any],
+    *,
+    pending: str = "",
+    assistant: str = "",
+    phase: str = "",
+) -> dict[str, Any]:
+    updated = dict(svc)
+    extra = "\n".join(
+        part
+        for part in (
+            relation_artifact(svc)[:800],
+            str(svc.get("feature_spec") or "")[:400],
+            str(svc.get("bug_spec") or "")[:300],
+        )
+        if part
+    )
+    updated["discussion_digest"] = refresh_discussion_digest(
+        str(svc.get("discussion_digest") or ""),
+        pending=pending,
+        assistant=assistant,
+        phase=phase or str(svc.get("status") or "tile"),
+        extra=extra,
+    )
+    return updated
+
+
+def append_service_message(
+    svc: dict[str, Any],
+    assistant: str,
+    *,
+    node: str,
+    pending: str = "",
+) -> dict[str, Any]:
+    updated = dict(svc)
+    msgs = list(updated.get("messages") or [])
+    msgs.append({"role": "assistant", "content": assistant, "node": node})
+    updated["messages"] = msgs
+    return remember_service(updated, pending=pending, assistant=assistant, phase=node)

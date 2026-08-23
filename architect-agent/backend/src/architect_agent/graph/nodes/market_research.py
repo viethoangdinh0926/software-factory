@@ -9,7 +9,8 @@ from architect_agent.design_progress import (
     max_track_step,
     rewind_or_block_skip,
 )
-from architect_agent.graph.nodes.common import answer_before_approve, approve_label
+from architect_agent.graph.nodes.common import answer_before_approve, approve_label, gate_user_chat
+from architect_agent.context_budget import refresh_discussion_digest
 from architect_agent.graph.state import DesignGraphState
 from architect_agent.market_research import generate_market_evaluation_report
 from architect_agent.query_intent import (
@@ -32,6 +33,7 @@ def market_research_node(state: DesignGraphState) -> dict[str, Any]:
 
     research_blob = (
         f"{business_spec}\n\n"
+        f"## Discussion memory\n{state.get('discussion_digest') or '(none)'}\n\n"
         f"## Scale estimates\n{scale}\n\n"
         f"## Trade-off ledger\n{ledger}\n\n"
         f"## Current design diagram\n```mermaid\n{diagram}\n```\n\n"
@@ -57,6 +59,14 @@ def market_research_node(state: DesignGraphState) -> dict[str, Any]:
         "approve, or agree so we can hand off the design package. After that "
         "attempt, a new design round starts at Phase 0."
     )
+    digest = refresh_discussion_digest(
+        str(state.get("discussion_digest") or ""),
+        pending="",
+        assistant=assistant_message,
+        phase="market_research",
+        track=str(track or ""),
+        spec=f"Market grade {grade}. {summary[:400]}",
+    )
 
     return {
         "phase": "market_research",
@@ -68,6 +78,7 @@ def market_research_node(state: DesignGraphState) -> dict[str, Any]:
         "publish_requested": False,
         "resume_after_market": True,
         "stay_on_interrupt": False,
+        "discussion_digest": digest,
         "messages": [
             {"role": "assistant", "content": assistant_message, "node": "market_research"}
         ],
@@ -108,7 +119,26 @@ def market_wait_node(state: DesignGraphState) -> dict[str, Any]:
 
     action = (resume or {}).get("action", "approve")
     user_text = ((resume or {}).get("text") or "").strip()
+    keynotes, kind, clar = gate_user_chat(
+        state,
+        user_text,
+        action=action,
+        node="market_research",
+        stay={
+            "phase": "market_research",
+            "design_track": track if track in {"lld", "hld"} else "hld",
+            "design_step": int(state.get("design_step") or 0),
+            "market_evaluation_done": True,
+            "resume_after_market": True,
+            "ready_to_advance": True,
+        },
+    )
+    if clar:
+        return clar
+    state["discussion_digest"] = keynotes
     action = promote_chat_to_approve(action, user_text, can_approve=True)
+    if kind == "approve" and action == "chat":
+        action = "approve"
     msgs: list[dict[str, Any]] = []
     if action == "chat" and user_text:
         msgs.append({"role": "user", "content": user_text, "node": "market_research"})
@@ -177,6 +207,14 @@ def market_wait_node(state: DesignGraphState) -> dict[str, Any]:
     msgs.append({"role": "assistant", "content": proceed_msg, "node": "market_research"})
 
     track_name = track if track in {"lld", "hld"} else "hld"
+    digest = refresh_discussion_digest(
+        str(state.get("discussion_digest") or ""),
+        pending=user_text,
+        assistant=proceed_msg,
+        phase="market_research",
+        track=str(track_name),
+        spec=str(state.get("business_spec") or ""),
+    )
     return {
         "phase": "phase0",
         "design_track": track_name,
@@ -195,5 +233,6 @@ def market_wait_node(state: DesignGraphState) -> dict[str, Any]:
         "carry_change": "",
         "rewalk_until_step": max_track_step(track_name),
         "stay_on_interrupt": True,
+        "discussion_digest": digest,
         "messages": msgs,
     }

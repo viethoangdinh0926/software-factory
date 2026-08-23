@@ -52,6 +52,6 @@ if "Monolith" not in s.design_diagram and "monolith" not in s.design_diagram.low
 if "Notify" in s.design_diagram:
     sys.exit("expected Notify removed")
 last = s.messages[-1]["content"] if s.messages else ""
-if "Updates to this proposal" not in last:
-    sys.exit(f"expected updates changelog, got {last[:240]!r}")
+if "Updates to this proposal" in last:
+    sys.exit(f"did not expect updates changelog, got {last[:240]!r}")
 print("OK", flush=True)

@@ -9,15 +9,17 @@ from architect_agent.context_budget import (
     INTERVIEW_TECHNIQUE_DIGEST,
     JSON_OUTPUT_DIGEST,
     PRINCIPAL_ARCHITECT_DIGEST,
-    format_history_tail,
+    format_phase_context,
     maybe_compact_business_spec,
     maybe_compact_design_justification,
+    refresh_discussion_digest,
 )
 from architect_agent.graph.nodes.common import (
     HLD_STEP_TITLES,
     answer_before_approve,
     approve_label,
     ensure_step_briefing,
+    gate_user_chat,
     invoke_json,
     is_design_approve_step,
 )
@@ -33,7 +35,7 @@ from architect_agent.json_util import coerce_diagram_text
 from architect_agent.mermaid_sanitize import sanitize_mermaid
 from architect_agent.query_intent import (
     FEEDBACK_RESOLUTION_RULES,
-    USER_MESSAGE_FIRST_RULES,
+    user_message_first_block,
     is_advance_request,
     is_informational_query,
     promote_chat_to_approve,
@@ -469,7 +471,9 @@ def hld_step_node(state: DesignGraphState) -> dict[str, Any]:
     business_spec = maybe_compact_business_spec(state.get("business_spec") or "")
     pending = (state.get("pending_user_feedback") or "").strip()
     prior = [m for m in (state.get("messages") or []) if m.get("node") == "hld"]
-    history_tail = format_history_tail(prior)
+    history_tail = format_phase_context(
+        str(state.get("discussion_digest") or ""), prior, "hld"
+    )
     step_rules = _step_artifact_rules(step)
     keep_mode = should_keep_and_patch(state, step)
     carry = str(state.get("carry_change") or "").strip()
@@ -482,12 +486,14 @@ def hld_step_node(state: DesignGraphState) -> dict[str, Any]:
             f"{INTERVIEW_TECHNIQUE_DIGEST}\n\n"
             f"{JSON_OUTPUT_DIGEST}\n\n"
             f"Current HLD step: {step} — {_STEP_TITLES.get(step, '')}.\n"
-            f"{USER_MESSAGE_FIRST_RULES if pending else ''}"
+            f"{user_message_first_block(pending)}"
             f"{keep_block}"
             "Fill this step's primary artifact completely on this turn using labeled "
             "assumptions. Ask them to confirm, approve, or agree — never tell them to click a button.\n"
             "If the user just commented, address that comment before restating the step.\n"
             "Do not skip steps unless the user explicitly directs it.\n"
+            "If DISCUSSION MEMORY locks a local stand-alone topology, do not propose "
+            "Kafka, CDN, multi-region, or new microservices — that session belongs on LLD.\n"
             f"{step_rules}"
             "Respond ONLY with JSON:\n"
             "{\n"
@@ -522,7 +528,7 @@ def hld_step_node(state: DesignGraphState) -> dict[str, Any]:
             f"FMEA notes:\n{state.get('fmea_notes') or '(empty)'}\n\n"
             f"Current diagram:\n{state.get('design_diagram') or '(none)'}\n\n"
             f"Current justification:\n{state.get('design_justification') or '(none)'}\n\n"
-            f"Recent HLD turns:\n{history_tail}\n\n"
+            f"{history_tail}\n\n"
             f"Latest user message:\n{pending or '(none — produce the step artifact from the spec using labeled assumptions)'}\n"
             f"Carry-forward change to apply if this step is affected:\n{carry or '(none)'}\n"
             f"Reminder: primary field this turn is {_HLD_PRIMARY_FIELD.get(step)}. "
@@ -628,6 +634,14 @@ def hld_step_node(state: DesignGraphState) -> dict[str, Any]:
         )
         assistant = with_resolution_close(str(assistant), changed=changed)
     assistant = with_rewind_notice(str(assistant), str(state.get("rewind_notice") or ""))
+    digest = refresh_discussion_digest(
+        str(state.get("discussion_digest") or ""),
+        pending=pending,
+        assistant=assistant,
+        phase="hld",
+        track="hld",
+        spec=str(spec_out),
+    )
 
     return {
         "phase": "hld",
@@ -649,6 +663,7 @@ def hld_step_node(state: DesignGraphState) -> dict[str, Any]:
         "rewind_notice": "",
         "publish_requested": False,
         "stay_on_interrupt": False,
+        "discussion_digest": digest,
         "messages": [{"role": "assistant", "content": assistant, "node": "hld"}],
     }
 
@@ -688,10 +703,28 @@ def hld_wait_node(state: DesignGraphState) -> dict[str, Any]:
 
     action = (resume or {}).get("action", "chat")
     user_text = ((resume or {}).get("text") or "").strip()
+    keynotes, kind, clar = gate_user_chat(
+        state,
+        user_text,
+        action=action,
+        node="hld",
+        stay={
+            "phase": "hld",
+            "design_track": "hld",
+            "design_step": step,
+            "ready_to_advance": ready,
+            "design_ready_to_approve": design_ready,
+        },
+    )
+    if clar:
+        return clar
+    state["discussion_digest"] = keynotes
     advance_now = is_advance_request(user_text)
     action = promote_chat_to_approve(
         action, user_text, can_approve=ready or design_approve
     )
+    if kind == "approve" and (ready or design_approve) and action == "chat":
+        action = "approve"
     msgs: list[dict[str, Any]] = []
     if user_text:
         msgs.append({"role": "user", "content": user_text, "node": "hld"})
@@ -718,6 +751,7 @@ def hld_wait_node(state: DesignGraphState) -> dict[str, Any]:
             "pending_user_feedback": "",
             "pending_assistant_message": msg,
             "stay_on_interrupt": False,
+            "discussion_digest": keynotes,
             "messages": msgs,
         }
 
@@ -739,6 +773,7 @@ def hld_wait_node(state: DesignGraphState) -> dict[str, Any]:
             "pending_user_feedback": "",
             "pending_assistant_message": msg,
             "stay_on_interrupt": False,
+            "discussion_digest": keynotes,
             "messages": msgs,
         }
 
@@ -748,6 +783,7 @@ def hld_wait_node(state: DesignGraphState) -> dict[str, Any]:
             "phase": "done",
             "pending_assistant_message": "Session marked done.",
             "stay_on_interrupt": False,
+            "discussion_digest": keynotes,
             "messages": msgs,
         }
 
@@ -786,5 +822,6 @@ def hld_wait_node(state: DesignGraphState) -> dict[str, Any]:
         "pending_user_feedback": user_text,
         "publish_requested": False,
         "stay_on_interrupt": False,
+        "discussion_digest": keynotes,
         "messages": msgs,
     }

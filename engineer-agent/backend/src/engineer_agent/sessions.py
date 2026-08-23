@@ -12,6 +12,12 @@ from pathlib import Path
 from typing import Any
 
 from engineer_agent.config import get_settings
+from engineer_agent.discussion_memory import (
+    DISCUSSION_MEMORY_RULES,
+    consult_user_turn,
+    format_phase_context,
+    refresh_discussion_digest,
+)
 from engineer_agent.execution import (
     all_items_terminal,
     apply_transition,
@@ -26,6 +32,7 @@ from engineer_agent.llm import invoke_json
 from engineer_agent.plan_parse import ParsedHandoff, parse_handoff, parse_related_entities, sub_agent_id
 from engineer_agent.query_intent import (
     SUGGESTED_ANSWER_RULES,
+    user_message_first_block,
     classify_user_message,
     with_next_prompt,
     with_resolution_close,
@@ -69,9 +76,45 @@ def _now() -> str:
 def _skill_digest() -> str:
     path = get_settings().skill_path
     try:
-        return path.read_text(encoding="utf-8")[:3500]
+        text = path.read_text(encoding="utf-8")[:3500]
     except OSError:
-        return "You are a Software Factory Engineer sub-agent for one microservice."
+        text = "You are a Software Factory Engineer sub-agent for one microservice."
+    return f"{text}\n\n{DISCUSSION_MEMORY_RULES}"
+
+
+def _discussion_block(sub: dict[str, Any]) -> str:
+    return format_phase_context(
+        str(sub.get("discussion_digest") or ""),
+        list(sub.get("messages") or []),
+        str(sub.get("status") or "sub-engineer"),
+        max_tokens=1200,
+        max_turns=8,
+    )
+
+
+def _remember_sub(
+    sub: dict[str, Any],
+    *,
+    pending: str = "",
+    assistant: str = "",
+    phase: str = "",
+) -> dict[str, Any]:
+    extra = "\n".join(
+        part
+        for part in (
+            str(sub.get("offered_api") or "")[:600],
+            str(sub.get("resume_instructions") or "")[:400],
+        )
+        if part
+    )
+    sub["discussion_digest"] = refresh_discussion_digest(
+        str(sub.get("discussion_digest") or ""),
+        pending=pending,
+        assistant=assistant,
+        phase=phase or str(sub.get("status") or "chat"),
+        extra=extra,
+    )
+    return sub
 
 
 def _prompt_mode(status: str, can_approve: bool) -> str:
@@ -163,6 +206,7 @@ def empty_sub(
         "interrupted_from": "",
         "block_issue": {},
         "resume_instructions": "",
+        "discussion_digest": "",
     }
 
 
@@ -490,6 +534,23 @@ class SessionStore:
             text = (message or "").strip()
             if not text:
                 raise ValueError("message is required")
+            last_asst = ""
+            for msg in reversed(sub.get("messages") or []):
+                if isinstance(msg, dict) and msg.get("role") == "assistant":
+                    last_asst = str(msg.get("content") or "").strip()
+                    if last_asst:
+                        break
+            if last_asst:
+                consult = consult_user_turn(
+                    pending=text,
+                    last_assistant=last_asst,
+                    keynotes=str(sub.get("discussion_digest") or ""),
+                    phase=str(sub.get("status") or "chat"),
+                )
+                if consult.needs_clarification:
+                    return self._chat_locked(session, sub, text, consult.clarify_message)
+                sub["discussion_digest"] = consult.keynotes
+                session.replace(sub)
             status = str(sub.get("status") or "")
             decorated = decorate_sub(sub)
             context = (
@@ -559,6 +620,12 @@ class SessionStore:
         msgs.append({"role": "user", "content": text, "node": str(updated.get("status") or "chat")})
         msgs.append({"role": "assistant", "content": assistant, "node": str(updated.get("status") or "chat")})
         updated["messages"] = msgs
+        _remember_sub(
+            updated,
+            pending=text,
+            assistant=assistant,
+            phase=str(updated.get("status") or "chat"),
+        )
         session.replace(updated)
         self._refresh_consults(session)
         self._persist(session)
@@ -578,6 +645,7 @@ class SessionStore:
             system=(
                 "You are the engineer blocked issue advisor.\n"
                 f"{_skill_digest()}\n"
+                f"{user_message_first_block(text)}"
                 "Development is paused on an issue. The user is chatting about how to "
                 "resolve it. If they give instructions, store the combined instructions "
                 "to follow after they approve to continue. If they only ask a question, "
@@ -585,13 +653,14 @@ class SessionStore:
                 'Respond ONLY with JSON: {"assistant_message": string, "instructions": string}'
             ),
             user=(
+                f"{_discussion_block(sub)}\n\n"
                 f"Service: {sub.get('microservice_name')}\n"
                 f"Issue kind: {issue.get('kind') or ''}\n"
                 f"Issue title: {issue.get('title') or ''}\n"
                 f"Issue detail: {issue.get('detail') or ''}\n"
                 f"Paused item: {issue.get('item_title') or ''}\n"
                 f"Current instructions:\n{prior}\n\n"
-                f"User message:\n{text}"
+                f"Latest user message:\n{text}"
             ),
         )
         instructions = str(result.get("instructions") or prior).strip()
@@ -630,6 +699,7 @@ class SessionStore:
             }
         )
         updated["messages"] = msgs
+        _remember_sub(updated, pending=text, assistant=note, phase="blocked")
         session.replace(updated)
         self._refresh_consults(session)
         self._persist(session)
@@ -731,6 +801,7 @@ class SessionStore:
             }
         )
         updated["messages"] = msgs
+        _remember_sub(updated, pending="Pause", assistant=note, phase="paused")
         session.replace(updated)
         self._persist(session)
         return session
@@ -755,6 +826,7 @@ class SessionStore:
         )
         msgs.append({"role": "assistant", "content": note, "node": "suspend"})
         updated["messages"] = msgs
+        _remember_sub(updated, assistant=note, phase="suspended")
         session.replace(updated)
 
     def _upsert_plan(self, session: FleetSession, parsed: ParsedHandoff) -> None:
@@ -807,6 +879,7 @@ class SessionStore:
             }
         )
         sub["messages"] = msgs
+        _remember_sub(sub, pending=str(parsed.markdown or "")[:500], assistant=note, phase="ingest")
         session.replace(sub)
         self._refresh_consults(session)
 
@@ -822,6 +895,7 @@ class SessionStore:
                 'Respond ONLY with JSON: {"offered_api": string, "assistant_message": string}'
             ),
             user=(
+                f"{_discussion_block(sub)}\n\n"
                 f"Focus microservice: {name}\n\n"
                 f"Entity relationships:\n{(sub.get('entity_relationships') or '')[:4000]}\n\n"
                 f"Features:\n{(sub.get('feature_spec') or '')[:3000]}\n\n"
@@ -837,10 +911,12 @@ class SessionStore:
             system=(
                 "You are the engineer api offer advisor.\n"
                 f"{_skill_digest()}\n"
+                f"{user_message_first_block(pending)}"
                 "Revise THIS microservice's offered API from the user's comments.\n"
                 'Respond ONLY with JSON: {"offered_api": string, "assistant_message": string}'
             ),
             user=(
+                f"{_discussion_block(sub)}\n\n"
                 f"Focus microservice: {name}\n"
                 f"Current offered API:\n{sub.get('offered_api') or ''}\n\n"
                 f"Latest user message:\n{pending}"
@@ -879,6 +955,7 @@ class SessionStore:
                 '{"summary": string, "transition": string, "items": [object], "assistant_message": string}'
             ),
             user=(
+                f"{_discussion_block(sub)}\n\n"
                 f"Focus microservice: {name}\n\n"
                 f"Entity relationships:\n{(sub.get('entity_relationships') or '')[:4000]}\n\n"
                 f"Features:\n{(sub.get('feature_spec') or '')[:3000]}\n\n"
@@ -901,12 +978,14 @@ class SessionStore:
             system=(
                 "You are the engineer plan revision advisor.\n"
                 f"{_skill_digest()}\n"
+                f"{user_message_first_block(pending)}"
                 "Revise the execution plan from the user's comments. Keep item ids when the "
                 "work is the same. Do not mark items done unless they already were.\n"
                 "Respond ONLY with JSON: "
                 '{"summary": string, "transition": string, "items": [object], "assistant_message": string}'
             ),
             user=(
+                f"{_discussion_block(sub)}\n\n"
                 f"Focus microservice: {name}\n"
                 f"Current execution plan:\n{json.dumps(current, indent=2)[:6000]}\n\n"
                 f"Latest user message:\n{pending}"
@@ -986,6 +1065,7 @@ class SessionStore:
             }
         )
         sub["messages"] = msgs
+        _remember_sub(sub, pending=user_note, assistant=note, phase="execute")
         session.replace(sub)
         self._persist(session)
         self._maybe_spawn(session.design_session_id, str(sub.get("sub_agent_id") or ""))
@@ -1039,6 +1119,7 @@ class SessionStore:
             }
         )
         sub["messages"] = msgs
+        _remember_sub(sub, pending=instructions, assistant=note, phase="continue")
         session.replace(sub)
         self._persist(session)
         self._maybe_spawn(session.design_session_id, str(sub.get("sub_agent_id") or ""))
@@ -1095,6 +1176,7 @@ class SessionStore:
             }
         )
         updated["messages"] = msgs
+        _remember_sub(updated, assistant=str(title), phase="blocked")
         session.replace(updated)
 
     def _tick_locked(self, session: FleetSession, sub: dict[str, Any]) -> bool:
@@ -1229,6 +1311,7 @@ class SessionStore:
             }
         )
         sub["messages"] = msgs
+        _remember_sub(sub, assistant=ship_note, phase="ship")
         session.replace(sub)
 
     def _maybe_spawn(self, session_id: str, sub_id: str) -> None:
@@ -1323,11 +1406,18 @@ class SessionStore:
         result = invoke_json(
             system=(
                 "You are answering a question about the current sub-engineer.\n"
+                f"{user_message_first_block(question)}"
                 f"{extra}"
-                "Answer from the artifacts. Do not ask them to confirm in place of the answer.\n"
+                "Answer from the artifacts. Honor DISCUSSION MEMORY: do not re-open settled "
+                "issues or re-suggest rejected solutions from this sub-engineer.\n"
+                "Do not ask them to confirm in place of the answer.\n"
                 'Respond ONLY with JSON: {"assistant_message": string}'
             ),
-            user=f"Current artifacts:\n{artifacts}\n\nUser question:\n{question}",
+            user=(
+                f"{_discussion_block(sub)}\n\n"
+                f"Current artifacts:\n{artifacts}\n\n"
+                f"Latest user message:\n{question}"
+            ),
         )
         return _close_sub(
             sub,
@@ -1346,14 +1436,16 @@ class SessionStore:
             system=(
                 "You are the engineer api change advisor.\n"
                 f"{_skill_digest()}\n"
+                f"{user_message_first_block(text)}"
                 "A peer sub-engineer asked this service to provide more or less data. "
                 "Update THIS service's offered API accordingly.\n"
                 'Respond ONLY with JSON: {"offered_api": string, "assistant_message": string}'
             ),
             user=(
+                f"{_discussion_block(peer)}\n\n"
                 f"Focus microservice: {peer.get('microservice_name')}\n"
                 f"Current offered API:\n{peer.get('offered_api') or ''}\n\n"
-                f"Change request:\n{text}\n"
+                f"Latest user message:\n{text}\n"
                 f"From sub-engineer: {sub.get('sub_agent_id')} ({sub.get('microservice_name')})"
             ),
         )
@@ -1378,6 +1470,21 @@ class SessionStore:
         )
         peer_msgs.append({"role": "assistant", "content": peer_note, "node": "peer_request"})
         peer["messages"] = peer_msgs
+        last_peer = ""
+        for msg in reversed(peer_msgs):
+            if isinstance(msg, dict) and msg.get("role") == "assistant" and msg is not peer_msgs[-1]:
+                last_peer = str(msg.get("content") or "").strip()
+                if last_peer:
+                    break
+        peer_consult = consult_user_turn(
+            pending=text,
+            last_assistant=last_peer or peer_note,
+            keynotes=str(peer.get("discussion_digest") or ""),
+            phase="peer_request",
+        )
+        if not peer_consult.needs_clarification:
+            peer["discussion_digest"] = peer_consult.keynotes
+        _remember_sub(peer, pending=text, assistant=peer_note, phase="peer_request")
         session.replace(peer)
         return with_resolution_close(
             f"Asked **{peer.get('microservice_name')}**'s sub-engineer to update its offered "

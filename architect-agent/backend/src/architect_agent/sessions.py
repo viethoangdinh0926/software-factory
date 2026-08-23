@@ -89,6 +89,7 @@ class DesignSession:
     market_evaluation_report: str = ""
     market_evaluation_grade: str = ""
     market_evaluation_done: bool = False
+    discussion_digest: str = ""
 
     def to_public(self) -> dict[str, Any]:
         interrupt = self.last_interrupt or {}
@@ -178,6 +179,7 @@ def _session_from_disk(data: dict[str, Any]) -> DesignSession:
         market_evaluation_report=str(data.get("market_evaluation_report") or ""),
         market_evaluation_grade=str(data.get("market_evaluation_grade") or ""),
         market_evaluation_done=bool(data.get("market_evaluation_done")),
+        discussion_digest=str(data.get("discussion_digest") or ""),
     )
 
 
@@ -194,7 +196,14 @@ class SessionStore:
     def _persist(self, session: DesignSession) -> None:
         session.updated_at = _now()
         self._path(session.session_id).write_text(
-            json.dumps(session.to_public() | {"created_at": session.created_at}, indent=2),
+            json.dumps(
+                session.to_public()
+                | {
+                    "created_at": session.created_at,
+                    "discussion_digest": session.discussion_digest,
+                },
+                indent=2,
+            ),
             encoding="utf-8",
         )
 
@@ -252,7 +261,7 @@ class SessionStore:
         return {
             "session_id": session.session_id,
             "business_spec": session.business_spec,
-            "messages": [],
+            "messages": list(session.messages[-24:]),
             "phase": session.phase if session.phase in {"phase0", "lld", "hld", "market_research", "done"} else "phase0",
             "design_track": session.design_track if session.design_track in {"unset", "lld", "hld"} else "unset",
             "design_step": session.design_step,
@@ -285,6 +294,7 @@ class SessionStore:
             "stay_on_interrupt": False,
             "carry_change": "",
             "rewalk_until_step": 0,
+            "discussion_digest": session.discussion_digest,
         }
 
     def _ensure_graph_resumable(self, session: DesignSession) -> None:
@@ -369,6 +379,8 @@ class SessionStore:
             session.communication_schemes = str(values.get("communication_schemes") or "")
         if values.get("fmea_notes") is not None:
             session.fmea_notes = str(values.get("fmea_notes") or "")
+        if "discussion_digest" in values:
+            session.discussion_digest = str(values.get("discussion_digest") or "")
         if values.get("market_evaluation_report"):
             session.market_evaluation_report = values["market_evaluation_report"]
         if values.get("market_evaluation_grade"):

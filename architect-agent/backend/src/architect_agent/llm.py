@@ -12,6 +12,7 @@ from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 
 from architect_agent.config import get_settings
+from architect_agent.scope import spec_locks_standalone, wants_distributed, wants_standalone
 
 logger = logging.getLogger(__name__)
 
@@ -32,10 +33,16 @@ class StubChatModel(BaseChatModel):
     ) -> ChatResult:
         blob = "\n".join(str(m.content) for m in messages)
         lower = blob.lower()
-        turns = blob.count("User answer:") + blob.count("USER:")
+        turns = (
+            blob.count("User answer:")
+            + blob.count("Latest user message:")
+            + blob.count("USER:")
+        )
 
         if "user turn intent classifier" in lower:
             payload = _stub_turn_intent(blob)
+        elif "conversation keynotes consultant" in lower:
+            payload = _stub_user_turn_consult(blob)
         elif "design-stage router" in lower:
             payload = {"stage": _stub_rewind_stage(blob)}
         elif "this is q&a before they approve this workflow step" in lower:
@@ -44,6 +51,8 @@ class StubChatModel(BaseChatModel):
             payload = {"updated_business_spec": _compact_spec_stub(blob)}
         elif "compress a system-design justification" in lower or "justification to compress:" in lower:
             payload = {"design_justification": _compact_justification_stub(blob)}
+        elif "compress discussion memory" in lower or "prior discussion memory:" in lower:
+            payload = {"discussion_digest": _stub_discussion_digest(blob)}
         elif "plan web searches" in lower or '"queries"' in lower and "alternatives" in lower:
             payload = {
                 "queries": [
@@ -59,11 +68,14 @@ class StubChatModel(BaseChatModel):
         elif "phase 0 interview question generator" in lower:
             payload = _stub_phase0_questions(blob)
         elif "phase 0 spec compiler" in lower:
+            compiled = _rich_spec(blob)
             payload = {
-                "compiled_spec": _rich_spec(blob),
+                "compiled_spec": compiled,
                 "assistant_message": (
-                    "Here is the compiled specification from your answers. "
-                    "Tell me what to change, or approve to classify LLD vs HLD."
+                    "Here is the compiled project specification.\n\n"
+                    f"{compiled}\n\n"
+                    "If this specification looks right, confirm, approve, or agree so I can "
+                    "classify LLD vs HLD. Otherwise tell me what to add or change."
                 ),
             }
         elif "phase 0 spec refiner" in lower:
@@ -197,7 +209,7 @@ def _stub_rewind_stage(blob: str) -> str:
     current = blob.lower()
     if re.search(r"\b(skip|jump)\s+(ahead|to)\b|\bgo\s+straight\s+to\b", compact):
         return "ahead"
-    if any(
+    if wants_standalone(compact) or any(
         token in compact
         for token in (
             "gdpr",
@@ -253,6 +265,9 @@ def _stub_turn_intent(blob: str) -> dict[str, str]:
             "rate limit",
             "we should",
             "we need",
+            "stand-alone",
+            "standalone",
+            "self-contained",
         )
     ):
         return {"category": "command", "action": "revise"}
@@ -273,7 +288,7 @@ def _stub_suggested_answers(blob: str) -> str:
     questions: list[str] = []
     if "Open questions to propose answers for:" in blob:
         block = blob.split("Open questions to propose answers for:", 1)[1]
-        for stop in ("User question:", "Current artifacts", "Business spec:"):
+        for stop in ("User question:", "Latest user message:", "Current artifacts", "Business spec:"):
             if stop in block:
                 block = block.split(stop, 1)[0]
         for line in block.splitlines():
@@ -282,7 +297,7 @@ def _stub_suggested_answers(blob: str) -> str:
                 questions.append(text)
     if not questions and "Last assistant message (questions you asked):" in blob:
         block = blob.split("Last assistant message (questions you asked):", 1)[1]
-        for stop in ("Open questions", "User question:", "Current artifacts"):
+        for stop in ("Open questions", "User question:", "Latest user message:", "Current artifacts"):
             if stop in block:
                 block = block.split(stop, 1)[0]
         for line in block.splitlines():
@@ -305,9 +320,7 @@ def _stub_suggested_answers(blob: str) -> str:
 
 def _stub_qa(blob: str) -> str:
     lower = blob.lower()
-    ask = lower
-    if "user question:" in lower:
-        ask = lower.split("user question:", 1)[-1]
+    ask = _labeled_user_text(blob).lower() or lower
     if _stub_help_answering_questions(ask):
         return _stub_suggested_answers(blob)
     if "endpoint" in ask or " url" in ask or "urls" in ask:
@@ -367,19 +380,41 @@ def _stub_qa(blob: str) -> str:
     )
 
 
-def _stub_phase0(blob: str) -> dict[str, Any]:
-    # Classify from the living-spec / user sections only — system digests mention both tracks.
-    focus = blob
-    for marker in (
-        "Current living specification:",
-        "Living specification:",
-        "Latest user message:",
-    ):
+def _living_spec_excerpt(blob: str) -> str:
+    """Living spec only — exclude discussion memory and the latest user turn."""
+    part = blob
+    for marker in ("Current living specification:", "Living specification:"):
         if marker in blob:
-            focus = blob.split(marker, 1)[1]
+            part = blob.split(marker, 1)[1]
             break
-    lower = focus.lower()
-    if any(
+    else:
+        return ""
+    for stop in (
+        "DISCUSSION MEMORY",
+        "Recent phase0",
+        "Recent Phase 0",
+        "Recent hld",
+        "Recent lld",
+        "User's requested changes:",
+        "Latest user message:",
+        "User's final response:",
+        "Recent ",
+    ):
+        if stop in part:
+            part = part.split(stop, 1)[0]
+    return part.strip()
+
+
+def _stub_phase0(blob: str) -> dict[str, Any]:
+    # Classify from the latest user turn + living spec only — system digests mention both tracks.
+    feedback = _latest_feedback(blob)
+    spec_text = _living_spec_excerpt(blob)
+    lower = (spec_text or feedback or blob).lower()
+    if wants_standalone(feedback) or spec_locks_standalone(spec_text):
+        track = "lld"
+    elif wants_distributed(feedback):
+        track = "hld"
+    elif any(
         k in lower
         for k in ("microservice", "distributed", "multi-region", "kafka", "cdn", "multi-tenant")
     ):
@@ -393,7 +428,6 @@ def _stub_phase0(blob: str) -> dict[str, Any]:
         track = "hld"
     else:
         track = "lld"
-    feedback = _latest_feedback(blob)
     addressed = " I addressed your comment in the spec." if feedback else ""
     return {
         "design_track": track,
@@ -408,6 +442,115 @@ def _stub_phase0(blob: str) -> dict[str, Any]:
             "or tell me if this should be the other track."
         ),
     }
+
+
+def _stub_user_turn_consult(blob: str) -> dict[str, Any]:
+    pending = ""
+    if "Latest user message:" in blob:
+        pending = blob.rsplit("Latest user message:", 1)[-1].strip()
+        for stop in ("Current conversation keynotes:", "Previous assistant"):
+            if stop in pending:
+                pending = pending.split(stop, 1)[0].strip()
+    last = ""
+    if "Previous assistant message:" in blob:
+        last = blob.split("Previous assistant message:", 1)[1]
+        if "Latest user message:" in last:
+            last = last.split("Latest user message:", 1)[0]
+        last = last.strip()
+    prior = ""
+    if "Current conversation keynotes:" in blob:
+        prior = blob.split("Current conversation keynotes:", 1)[1].strip()
+        if prior == "(none)":
+            prior = ""
+    compact = re.sub(r"\s+", " ", pending).strip().lower().rstrip(".!")
+    last_l = last.lower()
+    asking_confirm = (
+        "confirm, approve, or agree" in last_l or "if this looks right" in last_l
+    )
+    if re.search(r"\b(weather|asdf|qwerty|lorem ipsum)\b", compact):
+        return {
+            "relevant": False,
+            "vague": False,
+            "kind": "unrelated",
+            "keynotes": prior,
+            "clarify_message": (
+                "That does not address the open point in my previous message. "
+                "Please answer that concern, or clarify what you meant, so I can continue."
+            ),
+        }
+    vague_only = compact in {
+        "maybe",
+        "idk",
+        "i don't know",
+        "i dont know",
+        "dunno",
+        "whatever",
+        "not sure",
+        "hmm",
+        "huh",
+    }
+    if vague_only or (compact in {"ok", "okay", "k"} and not asking_confirm):
+        return {
+            "relevant": True,
+            "vague": True,
+            "kind": "unclear",
+            "keynotes": prior,
+            "clarify_message": (
+                "I am not sure how that answers the open point in my previous message. "
+                "Please address that concern or spell out what you want changed."
+            ),
+        }
+    kind = "complement"
+    if compact in {
+        "looks good",
+        "lgtm",
+        "approve",
+        "approved",
+        "next step",
+        "move on",
+        "wrap up",
+    } or (compact in {"ok", "okay"} and asking_confirm):
+        kind = "approve"
+    elif "?" in pending or compact.startswith(("why", "what", "which", "how", "who")):
+        kind = "answer"
+    elif "worried" in compact or "concern" in compact:
+        kind = "concern"
+    lines = [prior] if prior else ["## Settled decisions"]
+    if pending:
+        item = f"- Settled from user: {pending[:400]}"
+        if item.lower() not in prior.lower():
+            lines.append(item)
+    return {
+        "relevant": True,
+        "vague": False,
+        "kind": kind,
+        "keynotes": "\n".join(line for line in lines if line).strip(),
+        "clarify_message": "",
+    }
+
+
+def _stub_discussion_digest(blob: str) -> str:
+    prior = ""
+    if "Prior discussion memory:" in blob:
+        prior = blob.split("Prior discussion memory:", 1)[1]
+        for marker in ("Phase:", "Latest user message:"):
+            if marker in prior:
+                prior = prior.split(marker, 1)[0]
+                break
+    prior = prior.strip()
+    feedback = _latest_feedback(blob)
+    lines = [prior] if prior else ["## Settled decisions"]
+    if wants_standalone(feedback):
+        lock = (
+            "- Locked topology: local self-contained stand-alone (LLD / single OS process)."
+        )
+        if lock.lower() not in prior.lower():
+            lines.append(lock)
+    if feedback:
+        item = f"- Settled from user: {feedback[:400]}"
+        if item.lower() not in prior.lower():
+            lines.append(item)
+    return "\n".join(line for line in lines if line).strip()
 
 
 def _stub_phase0_questions(blob: str) -> dict[str, Any]:
@@ -434,16 +577,16 @@ def _stub_phase0_interview_turn(blob: str) -> dict[str, Any]:
     current = int(match.group(1)) if match else 0
     if _stub_help_answering_questions(feedback):
         return {
-            "updated_business_spec": _rich_spec(blob),
+            "updated_business_spec": _living_spec_excerpt(blob) or _extract_spec(blob),
             "questions": _stub_phase0_questions(blob)["questions"],
             "current_question_index": current,
             "interview_complete": False,
             "assistant_message": _stub_suggested_answers(blob),
         }
     idx = min(current + 1, 5)
+    living = _living_spec_excerpt(blob) or _extract_spec(blob)
     return {
-        "updated_business_spec": _rich_spec(blob)
-        + (f"\n- User comment: {feedback[:240]}\n" if feedback else ""),
+        "updated_business_spec": living,
         "questions": _stub_phase0_questions(blob)["questions"],
         "current_question_index": idx,
         "interview_complete": idx >= 5,
@@ -735,48 +878,49 @@ def _stub_market_evaluation(blob: str) -> dict[str, Any]:
     }
 
 
-def _latest_feedback(blob: str) -> str:
+def _labeled_user_text(blob: str) -> str:
+    """Last labeled user turn in a system+user stub blob (ignore the same words in rules)."""
     for marker in (
-        "Latest user feedback to apply now:",
         "Latest user message:",
+        "Latest user feedback to apply now:",
         "User's requested changes:",
         "User's final response:",
+        "User answer:",
+        "User question:",
+        "User message:",
     ):
         if marker in blob:
-            part = blob.split(marker, 1)[1].strip()
-            for stop in ("Return the full", "Respond ONLY", "Recent "):
+            part = blob.rsplit(marker, 1)[1].strip()
+            for stop in ("Return the full", "Respond ONLY", "Return JSON", "Recent ", "Spec to compress"):
                 if stop in part:
                     part = part.split(stop, 1)[0]
             text = part.strip()
             if text and not text.startswith("(none"):
                 return text
-    # Fallback: last USER: line from conversation
     users = [line.split(":", 1)[1].strip() for line in blob.splitlines() if line.startswith("USER:")]
     return users[-1] if users else ""
 
 
+def _latest_feedback(blob: str) -> str:
+    return _labeled_user_text(blob)
+
+
 def _fold_answer_stub(blob: str) -> str:
-    spec = _extract_spec(blob)
-    answer = ""
-    if "User answer:" in blob:
-        answer = blob.split("User answer:", 1)[1].strip()
-        for stop in ("Respond ONLY", "Return JSON", "Spec to compress"):
-            if stop in answer:
-                answer = answer.split(stop, 1)[0].strip()
+    from architect_agent.interview_progress import (
+        append_spec_bullet,
+        guess_spec_section,
+        living_spec_scaffold,
+        record_dropped_constraints,
+    )
+    from architect_agent.scope import ensure_standalone_spec
+
+    spec = living_spec_scaffold(_extract_spec(blob))
+    answer = _labeled_user_text(blob)
     if not answer:
-        return _rich_spec(blob if "## Problem" not in spec else spec)
-    # Keep a single rolling decision line instead of appending forever.
-    line = f"- Latest clarified decision: {answer[:180]}"
-    if "## Goals" in spec:
-        if "Latest clarified decision:" in spec:
-            return re.sub(
-                r"- Latest clarified decision:.*",
-                line,
-                spec,
-                count=1,
-            )
-        return spec.replace("## Goals", f"## Goals\n{line}\n", 1)
-    return spec.rstrip() + f"\n\n## Goals\n{line}\n"
+        return spec
+    updated = append_spec_bullet(spec, guess_spec_section(answer), answer[:400])
+    updated = ensure_standalone_spec(updated, answer)
+    return record_dropped_constraints(updated, answer)
 
 
 def _compact_spec_stub(blob: str) -> str:
@@ -878,15 +1022,40 @@ def _stub_design_proposal(blob: str, feedback: str) -> dict[str, Any]:
 
 
 def _extract_spec(blob: str) -> str:
-    marker = "Current business specification markdown:"
-    if marker in blob:
-        part = blob.split(marker, 1)[1]
-        for stop in ("Recent turns", "Recent conversation", "Last assistant", "User answer", "Approved business"):
+    for marker in (
+        "Current living specification:",
+        "Current business specification markdown:",
+        "Living specification:",
+    ):
+        if marker in blob:
+            part = blob.split(marker, 1)[1]
+            for stop in (
+                "Latest user message:",
+                "Interview checklist:",
+                "Interview questions and answers:",
+                "Recent turns",
+                "Recent conversation",
+                "Recent phase0",
+                "Recent Phase 0",
+                "Last assistant",
+                "User answer",
+                "Approved business",
+                "DISCUSSION MEMORY",
+            ):
+                if stop in part:
+                    part = part.split(stop, 1)[0]
+            return part.strip() or "# Business Specification\n\n(WIP)\n"
+    if "Spec:" in blob:
+        part = blob.split("Spec:", 1)[1]
+        for stop in (
+            "Latest user message:",
+            "Last assistant",
+            "User answer",
+            "Approved business",
+        ):
             if stop in part:
                 part = part.split(stop, 1)[0]
         return part.strip() or "# Business Specification\n\n(WIP)\n"
-    if "Spec:" in blob:
-        return blob.split("Spec:", 1)[1].split("Last assistant", 1)[0].strip()
     return "# Business Specification\n\n(WIP)\n"
 
 

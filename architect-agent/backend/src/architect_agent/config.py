@@ -58,6 +58,9 @@ class Settings(BaseSettings):
     context_justification_soft_tokens: int = 3500
     context_justification_hard_tokens: int = 6000
     context_justification_compact_target_tokens: int = 2500
+    context_digest_soft_tokens: int = 900
+    context_digest_hard_tokens: int = 1400
+    context_digest_compact_target_tokens: int = 700
 
     # Market evaluation after first spec approval (web search via DuckDuckGo).
     # Disabled automatically for LLM_PROVIDER=stub; set false to force offline stubs.

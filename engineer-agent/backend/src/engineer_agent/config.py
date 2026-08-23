@@ -46,6 +46,9 @@ class Settings(BaseSettings):
     background_execute: bool = True
     # Live git clone/pull/push while executing. Tests set false.
     git_execute_enabled: bool = True
+    context_digest_soft_tokens: int = 900
+    context_digest_hard_tokens: int = 1400
+    context_digest_compact_target_tokens: int = 700
 
 
 @lru_cache

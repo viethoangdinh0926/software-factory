@@ -41,7 +41,11 @@ class Settings(BaseSettings):
     skill_path: Path = AGENT_ROOT / "skills" / "orchestrator" / "SKILL.md"
     static_dir: Path = STATIC_DIR
 
-    web_search_enabled: bool = True
+    context_history_max_tokens: int = 1800
+    context_history_max_turns: int = 12
+    context_digest_soft_tokens: int = 900
+    context_digest_hard_tokens: int = 1400
+    context_digest_compact_target_tokens: int = 700
 
     engineer_agent_url: str | None = None
 

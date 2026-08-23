@@ -9,6 +9,7 @@ from functools import lru_cache
 from typing import Any
 
 from architect_agent.query_intent import is_revision_request, with_next_prompt
+from architect_agent.scope import wants_standalone
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +65,9 @@ _REWIND_SYSTEM = (
     "If unsure between two earlier stages, pick the earlier one.\n"
     "A new v1 requirement, actor, invariant, or non-goal is phase0 even if they "
     "are currently modeling domain objects or services.\n"
+    "Switching to a local, self-contained, stand-alone, desktop, single-machine, or "
+    "single-process app — or away from distributed/microservices — is phase0 "
+    "(reclassify LLD vs HLD). Analogies like YouTube do not keep the session on HLD.\n"
     "Respond ONLY with JSON: {\"stage\":\"phase0|lld1|hld1|...|market|current|ahead\"}"
 )
 
@@ -154,6 +158,8 @@ def _heuristic_rewind_stage(text: str, track: str) -> str:
         return "current"
     if re.search(r"\b(skip|jump)\s+(ahead|to)\b|\bgo\s+straight\s+to\b|\bjump\s+to\s+step\b", compact):
         return "ahead"
+    if wants_standalone(compact):
+        return "phase0"
     if any(
         token in compact
         for token in (
@@ -320,6 +326,7 @@ def rewind_or_block_skip(
             "pending_assistant_message": reply,
             "stay_on_interrupt": True,
             "publish_requested": False,
+            "discussion_digest": str(state.get("discussion_digest") or ""),
             "messages": msgs
             + [{"role": "assistant", "content": reply, "node": chat_node}],
         }
@@ -348,6 +355,7 @@ def rewind_or_block_skip(
         "rewalk_until_step": until,
         "publish_requested": False,
         "stay_on_interrupt": False,
+        "discussion_digest": str(state.get("discussion_digest") or ""),
         "messages": msgs,
     }
     if dest_phase == "phase0":

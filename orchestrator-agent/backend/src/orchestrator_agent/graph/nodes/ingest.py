@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from orchestrator_agent.graph.nodes.common import empty_service
+from orchestrator_agent.graph.nodes.common import empty_service, with_session_digest
 from orchestrator_agent.package_parse import parse_design_package
 
 
@@ -20,26 +20,31 @@ def ingest_node(state: dict[str, Any]) -> dict[str, Any]:
         f"(track `{parsed.architect_track or 'unset'}`)."
     )
     msgs = [{"role": "system", "content": notice, "node": "ingest"}]
-    return {
-        "design_session_id": session_id,
-        "package_markdown": parsed.markdown or raw,
-        "design_diagram": parsed.design_diagram or state.get("design_diagram") or "",
-        "design_version": parsed.design_version,
-        "architect_track": parsed.architect_track or "unset",
-        "pending_package": "",
-        "ingest_kind": "update" if is_update else "first",
-        "has_ingested": True,
-        "previous_track": previous_track,
-        "previous_topology": previous_topology,
-        "previous_services": previous_services,
-        "previous_app_status": previous_app_status,
-        "pending_engineer_actions": [],
-        "phase": "classify",
-        "route": "classify",
-        "wait_kind": "",
-        "messages": msgs,
-        "finalized": False,
-    }
+    return with_session_digest(
+        state,
+        {
+            "design_session_id": session_id,
+            "package_markdown": parsed.markdown or raw,
+            "design_diagram": parsed.design_diagram or state.get("design_diagram") or "",
+            "design_version": parsed.design_version,
+            "architect_track": parsed.architect_track or "unset",
+            "pending_package": "",
+            "ingest_kind": "update" if is_update else "first",
+            "has_ingested": True,
+            "previous_track": previous_track,
+            "previous_topology": previous_topology,
+            "previous_services": previous_services,
+            "previous_app_status": previous_app_status,
+            "pending_engineer_actions": [],
+            "phase": "classify",
+            "route": "classify",
+            "wait_kind": "",
+            "messages": msgs,
+            "finalized": False,
+        },
+        assistant=notice,
+        phase="ingest",
+    )
 
 
 def _suspend_actions(

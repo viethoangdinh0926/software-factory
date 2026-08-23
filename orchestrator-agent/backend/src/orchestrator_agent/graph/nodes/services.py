@@ -6,11 +6,13 @@ import uuid
 from typing import Any
 
 from orchestrator_agent.graph.nodes.common import (
+    append_service_message,
     close_user_message,
     empty_service,
     invoke_json,
     replace_service,
     skill_digest,
+    with_session_digest,
 )
 from orchestrator_agent.graph.nodes.ingest import reset_planning_fields
 from orchestrator_agent.json_util import recover_extract_from_prose
@@ -198,14 +200,19 @@ def extract_services_node(state: dict[str, Any]) -> dict[str, Any]:
         notice += f" Matching kept {live_n} live service(s)."
         if removed:
             notice += f" Suspended removed services: {', '.join(removed[:6])}."
-        return {
-            "services": services,
-            "pending_engineer_actions": actions,
-            "active_service_id": "",
-            "phase": "extract",
-            "route": "prime_all",
-            "messages": [{"role": "assistant", "content": notice, "node": "extract"}],
-        }
+        return with_session_digest(
+            state,
+            {
+                "services": services,
+                "pending_engineer_actions": actions,
+                "active_service_id": "",
+                "phase": "extract",
+                "route": "prime_all",
+                "messages": [{"role": "assistant", "content": notice, "node": "extract"}],
+            },
+            assistant=notice,
+            phase="extract",
+        )
 
     services = [
         empty_service(
@@ -218,13 +225,18 @@ def extract_services_node(state: dict[str, Any]) -> dict[str, Any]:
         if isinstance(item, dict)
     ]
     notice = str(extracted.get("assistant_message") or "Extracted core microservices.")
-    return {
-        "services": services,
-        "active_service_id": "",
-        "phase": "extract",
-        "route": "prime_all",
-        "messages": [{"role": "assistant", "content": notice, "node": "extract"}],
-    }
+    return with_session_digest(
+        state,
+        {
+            "services": services,
+            "active_service_id": "",
+            "phase": "extract",
+            "route": "prime_all",
+            "messages": [{"role": "assistant", "content": notice, "node": "extract"}],
+        },
+        assistant=notice,
+        phase="extract",
+    )
 
 
 def prime_all_services_node(state: dict[str, Any]) -> dict[str, Any]:
@@ -284,15 +296,7 @@ def prime_all_services_node(state: dict[str, Any]) -> dict[str, Any]:
                 "talks to (and who initiates), then approve.",
                 svc=updated,
             )
-            msgs = list(updated.get("messages") or [])
-            msgs.append(
-                {
-                    "role": "assistant",
-                    "content": fallback,
-                    "node": "comms",
-                }
-            )
-            updated["messages"] = msgs
+            updated = append_service_message(updated, fallback, node="comms")
         out = replace_service(out, updated)
     live = [s for s in out if s.get("status") != "suspended"]
     names = ", ".join((s.get("names") or ["service"])[-1] for s in live) or "none"
@@ -303,15 +307,20 @@ def prime_all_services_node(state: dict[str, Any]) -> dict[str, Any]:
         mode="idle",
         can_approve=False,
     )
-    return {
-        "services": out,
-        "active_service_id": "",
-        "phase": "distributed",
-        "route": "wait",
-        "wait_kind": "distributed",
-        "can_approve": False,
-        "approve_kind": "",
-        "approve_label": "",
-        "pending_assistant_message": notice,
-        "messages": [{"role": "assistant", "content": notice, "node": "prime"}],
-    }
+    return with_session_digest(
+        state,
+        {
+            "services": out,
+            "active_service_id": "",
+            "phase": "distributed",
+            "route": "wait",
+            "wait_kind": "distributed",
+            "can_approve": False,
+            "approve_kind": "",
+            "approve_label": "",
+            "pending_assistant_message": notice,
+            "messages": [{"role": "assistant", "content": notice, "node": "prime"}],
+        },
+        assistant=notice,
+        phase="prime",
+    )
