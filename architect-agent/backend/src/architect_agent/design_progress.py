@@ -8,7 +8,11 @@ import re
 from functools import lru_cache
 from typing import Any
 
-from architect_agent.query_intent import is_revision_request, with_next_prompt
+from architect_agent.query_intent import (
+    format_classify_context,
+    is_revision_request,
+    with_next_prompt,
+)
 from architect_agent.scope import wants_standalone
 
 logger = logging.getLogger(__name__)
@@ -207,14 +211,24 @@ def _llm_rewind_stage(text: str, context: str) -> str | None:
         from architect_agent.json_util import parse_llm_json_object
         from architect_agent.llm import get_chat_model
 
+        marker = "Last assistant message:"
+        workflow = (context or "").strip() or "(none)"
+        last_assistant = "(none)"
+        if marker in workflow:
+            workflow, _, last_assistant = workflow.partition(marker)
+            workflow = workflow.strip() or "(none)"
+            last_assistant = last_assistant.strip() or "(none)"
         model = get_chat_model()
         response = model.invoke(
             [
                 SystemMessage(content=_REWIND_SYSTEM),
                 HumanMessage(
                     content=(
-                        f"Current position:\n{context or '(none)'}\n\n"
-                        f"User message:\n{text}\n"
+                        "Decide whether this turn stays here, rewinds, or jumps ahead "
+                        "using BOTH messages.\n\n"
+                        f"Last assistant message:\n{last_assistant}\n\n"
+                        f"Latest user message:\n{text}\n\n"
+                        f"Current position:\n{workflow}\n"
                     )
                 ),
             ]
@@ -303,13 +317,17 @@ def rewind_or_block_skip(
         return None
     track = current_track if current_track in {"lld", "hld"} else "hld"
     here = design_position(current_phase, track, current_step)
-    context = f"phase={current_phase} track={track} step={current_step}"
+    last_as = str(state.get("pending_assistant_message") or "")
+    context = format_classify_context(
+        workflow=f"phase={current_phase} track={track} step={current_step}",
+        last_assistant=last_as,
+    )
     stage = classify_rewind_stage(text, context, track)
     dest = stage_to_phase_step(stage, track)
     dest_pos = (
         design_position(dest[0], dest[1], dest[2]) if dest is not None else here
     )
-    revising = is_revision_request(text)
+    revising = is_revision_request(text, last_as)
     skip_ahead = stage == "ahead" or (
         revising and dest is not None and dest_pos > here and here > 0
     )

@@ -34,6 +34,7 @@ from engineer_agent.query_intent import (
     SUGGESTED_ANSWER_RULES,
     user_message_first_block,
     classify_user_message,
+    format_classify_context,
     with_next_prompt,
     with_resolution_close,
 )
@@ -540,6 +541,15 @@ class SessionStore:
                     last_asst = str(msg.get("content") or "").strip()
                     if last_asst:
                         break
+            status = str(sub.get("status") or "")
+            decorated = decorate_sub(sub)
+            context = format_classify_context(
+                workflow=(
+                    f"Engineer sub-status={status} can_approve={bool(decorated.get('can_approve'))}."
+                ),
+                last_assistant=last_asst,
+            )
+            _category, action = classify_user_message(text, context)
             if last_asst:
                 consult = consult_user_turn(
                     pending=text,
@@ -547,16 +557,14 @@ class SessionStore:
                     keynotes=str(sub.get("discussion_digest") or ""),
                     phase=str(sub.get("status") or "chat"),
                 )
-                if consult.needs_clarification:
+                if consult.needs_clarification and action not in {
+                    "approve",
+                    "pause",
+                    "execute",
+                }:
                     return self._chat_locked(session, sub, text, consult.clarify_message)
                 sub["discussion_digest"] = consult.keynotes
                 session.replace(sub)
-            status = str(sub.get("status") or "")
-            decorated = decorate_sub(sub)
-            context = (
-                f"Engineer sub-status={status} can_approve={bool(decorated.get('can_approve'))}."
-            )
-            _category, action = classify_user_message(text, context)
 
             if status == "executing":
                 if action == "pause":

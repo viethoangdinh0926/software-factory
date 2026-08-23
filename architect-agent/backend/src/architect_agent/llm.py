@@ -202,6 +202,9 @@ def _stub_rewind_stage(blob: str) -> str:
     for marker in ("User message:", "Latest user message:"):
         if marker in blob:
             user = blob.split(marker, 1)[1].strip()
+            for stop in ("Current position:", "Last assistant message:", "Workflow context:"):
+                if stop in user:
+                    user = user.split(stop, 1)[0].strip()
             break
     if not user:
         user = blob
@@ -237,12 +240,21 @@ def _stub_turn_intent(blob: str) -> dict[str, str]:
     for marker in ("User message:", "Latest user message:"):
         if marker in blob:
             user = blob.split(marker, 1)[1].strip()
+            for stop in ("Workflow context:", "Last assistant message:", "Return the full"):
+                if stop in user:
+                    user = user.split(stop, 1)[0].strip()
             break
     if not user:
         user = blob
     compact = re.sub(r"\s+", " ", user).strip().lower().rstrip(".!")
+    if re.search(r"\b(weather|asdf|qwerty|lorem ipsum)\b", compact):
+        return {"category": "information", "action": "answer"}
     if _stub_help_answering_questions(user):
         return {"category": "information", "action": "answer"}
+    if re.search(r"\bskip (this|that|the current) question\b", compact):
+        return {"category": "command", "action": "revise"}
+    if "that's all i have" in compact or "thats all i have" in compact:
+        return {"category": "command", "action": "approve"}
     if re.search(r"\bwhy should i approve\b", compact) or (
         "?" in user and re.search(r"\bapprove\b", compact) and "rate" not in compact
     ):
@@ -270,6 +282,12 @@ def _stub_turn_intent(blob: str) -> dict[str, str]:
             "self-contained",
         )
     ):
+        return {"category": "command", "action": "revise"}
+    if re.search(
+        r"(as you recommended|as recommended|your recommendation|"
+        r"go with (?:your|the) recommend|the first (?:one|option)|option\s*1)",
+        compact,
+    ) and "?" not in user:
         return {"category": "command", "action": "revise"}
     if re.search(
         r"\b(approve|lgtm|looks good|next step|move on|wrap up|go ahead|proceed|"

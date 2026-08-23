@@ -100,11 +100,16 @@ export function SessionPage() {
     : "";
   const showDiagram = Boolean(diagramSource);
   const componentCatalog = session && diagramSource
-    ? extractSpecSection(session.business_spec, "Diagram components")
-      ? `## Diagram components\n\n${extractSpecSection(session.business_spec, "Diagram components")}`
-      : catalogCoversDiagram(session.design_justification, diagramSource)
-        ? session.design_justification
-        : fallbackComponentCatalog(diagramSource, session.business_spec)
+    ? (() => {
+        const fromSpec = extractSpecSection(session.business_spec, "Diagram components");
+        if (fromSpec && catalogCoversDiagram(fromSpec, diagramSource)) {
+          return `## Diagram components\n\n${fromSpec}`;
+        }
+        if (catalogCoversDiagram(session.design_justification, diagramSource)) {
+          return session.design_justification;
+        }
+        return fallbackComponentCatalog(diagramSource, session.business_spec);
+      })()
     : "";
   const showComponents = Boolean(componentCatalog.trim());
   const specForPanel = session

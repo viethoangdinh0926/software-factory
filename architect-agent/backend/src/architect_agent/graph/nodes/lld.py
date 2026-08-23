@@ -46,6 +46,7 @@ from architect_agent.query_intent import (
     is_advance_request,
     is_informational_query,
     promote_chat_to_approve,
+    resolve_wait_action,
     with_next_prompt,
     with_resolution_close,
 )
@@ -185,7 +186,7 @@ def lld_step_node(state: DesignGraphState) -> dict[str, Any]:
         primary_field="design_justification" if step == 2 and catalog else primary_field,
         pending=pending,
     )
-    if catalog:
+    if catalog and step == 2:
         assistant = with_component_walkthrough(assistant, catalog)
     if pending:
         changed = (
@@ -273,12 +274,9 @@ def lld_wait_node(state: DesignGraphState) -> dict[str, Any]:
     if clar:
         return clar
     state["discussion_digest"] = keynotes
-    advance_now = is_advance_request(user_text)
-    action = promote_chat_to_approve(
-        action, user_text, can_approve=ready or design_approve
-    )
-    if kind == "approve" and (ready or design_approve) and action == "chat":
-        action = "approve"
+    last_as = str(state.get("pending_assistant_message") or "")
+    action = resolve_wait_action(action, user_text, last_as, consult_kind=kind)
+    advance_now = is_advance_request(user_text, last_as)
     msgs: list[dict[str, Any]] = []
     if user_text:
         msgs.append({"role": "user", "content": user_text, "node": "lld"})
@@ -354,7 +352,7 @@ def lld_wait_node(state: DesignGraphState) -> dict[str, Any]:
         if rewound is not None:
             return rewound
 
-    if user_text and is_informational_query(user_text):
+    if action == "answer" and user_text:
         return answer_before_approve(
             state,
             user_text,

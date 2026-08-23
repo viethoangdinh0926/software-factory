@@ -19,7 +19,7 @@ of the design tree, resolving dependencies between decisions one-by-one.
    with only the next prepared question.
 2. Prefer foundational decisions before dependent ones (users → jobs → scope → constraints → non-goals).
 3. With each question, offer a **recommended answer** labeled `(Recommended)` and 2–4 concrete choices when useful.
-4. Challenge vague language ("users", "scalable", "simple") until it becomes precise.
+4. Challenge vague language that would change architecture ("users", "scalable", "simple") until it becomes precise. Do **not** stall on a startup-pitch pain / opportunity / why-build-now paragraph when they already named the product and job (for example a public global video platform). Write a recommended default into **Problem** and move on.
 5. Capture durable decisions into the evolving business specification markdown as they crystallize.
 6. Do **not** claim the spec is ready until the frontier is empty: actors, goals, v1 scope,
    explicit non-goals, critical invariants, success metrics, and major assumptions are written down.
@@ -48,9 +48,9 @@ of the design tree, resolving dependencies between decisions one-by-one.
 
 Mark `ready_for_design=true` only when the markdown spec clearly covers:
 
-- Problem / opportunity
 - Primary actors and jobs-to-be-done
 - In-scope v1 capabilities
+- Problem / opportunity — optional when the original request already names the product and job
 - Explicit out-of-scope items
 - Critical invariants (what must never go wrong)
 - Success criteria

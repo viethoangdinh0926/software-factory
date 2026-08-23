@@ -33,7 +33,9 @@ def stack_research_node(state: dict[str, Any]) -> dict[str, Any]:
             return {"route": "wait", "wait_kind": "distributed", "phase": "distributed"}
         name = (svc.get("names") or ["Service"])[-1]
         existing_stack = str(svc.get("tech_stack") or "").strip()
-        if pending and existing_stack and not is_revision_request(pending):
+        if pending and existing_stack and not is_revision_request(
+            pending, str(svc.get("pending_assistant_message") or state.get("pending_assistant_message") or "")
+        ):
             assistant = answer_current_artifacts(
                 question=pending,
                 artifacts=(
@@ -64,7 +66,9 @@ def stack_research_node(state: dict[str, Any]) -> dict[str, Any]:
         svc = None
         name = "application"
         existing_stack = str(state.get("tech_stack") or "").strip()
-        if pending and existing_stack and not is_revision_request(pending):
+        if pending and existing_stack and not is_revision_request(
+            pending, str(state.get("pending_assistant_message") or "")
+        ):
             assistant = answer_current_artifacts(
                 question=pending,
                 artifacts=(

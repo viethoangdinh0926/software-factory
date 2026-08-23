@@ -150,7 +150,9 @@ def spec_update_node(state: dict[str, Any]) -> dict[str, Any]:
 
     existing_features = str(svc.get("feature_spec") or "").strip()
     existing_bugs = str(svc.get("bug_spec") or "").strip()
-    if pending and (existing_features or existing_bugs) and not is_revision_request(pending):
+    if pending and (existing_features or existing_bugs) and not is_revision_request(
+        pending, str(svc.get("pending_assistant_message") or state.get("pending_assistant_message") or "")
+    ):
         assistant = answer_current_artifacts(
             question=pending,
             artifacts=(

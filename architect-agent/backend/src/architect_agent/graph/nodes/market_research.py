@@ -17,6 +17,7 @@ from architect_agent.query_intent import (
     is_informational_query,
     is_revision_request,
     promote_chat_to_approve,
+    resolve_wait_action,
     with_next_prompt,
 )
 
@@ -117,7 +118,7 @@ def market_wait_node(state: DesignGraphState) -> dict[str, Any]:
         }
     )
 
-    action = (resume or {}).get("action", "approve")
+    action = (resume or {}).get("action", "chat")
     user_text = ((resume or {}).get("text") or "").strip()
     keynotes, kind, clar = gate_user_chat(
         state,
@@ -136,11 +137,10 @@ def market_wait_node(state: DesignGraphState) -> dict[str, Any]:
     if clar:
         return clar
     state["discussion_digest"] = keynotes
-    action = promote_chat_to_approve(action, user_text, can_approve=True)
-    if kind == "approve" and action == "chat":
-        action = "approve"
+    last_as = str(state.get("pending_assistant_message") or "")
+    action = resolve_wait_action(action, user_text, last_as, consult_kind=kind)
     msgs: list[dict[str, Any]] = []
-    if action == "chat" and user_text:
+    if user_text and action in {"chat", "revise", "answer"}:
         msgs.append({"role": "user", "content": user_text, "node": "market_research"})
 
     if action == "session_done":
@@ -155,7 +155,7 @@ def market_wait_node(state: DesignGraphState) -> dict[str, Any]:
             "messages": msgs,
         }
 
-    if action == "chat" and user_text:
+    if action in {"chat", "revise"} and user_text:
         rewound = rewind_or_block_skip(
             state,
             user_text,
@@ -168,7 +168,7 @@ def market_wait_node(state: DesignGraphState) -> dict[str, Any]:
         if rewound is not None:
             return rewound
 
-    if action == "chat" and user_text and is_informational_query(user_text):
+    if action in {"answer", "revise"} and user_text:
         return answer_before_approve(
             state,
             user_text,
@@ -184,24 +184,6 @@ def market_wait_node(state: DesignGraphState) -> dict[str, Any]:
                 "ready_to_advance": True,
             },
         )
-
-    if action == "chat" and user_text:
-        if is_revision_request(user_text):
-            return answer_before_approve(
-                state,
-                user_text,
-                node="market_research",
-                base={
-                    "phase": "market_research",
-                    "design_track": track if track in {"lld", "hld"} else "hld",
-                    "design_step": int(state.get("design_step") or 0),
-                    "market_evaluation_done": True,
-                    "market_evaluation_report": report,
-                    "market_evaluation_grade": grade,
-                    "resume_after_market": True,
-                    "ready_to_advance": True,
-                },
-            )
 
     proceed_msg = "Closing market evaluation and returning to Phase 0."
     msgs.append({"role": "assistant", "content": proceed_msg, "node": "market_research"})

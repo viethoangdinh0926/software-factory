@@ -147,7 +147,9 @@ def feature_discuss_node(state: dict[str, Any]) -> dict[str, Any]:
         if not svc:
             return {**_distributed_wait(), "phase": "distributed"}
         existing = str(svc.get("feature_spec") or "").strip()
-        if pending and existing and not is_revision_request(pending):
+        if pending and existing and not is_revision_request(
+            pending, str(svc.get("pending_assistant_message") or state.get("pending_assistant_message") or "")
+        ):
             name = (svc.get("names") or ["Service"])[-1]
             assistant = answer_current_artifacts(
                 question=pending,
@@ -179,7 +181,9 @@ def feature_discuss_node(state: dict[str, Any]) -> dict[str, Any]:
         }
 
     existing = str(state.get("feature_spec") or "").strip()
-    if pending and existing and not is_revision_request(pending):
+    if pending and existing and not is_revision_request(
+        pending, str(state.get("pending_assistant_message") or "")
+    ):
         assistant = answer_current_artifacts(
             question=pending,
             artifacts=(

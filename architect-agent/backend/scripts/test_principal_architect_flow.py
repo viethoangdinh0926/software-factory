@@ -3,6 +3,7 @@
 Also covers a short LLD path."""
 from __future__ import annotations
 
+import inspect
 import os
 import sys
 import tempfile
@@ -21,18 +22,26 @@ from architect_agent.graph import reset_graph
 from architect_agent.query_intent import (
     NEXT_PROMPT_HEADER,
     UPDATES_HEADER,
+    _TURN_INTENT_SYSTEM,
     classify_user_message,
+    format_classify_context,
+    resolve_wait_action,
+    workflow_action,
+    is_accept_recommendation_message,
     is_advance_request,
     is_informational_query,
     is_revision_request,
     is_step_approval_message,
+    looks_like_help_answering,
     promote_chat_to_approve,
     with_next_prompt,
     with_resolution_close,
     without_user_echo,
 )
-from architect_agent.json_util import parse_llm_json_object
+from architect_agent.json_util import coerce_artifact_markdown, parse_llm_json_object
 from architect_agent.graph.nodes.common import assistant_message_is_thin, ensure_step_briefing
+from architect_agent.graph.nodes import common as architect_common
+from architect_agent.graph.nodes import phase0 as architect_phase0
 from architect_agent.design_diagram import (
     catalog_covers_diagram,
     diagram_is_due,
@@ -43,10 +52,46 @@ from architect_agent.design_diagram import (
     upsert_spec_section,
     with_component_walkthrough,
 )
-from architect_agent.graph.state import _keep_nonempty_str
+from architect_agent.graph.state import _keep_nonempty_str, _merge_spec
 from architect_agent.design_progress import classify_rewind_stage, design_position, package_fingerprint
-from architect_agent.scope import recommend_design_track, resolve_design_track, wants_standalone
-from architect_agent.sessions import SessionStore, _legacy_map
+from architect_agent.context_budget import (
+    PRINCIPAL_ARCHITECT_DIGEST,
+    TRACK_CLASSIFICATION_RULES,
+    consult_user_turn,
+)
+from architect_agent.interview_progress import (
+    accepts_recommended_default,
+    append_spec_bullet,
+    apply_skipped_question,
+    cannot_answer_current_question,
+    extract_recommended_default,
+    heading_for_turn,
+    hydrate_spec_from_transcript,
+    is_interview_control_phrase,
+    is_pain_opportunity_question,
+    living_spec_scaffold,
+    lock_open_answer_into_spec,
+    scrub_control_phrases_from_spec,
+    spec_still_scaffold,
+    spec_substance,
+    user_requests_ready,
+    user_skips_current_question,
+)
+from architect_agent.graph.nodes.hld import (
+    domain_model_is_concrete,
+    ensure_domain_model,
+    fallback_domain_model,
+    fallback_fmea_notes,
+    fmea_notes_are_concrete,
+    listed_domain_entities,
+)
+from architect_agent.scope import (
+    ensure_classified_topology,
+    recommend_design_track,
+    resolve_design_track,
+    wants_standalone,
+)
+from architect_agent.sessions import DesignSession, SessionStore, _legacy_map
 
 get_settings.cache_clear()
 get_chat_model.cache_clear()
@@ -54,6 +99,25 @@ reset_graph()
 
 assert classify_user_message("Approve") == ("command", "approve")
 assert classify_user_message("I'm happy with this, let's continue") == ("command", "approve")
+assert "copy the recommended text into the spec" in _TURN_INTENT_SYSTEM
+assert "NOT approve" in _TURN_INTENT_SYSTEM
+assert "Last assistant message:" in format_classify_context("wf", "pick Content Discovery")
+from architect_agent import query_intent as architect_intent
+assert "BOTH messages" in inspect.getsource(architect_intent._llm_turn_intent)
+assert "Latest user message:" in inspect.getsource(architect_intent._llm_turn_intent)
+assert workflow_action("revise") == "revise"
+assert workflow_action("answer") == "answer"
+assert workflow_action("none") == "chat"
+assert resolve_wait_action("revise", "add a health check") == "revise"
+assert resolve_wait_action("answer", "Why is this HLD?") == "answer"
+rec_ctx = (
+    "Recommendation: For a platform aiming to compete with YouTube, the most "
+    "impactful starting point is usually the Content Discovery & Personalization pain."
+)
+assert classify_user_message("as you recommended", rec_ctx) == ("command", "revise")
+assert classify_user_message("as you recommended", rec_ctx) != ("command", "approve")
+assert is_accept_recommendation_message("as you recommended", rec_ctx)
+assert not is_step_approval_message("as you recommended")
 assert classify_user_message("Why is this HLD rather than LLD?") == ("information", "answer")
 assert classify_user_message("Show me all URL endpoints we agreed on") == ("information", "answer")
 assert classify_user_message("Add a health check endpoint") == ("command", "revise")
@@ -61,6 +125,178 @@ assert classify_user_message("Add a health check endpoint") == ("command", "revi
 assert classify_user_message("Give me some potential answers") == ("information", "answer")
 assert classify_user_message("What would you pick for those?") == ("information", "answer")
 assert classify_user_message("Can you draft replies I could use?") == ("information", "answer")
+assert looks_like_help_answering("can you suggest a response?")
+assert classify_user_message("can you suggest a response?") == ("information", "answer")
+assert user_skips_current_question("skip this question please")
+assert accepts_recommended_default("as you recommended")
+assert cannot_answer_current_question("i don't have any concrete role to provide")
+assert "Content Discovery" in extract_recommended_default(
+    "Recommendation: For a platform aiming to compete with YouTube, the most "
+    "impactful starting point is usually the Content Discovery & Personalization pain."
+)
+assert "End-User" in extract_recommended_default(
+    "Recommendation: For initial design, focusing on the end-user experience is "
+    "paramount. Therefore, we recommend prioritizing the End-User as the primary focus."
+)
+yt_scaffold = living_spec_scaffold("design a platform similar to YouTube")
+assert spec_still_scaffold(yt_scaffold)
+yt_problem_q = (
+    "❓ **Problem / opportunity**: What concrete pain or opportunity makes this worth building now?\n\n"
+    "➡️ (Recommended) One paragraph naming who hurts today and what fails without this system."
+)
+yt_rec = (
+    "Here are three concrete ways we can frame this problem.\n\n"
+    "Recommendation: For a platform aiming to compete with YouTube, the most "
+    "impactful starting point is usually the Content Discovery & Personalization pain."
+)
+yt_actors_q = (
+    "❓ **Primary actors**: Who uses this system day-to-day, and what job are they hiring it to do?\n\n"
+    "➡️ (Recommended) Name 1–2 concrete roles with a single primary job each."
+)
+yt_actor_rec = (
+    "Content Consumer (Primary Actor): A global user who consumes video content.\n\n"
+    "Recommendation: For initial design, focusing on the end-user experience is "
+    "paramount. Therefore, we recommend prioritizing the End-User as the primary focus."
+)
+yt_spec = lock_open_answer_into_spec(
+    yt_scaffold,
+    yt_problem_q,
+    "This platform aims to serve people around the world with the video sharing "
+    "demand that dominated by YouTube.",
+)
+yt_spec = lock_open_answer_into_spec(yt_spec, yt_rec, "as you recommended")
+yt_spec = lock_open_answer_into_spec(
+    yt_spec, yt_actors_q, "people around the world is target users."
+)
+yt_spec = lock_open_answer_into_spec(
+    yt_spec, yt_actor_rec, "i don't have any concrete role to provide"
+)
+yt_spec = lock_open_answer_into_spec(yt_spec, yt_actor_rec, "looks good to me.")
+assert "serve people around the world" in yt_spec
+assert "Content Discovery" in yt_spec
+assert "End-User" in yt_spec
+assert "people around the world is target users" in yt_spec
+assert "as you recommended" not in yt_spec
+assert "looks good to me" not in yt_spec
+hydrated = hydrate_spec_from_transcript(
+    yt_scaffold,
+    [
+        {"role": "assistant", "content": yt_problem_q, "node": "phase0"},
+        {
+            "role": "user",
+            "content": (
+                "This platform aims to serve people around the world with the "
+                "video sharing demand that dominated by YouTube."
+            ),
+            "node": "phase0",
+        },
+        {"role": "assistant", "content": yt_rec, "node": "phase0"},
+        {"role": "user", "content": "as you recommended", "node": "phase0"},
+        {"role": "assistant", "content": yt_actors_q, "node": "phase0"},
+        {
+            "role": "user",
+            "content": "people around the world is target users.",
+            "node": "phase0",
+        },
+        {"role": "assistant", "content": yt_actor_rec, "node": "phase0"},
+        {"role": "user", "content": "looks good to me.", "node": "phase0"},
+    ],
+)
+assert "Content Discovery" in hydrated
+assert "End-User" in hydrated
+assert spec_substance(hydrated) > spec_substance(yt_scaffold)
+assert "Distributed" in ensure_classified_topology(yt_scaffold, "hld")
+assert "to be classified after discovery" not in ensure_classified_topology(
+    yt_scaffold, "hld"
+).lower()
+consult_accept = consult_user_turn(
+    pending="as you recommended",
+    last_assistant=yt_rec,
+    keynotes="",
+    phase="phase0",
+)
+assert not consult_accept.needs_clarification, consult_accept
+assert consult_accept.kind in {"answer", "complement"}
+assert is_interview_control_phrase("skip this question please")
+assert is_interview_control_phrase("that's all I have for now")
+assert is_interview_control_phrase("can you suggest a response?")
+assert "skip this question please" not in append_spec_bullet(
+    living_spec_scaffold("Public global video platform."),
+    "## Problem",
+    "skip this question please",
+)
+leaked = (
+    "# Business Specification\n\n"
+    "## Problem\n"
+    "design a video sharing platform similar to YouTube.\n\n"
+    "- skip this question please\n"
+)
+assert "skip this question please" not in scrub_control_phrases_from_spec(leaked)
+assert "skip this question please" not in architect_phase0._fold_decision_into_spec(
+    living_spec_scaffold("design a video sharing platform similar to YouTube."),
+    "skip this question please",
+    "❓ **Problem / opportunity**: What concrete pain?",
+)
+assert not user_skips_current_question("that's all I have for now")
+assert user_requests_ready("that's all I have for now")
+assert classify_user_message("skip this question please") == ("command", "revise")
+assert classify_user_message("that's all I have for now") == ("command", "approve")
+assert is_pain_opportunity_question(
+    "❓ **Problem / opportunity**: What concrete pain or opportunity makes this worth building now?"
+)
+consult_skip = consult_user_turn(
+    pending="skip this question please",
+    last_assistant=(
+        "❓ **Problem / opportunity**: What concrete pain makes this worth building now?\n"
+        "➡️ (Recommended) One paragraph naming who hurts today."
+    ),
+    keynotes="",
+    phase="phase0",
+)
+assert not consult_skip.needs_clarification, consult_skip
+consult_help = consult_user_turn(
+    pending="can you suggest a response?",
+    last_assistant="❓ **Problem / opportunity**: What concrete pain makes this worth building?",
+    keynotes="",
+    phase="phase0",
+)
+assert not consult_help.needs_clarification, consult_help
+consult_done = consult_user_turn(
+    pending="that's all I have for now",
+    last_assistant="Please provide a concrete pain point or opportunity.",
+    keynotes="",
+    phase="phase0",
+)
+assert not consult_done.needs_clarification, consult_done
+skipped_spec = apply_skipped_question(
+    living_spec_scaffold("Public global video platform competing with YouTube."),
+    "❓ **Problem / opportunity**: What concrete pain?\n➡️ (Recommended) Creators need a public place to publish videos.",
+)
+assert "Creators need a public place" in skipped_spec
+assert heading_for_turn(
+    "❓ **Problem / opportunity**: What concrete pain?",
+    "This system is to compete with YouTube on the global market of video sharing.",
+) == "## Problem"
+assert heading_for_turn(
+    "❓ **V1 scope**: What 3 capabilities must ship in v1?",
+    "Users register, login, search, watch, and upload videos.",
+) == "## In scope (v1)"
+live_spec = living_spec_scaffold("describe a system similar to YouTube")
+live_spec = append_spec_bullet(
+    live_spec,
+    heading_for_turn(
+        "❓ **Problem / opportunity**: What concrete pain?",
+        "This system is to compete with YouTube on the global market of video sharing.",
+    ),
+    "This system is to compete with YouTube on the global market of video sharing.",
+)
+assert "compete with YouTube" in live_spec
+assert spec_substance(live_spec) > spec_substance(
+    living_spec_scaffold("describe a system similar to YouTube")
+)
+assert "compete with YouTube" in _merge_spec(
+    live_spec, living_spec_scaffold("describe a system similar to YouTube")
+)
 assert is_informational_query("Why is this HLD rather than LLD?")
 assert is_informational_query("Show me all URL endpoints we agreed on")
 assert is_informational_query("Draft some replies I can use")
@@ -142,6 +378,32 @@ assert recommend_design_track(spec="A vague product idea with no topology yet.")
     "lld",
     "hld",
 }
+assert (
+    recommend_design_track(
+        spec="Compete with YouTube on the global market of video sharing."
+    )
+    == "hld"
+)
+assert (
+    resolve_design_track(
+        "lld",
+        pending="looks good to me",
+        spec="Users register, login, search, watch, and upload videos.",
+        prior="unset",
+        context="Compete with YouTube. Unequivocally High-Level Design. CDN and Kafka.",
+    )
+    == "hld"
+)
+assert "FACTORY LLD / HLD DEFINITIONS" in TRACK_CLASSIFICATION_RULES
+assert "mutually exclusive" in TRACK_CLASSIFICATION_RULES
+assert "does not precede" in TRACK_CLASSIFICATION_RULES
+assert "object-oriented" in TRACK_CLASSIFICATION_RULES
+assert "API gateway" in TRACK_CLASSIFICATION_RULES
+assert TRACK_CLASSIFICATION_RULES in PRINCIPAL_ARCHITECT_DIGEST
+assert "TRACK_CLASSIFICATION_RULES" in inspect.getsource(architect_common.answer_open_query)
+assert "TRACK_CLASSIFICATION_RULES" in inspect.getsource(architect_phase0._compile_phase0_spec)
+assert "TRACK_CLASSIFICATION_RULES" in inspect.getsource(architect_phase0._fold_decision_into_spec)
+assert "PRINCIPAL_ARCHITECT_DIGEST" in inspect.getsource(architect_phase0.phase0_classify_node)
 assert classify_rewind_stage(
     "Make this a local self-contained stand-alone application, not a distributed system.",
     "phase=hld track=hld step=3",
@@ -167,6 +429,61 @@ long_rule = (
     "The application must use a dependency management system (e.g., package manager) "
     "that supports cross-platform compilation (e.g., Go modules, npm, or standard library vendors)."
 )
+scale_md = coerce_artifact_markdown(
+    {
+        "daily_active_users": "100,000",
+        "peak_concurrent_streams": "50,000",
+        "video_ingestion_rate_gb_per_hour": "100",
+    }
+)
+assert "- **Daily active users:** 100,000" in scale_md
+assert "peak_concurrent_streams" not in scale_md
+assert coerce_artifact_markdown(
+    "{'daily_active_users': '100,000', 'peak_concurrent_streams': '50,000'}"
+).startswith("- **Daily active users:**")
+scale_brief = ensure_step_briefing(
+    "HLD step 1 update.",
+    track="hld",
+    step=1,
+    title="Requirements & capacity estimation",
+    artifacts={"scale_estimates": "{'daily_active_users': '100,000'}"},
+    primary_field="scale_estimates",
+)
+assert "{'daily_active_users'" not in scale_brief
+assert "**Daily active users:**" in scale_brief
+empty_hld_spec = living_spec_scaffold("design a video sharing platform similar to YouTube.")
+assert not domain_model_is_concrete(empty_hld_spec)
+video_domain = fallback_domain_model(empty_hld_spec)
+assert listed_domain_entities(video_domain)[:3] == ["User", "Channel", "Video"]
+assert domain_model_is_concrete(f"## Domain model\n\n{video_domain}")
+modeled = ensure_domain_model(empty_hld_spec)
+assert extract_spec_section(modeled, "Domain model")
+assert "### Video" in modeled
+assert "(to be captured)" in modeled
+domain_brief = ensure_step_briefing(
+    "HLD step 2 update.",
+    track="hld",
+    step=2,
+    title="Domain object modeling",
+    artifacts={"business_spec": modeled},
+    primary_field="business_spec",
+)
+assert "## Domain model" in domain_brief
+assert "### Video" in domain_brief
+assert "(to be captured)" not in domain_brief
+assert "skip this question please" not in domain_brief
+scaffold_leak_brief = ensure_step_briefing(
+    "HLD step 2 — Domain object modeling is complete enough to review.\n\n"
+    "Here is what this step locked in:\n\n"
+    f"{empty_hld_spec}\n- skip this question please\n",
+    track="hld",
+    step=2,
+    title="Domain object modeling",
+    artifacts={"business_spec": modeled},
+    primary_field="business_spec",
+)
+assert "### Video" in scaffold_leak_brief
+assert "(to be captured)" not in scaffold_leak_brief
 brief = ensure_step_briefing(
     "LLD step 1 update.",
     track="lld",
@@ -186,6 +503,56 @@ assert "**Dependency Management:**" in brief
 assert "standar\n" not in brief
 assert "LLD step 1 update." not in brief
 
+assert fmea_notes_are_concrete(fallback_fmea_notes())
+empty_fmea_brief = ensure_step_briefing(
+    "HLD step 5 update.",
+    track="hld",
+    step=5,
+    title="Vulnerability & edge-case analysis (FMEA)",
+    artifacts={
+        "scale_estimates": (
+            "Daily active users: 100 million\n"
+            "Peak concurrent streams: 50 million\n"
+        ),
+        "fmea_notes": "",
+    },
+    primary_field="fmea_notes",
+)
+assert "100 million" not in empty_fmea_brief
+assert "not ready to review" in empty_fmea_brief.lower()
+wrong_step5 = (
+    "**HLD step 5 — Vulnerability & edge-case analysis (FMEA)** is complete enough to review.\n\n"
+    "Here is what this step locked in:\n\n"
+    "Daily active users: 100 million\n"
+    "Peak concurrent streams: 50 million\n"
+    "Ingestion rate streams: 10 million per minute\n"
+    "Storage growth rate: 20% per quarter\n\n"
+    "Next we synthesize the session and wrap up.\n\n"
+    "Here is what each box on the system design diagram is responsible for.\n\n"
+    "Diagram components\n"
+    "Clients (Web/Mobile)\n"
+    "This node represents the external consumers of the platform, such as web "
+    "browsers or mobile applications. It exists to initiate requests to the "
+    "backend services. It talks directly to the API Gateway.\n"
+)
+fmea_brief = ensure_step_briefing(
+    wrong_step5,
+    track="hld",
+    step=5,
+    title="Vulnerability & edge-case analysis (FMEA)",
+    artifacts={
+        "scale_estimates": "Daily active users: 100 million",
+        "fmea_notes": fallback_fmea_notes(),
+    },
+    primary_field="fmea_notes",
+)
+assert "Failure mode" in fmea_brief
+assert "SPOF" in fmea_brief
+assert "Mitigation" in fmea_brief
+assert "each box on the system design diagram" not in fmea_brief.lower()
+assert "100 million" not in fmea_brief
+assert "Clients (Web/Mobile)" not in fmea_brief
+
 latex_json = r'{"assistant_message": "DAU $\text{assumed}$ is $\approx$ 5k"}'
 latex_msg = parse_llm_json_object(latex_json)["assistant_message"]
 assert "\t" not in latex_msg, repr(latex_msg)
@@ -194,6 +561,23 @@ assert r"\approx" in latex_msg
 
 print("HLD path…", flush=True)
 store = SessionStore()
+broken_fmea = DesignSession(
+    session_id="fmea-repair",
+    created_at="2026-01-01T00:00:00+00:00",
+    updated_at="2026-01-01T00:00:00+00:00",
+    phase="hld",
+    design_track="hld",
+    design_step=5,
+    scale_estimates="Daily active users: 100 million",
+    fmea_notes="",
+    messages=[{"role": "assistant", "content": wrong_step5, "node": "hld"}],
+)
+store._sessions[broken_fmea.session_id] = broken_fmea
+store._fill_missing_fmea(broken_fmea)
+assert fmea_notes_are_concrete(broken_fmea.fmea_notes)
+assert "SPOF" in broken_fmea.messages[-1]["content"]
+assert "100 million" not in broken_fmea.messages[-1]["content"]
+assert "each box on the system design diagram" not in broken_fmea.messages[-1]["content"].lower()
 s = store.start(
     "# Warehouse Inventory SaaS\n\n"
     "Distributed multi-tenant inventory tracker with microservices.\n\n"
@@ -638,7 +1022,9 @@ assert "### Desktop UI" in catalog
 assert "### Application Shell" in catalog
 assert catalog_covers_diagram(catalog, sketch)
 spec_with = upsert_spec_section("# Spec\n\n## Goals\n- ship", "Diagram components", catalog)
-assert extract_spec_section(spec_with, "Diagram components")
+section = extract_spec_section(spec_with, "Diagram components")
+assert section, spec_with
+assert "Desktop UI" in section and "Application Shell" in section and "Remote API" in section
 assert spec_with.count("## Diagram components") == 1
 walked = with_component_walkthrough("LLD step 2 is ready.", catalog)
 assert "Desktop UI" in walked and "Diagram components" in walked

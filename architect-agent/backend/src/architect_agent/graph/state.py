@@ -22,9 +22,16 @@ class ChatTurn(TypedDict):
 
 
 def _merge_spec(left: str | None, right: str | None) -> str:
-    if right is None:
+    """Keep the richer living spec when a node returns a blank or scaffold-only rewrite."""
+    if right is None or not str(right).strip():
         return left or ""
-    return right
+    from architect_agent.interview_progress import spec_substance
+
+    prior = left or ""
+    incoming = str(right)
+    if prior and spec_substance(incoming) + 40 < spec_substance(prior):
+        return prior
+    return incoming
 
 
 def _append_messages(

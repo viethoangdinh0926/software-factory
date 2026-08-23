@@ -33,6 +33,25 @@ _DISTRIBUTED_RES = (
     r"\bmulti[\s-]?tenant\s+saas\b",
 )
 
+# Product / topology cues that mean HLD unless the user asked for stand-alone.
+# Conservative or MVP scale does not flip these back to LLD.
+_DISTRIBUTED_HINTS = (
+    "microservice",
+    "distributed",
+    "multi-region",
+    "multi-tenant",
+    "kafka",
+    "cdn",
+    "api gateway",
+    "youtube",
+    "netflix",
+    "video sharing",
+    "video platform",
+    "global market",
+    "global users",
+    "geographically",
+)
+
 
 def _matches(patterns: tuple[str, ...], text: str) -> bool:
     blob = (text or "").strip().lower()
@@ -61,6 +80,16 @@ def wants_distributed(text: str) -> bool:
     return _matches(_DISTRIBUTED_RES, text)
 
 
+def looks_distributed(text: str) -> bool:
+    """True when the text describes a distributed / HLD topology (not stand-alone)."""
+    if wants_standalone(text):
+        return False
+    if wants_distributed(text):
+        return True
+    blob = (text or "").lower()
+    return any(token in blob for token in _DISTRIBUTED_HINTS)
+
+
 def spec_locks_standalone(spec: str) -> bool:
     """True when the living spec has an explicit local/stand-alone topology lock."""
     lower = (spec or "").lower()
@@ -77,6 +106,7 @@ def resolve_design_track(
     pending: str = "",
     spec: str = "",
     prior: str = "unset",
+    context: str = "",
 ) -> str:
     """Pick lld/hld. Explicit stand-alone language wins over a prior HLD call."""
     llm = (llm_track or "unset").strip().lower()
@@ -85,6 +115,7 @@ def resolve_design_track(
     prior_n = (prior or "unset").strip().lower()
     if prior_n not in {"unset", "lld", "hld"}:
         prior_n = "unset"
+    evidence = f"{pending}\n{spec}\n{context}"
 
     if wants_standalone(pending):
         return "lld"
@@ -94,6 +125,10 @@ def resolve_design_track(
         return "lld"
     if prior_n == "unset" and wants_standalone(spec):
         return "lld"
+    # A YouTube-like / global / distributed spec stays HLD even if the model
+    # returns lld (common on "looks good" after it already argued HLD in chat).
+    if looks_distributed(evidence) and not wants_standalone(pending):
+        return "hld"
     if prior_n in {"lld", "hld"}:
         return prior_n
     if llm in {"lld", "hld"}:
@@ -106,25 +141,16 @@ def recommend_design_track(
     pending: str = "",
     spec: str = "",
     prior: str = "unset",
+    context: str = "",
 ) -> str:
     """Pick lld or hld when the model left the track unset. Never returns unset."""
     resolved = resolve_design_track(
-        "unset", pending=pending, spec=spec, prior=prior
+        "unset", pending=pending, spec=spec, prior=prior, context=context
     )
     if resolved in {"lld", "hld"}:
         return resolved
-    blob = f"{pending}\n{spec}".lower()
-    if wants_distributed(spec) or any(
-        token in blob
-        for token in (
-            "microservice",
-            "distributed",
-            "multi-region",
-            "multi-tenant",
-            "kafka",
-            "cdn",
-        )
-    ):
+    blob = f"{pending}\n{spec}\n{context}".lower()
+    if looks_distributed(blob):
         return "hld"
     if wants_standalone(spec) or any(
         token in blob
@@ -137,23 +163,33 @@ def recommend_design_track(
 
 
 def ensure_classified_topology(spec: str, track: str) -> str:
-    """Record the chosen LLD/HLD topology on the spec when the section is missing."""
+    """Record the chosen LLD/HLD topology, replacing a still-open placeholder."""
     body = spec or ""
     if track not in {"lld", "hld"}:
         return body
-    if "## deployment topology" in body.lower():
-        return body
+    from architect_agent.design_diagram import extract_spec_section
+    from architect_agent.interview_progress import append_spec_bullet
+
+    section = extract_spec_section(body, "Deployment topology").lower()
     if track == "lld":
+        if section and "to be classified" not in section and (
+            "lld" in section or "single os process" in section or "stand-alone" in section
+        ):
+            return body
         note = (
-            "- Local / single OS process (LLD). Not a distributed microservice "
+            "Local / single OS process (LLD). Not a distributed microservice "
             "topology unless later revised."
         )
     else:
+        if section and "to be classified" not in section and (
+            "hld" in section or "distributed" in section
+        ):
+            return body
         note = (
-            "- Distributed topology (HLD): multiple services/nodes as required by v1. "
+            "Distributed topology (HLD): multiple services/nodes as required by v1. "
             "Not a single-process local app unless later revised."
         )
-    return body.rstrip() + f"\n\n## Deployment topology\n{note}\n"
+    return append_spec_bullet(body, "## Deployment topology", note)
 
 
 def track_reclass_notice(prior: str, new: str) -> str:

@@ -19,12 +19,23 @@ from architect_agent.graph.nodes.common import answer_before_approve, approve_la
 from architect_agent.graph.state import DesignGraphState
 from architect_agent.interview_progress import (
     append_spec_bullet,
+    apply_skipped_question,
     ensure_specific_question,
     extract_question_titles,
     guess_spec_section,
+    heading_for_turn,
+    hydrate_spec_from_transcript,
+    is_interview_control_phrase,
+    is_pain_opportunity_question,
     living_spec_scaffold,
+    lock_open_answer_into_spec,
     record_dropped_constraints,
+    scrub_control_phrases_from_spec,
+    spec_still_scaffold,
+    spec_substance,
     specific_followup_message,
+    user_requests_ready,
+    user_skips_current_question,
 )
 from architect_agent.json_util import recover_interview_payload_from_prose
 from architect_agent.query_intent import (
@@ -35,6 +46,7 @@ from architect_agent.query_intent import (
     is_revision_request,
     is_step_approval_message,
     promote_chat_to_approve,
+    resolve_wait_action,
     user_message_first_block,
     without_user_echo,
     with_next_prompt,
@@ -43,6 +55,7 @@ from architect_agent.query_intent import (
 from architect_agent.scope import (
     ensure_classified_topology,
     ensure_standalone_spec,
+    looks_distributed,
     recommend_design_track,
     resolve_design_track,
     track_reclass_notice,
@@ -130,9 +143,22 @@ def _lock_track(
 ) -> tuple[str, str]:
     """Return (track, optional user-facing reclass note)."""
     prior = str(state.get("design_track") or "unset").lower()
-    new_track = resolve_design_track(llm_track, pending=pending, spec=spec, prior=prior)
+    context = "\n".join(
+        part
+        for part in (
+            str(state.get("discussion_digest") or ""),
+            str(state.get("pending_assistant_message") or ""),
+            str(state.get("tradeoff_ledger") or ""),
+        )
+        if part.strip()
+    )
+    new_track = resolve_design_track(
+        llm_track, pending=pending, spec=spec, prior=prior, context=context
+    )
     if require_track and new_track not in {"lld", "hld"}:
-        new_track = recommend_design_track(pending=pending, spec=spec, prior=prior)
+        new_track = recommend_design_track(
+            pending=pending, spec=spec, prior=prior, context=context
+        )
     return new_track, track_reclass_notice(prior, new_track)
 
 
@@ -180,8 +206,10 @@ def _present_classification(assistant: str, track: str) -> str:
     return body
 
 
-def _maybe_resolution_close(assistant: str, pending: str, *, changed: bool) -> str:
-    if not pending or is_step_approval_message(pending):
+def _maybe_resolution_close(
+    assistant: str, pending: str, *, changed: bool, last_assistant: str = ""
+) -> str:
+    if not pending or is_step_approval_message(pending, last_assistant):
         return assistant
     return with_resolution_close(assistant, changed=changed)
 
@@ -194,38 +222,94 @@ def _conversation_already_started(state: DesignGraphState) -> bool:
     )
 
 
-def _fold_decision_into_spec(spec: str, pending: str) -> str:
+def _fold_decision_into_spec(spec: str, pending: str, last_assistant: str = "") -> str:
     """Merge this turn's decision into the living spec so the artifact updates live."""
     living = living_spec_scaffold(spec)
     pending_text = (pending or "").strip()
     if not pending_text:
         return living
-    if is_step_approval_message(pending_text) and len(pending_text.split()) <= 4:
-        return ensure_standalone_spec(living, pending_text)
+    locked = lock_open_answer_into_spec(living, last_assistant, pending_text)
+    if looks_distributed(f"{pending_text}\n{last_assistant}\n{locked}") and not wants_standalone(
+        pending_text
+    ):
+        locked = append_spec_bullet(
+            locked,
+            "## Deployment topology",
+            "Distributed topology (HLD): global multi-service platform, not a single OS process.",
+        )
+    if is_interview_control_phrase(pending_text) or (
+        is_step_approval_message(pending_text, last_assistant)
+        and len(pending_text.split()) <= 8
+    ):
+        return maybe_compact_business_spec(
+            scrub_control_phrases_from_spec(ensure_standalone_spec(locked, pending_text))
+        )
+    heading = heading_for_turn(last_assistant, pending_text)
     fold = invoke_json(
         system=(
             "Update the living business specification markdown from one interview answer.\n"
+            f"{TRACK_CLASSIFICATION_RULES}\n"
             f"{user_message_first_block(pending_text)}"
-            "Merge the answer into the correct sections (Actors, Goals, In scope, "
+            "Merge the answer into the correct sections (Problem, Actors, Goals, In scope, "
             "Out of scope, Deployment topology, Critical invariants, Success criteria, "
             "Assumptions). Keep the document concise.\n"
             "Do NOT append raw Q&A, interview transcripts, or growing 'notes' logs.\n"
             "Prefer rewriting bullets over adding new narrative paragraphs.\n"
-            "Keep every prior decision that is still valid.\n"
+            "Keep every prior decision that is still valid. Never leave sections as "
+            "(to be captured) when the user already answered them.\n"
             'Return JSON: {"updated_business_spec": string}.'
         ),
-        user=f"Spec:\n{living}\n\nLatest user message:\n{pending_text}\n",
+        user=(
+            f"Spec:\n{locked}\n\n"
+            f"Open question:\n{last_assistant or '(none)'}\n\n"
+            f"Latest user message:\n{pending_text}\n"
+        ),
         recover_prose=recover_interview_payload_from_prose,
         prefer_prose=True,
     )
-    updated = str(fold.get("updated_business_spec") or "").strip() or living
-    lost_structure = living.lower().count("##") >= 3 and updated.lower().count("##") < 3
-    shrunk = living.lower().count("##") >= 3 and len(updated) + 80 < len(living)
-    if updated == living or "##" not in updated or lost_structure or shrunk:
-        updated = append_spec_bullet(living, guess_spec_section(pending_text), pending_text[:400])
+    updated = str(fold.get("updated_business_spec") or "").strip() or locked
+    lost_structure = locked.lower().count("##") >= 3 and updated.lower().count("##") < 3
+    shrunk = locked.lower().count("##") >= 3 and spec_substance(updated) + 40 < spec_substance(
+        locked
+    )
+    if "##" not in updated or lost_structure or shrunk:
+        updated = locked
+    # Always write the user's words into the open section so chat cannot outrun the spec.
+    updated = append_spec_bullet(updated, heading, pending_text[:400])
+    if looks_distributed(f"{pending_text}\n{last_assistant}\n{updated}") and not wants_standalone(
+        pending_text
+    ):
+        updated = append_spec_bullet(
+            updated,
+            "## Deployment topology",
+            "Distributed topology (HLD): global multi-service platform, not a single OS process.",
+        )
+    if spec_substance(locked) > spec_substance(updated):
+        updated = locked
     updated = ensure_standalone_spec(updated, pending_text)
+    updated = scrub_control_phrases_from_spec(updated)
     updated = record_dropped_constraints(updated, pending_text)
     return maybe_compact_business_spec(updated)
+
+
+def _hydrate_living_spec(
+    state: DesignGraphState,
+    spec: str,
+    pending: str = "",
+    last_assistant: str = "",
+) -> str:
+    """Replay the interview onto a spec that is still a discovery scaffold."""
+    living = living_spec_scaffold(spec)
+    hydrated = hydrate_spec_from_transcript(
+        living,
+        state.get("messages") or [],
+        str(state.get("discussion_digest") or ""),
+    )
+    if pending:
+        hydrated = lock_open_answer_into_spec(hydrated, last_assistant, pending)
+    if spec_substance(hydrated) >= spec_substance(living):
+        return hydrated
+    return living
 
 
 def _compile_phase0_spec(
@@ -247,8 +331,10 @@ def _compile_phase0_spec(
             "Use the questions and answers to create a well-structured spec.\n"
             "Include sections like: Executive Summary, Core Business Requirements, "
             "Non-Functional Requirements, Technical Constraints, Success Metrics, etc.\n"
+            f"{TRACK_CLASSIFICATION_RULES}\n"
             "Include a ## Deployment topology section (local stand-alone / LLD vs "
-            "distributed / HLD) with an explicit recommendation.\n"
+            "distributed / HLD) with an explicit recommendation using FACTORY LLD / "
+            "HLD DEFINITIONS only.\n"
             "Honor DISCUSSION MEMORY: do not drop settled issues or rejected proposals.\n"
             "Respond ONLY with JSON:\n"
             "{\n"
@@ -273,6 +359,16 @@ def _compile_phase0_spec(
         spec_compilation_result.get("compiled_spec") or business_spec,
         " ".join(str(v) for v in (interview_answers or {}).values()),
     )
+    hydrated = _hydrate_living_spec(
+        state,
+        business_spec,
+        pending=pending,
+        last_assistant=str(state.get("pending_assistant_message") or ""),
+    )
+    if spec_still_scaffold(compiled_spec) or spec_substance(hydrated) > spec_substance(
+        compiled_spec
+    ):
+        compiled_spec = hydrated
     assistant = _present_compiled_spec(
         compiled_spec,
         without_user_echo(
@@ -340,7 +436,85 @@ def _conduct_phase0_turn(
     answers = dict(interview_answers or {})
     if question_id:
         answers[question_id] = pending
-    spec = _fold_decision_into_spec(business_spec, pending)
+    last = str(state.get("pending_assistant_message") or "")
+    if user_requests_ready(pending, last):
+        return _compile_phase0_spec(
+            state,
+            pending=pending,
+            business_spec=_fold_decision_into_spec(business_spec, pending, last),
+            interview_questions=questions_in,
+            interview_answers=answers,
+            history_tail=history_tail,
+        )
+    if user_skips_current_question(pending, last):
+        if not last:
+            last = str(current_question.get("text") or "")
+        spec = apply_skipped_question(
+            living_spec_scaffold(business_spec),
+            str(current_question.get("text") or last),
+            last,
+        )
+        spec = scrub_control_phrases_from_spec(spec)
+        next_index = min(idx + 1, len(questions_in)) if questions_in else 0
+        if not questions_in or next_index >= len(questions_in):
+            return _compile_phase0_spec(
+                state,
+                pending=pending,
+                business_spec=spec,
+                interview_questions=questions_in,
+                interview_answers=answers,
+                history_tail=history_tail,
+            )
+        while next_index < len(questions_in) and is_pain_opportunity_question(
+            str(questions_in[next_index].get("text") or "")
+        ):
+            spec = apply_skipped_question(
+                spec, str(questions_in[next_index].get("text") or ""), last
+            )
+            next_index += 1
+        if next_index >= len(questions_in):
+            return _compile_phase0_spec(
+                state,
+                pending=pending,
+                business_spec=spec,
+                interview_questions=questions_in,
+                interview_answers=answers,
+                history_tail=history_tail,
+            )
+        nxt = questions_in[next_index]
+        assistant = (
+            "Skipped that question and wrote the recommended default into the spec.\n\n"
+            + str(nxt.get("text") or "")
+        )
+        return _remember(
+            state,
+            {
+                "phase": "phase0",
+                "design_track": "unset",
+                "design_step": 0,
+                "business_spec": spec,
+                "tradeoff_ledger": state.get("tradeoff_ledger") or "",
+                "ready_to_advance": False,
+                "ready_for_design": False,
+                "design_ready_to_approve": False,
+                "spec_enhanced": True,
+                "interview_questions": questions_in,
+                "interview_answers": answers,
+                "current_question_index": next_index,
+                "interview_complete": False,
+                "spec_compiled": False,
+                "pending_user_feedback": "",
+                "pending_assistant_message": assistant,
+                "publish_requested": False,
+                "stay_on_interrupt": False,
+                "messages": [{"role": "assistant", "content": assistant, "node": "phase0"}],
+            },
+            pending,
+        )
+    last_assistant = str(state.get("pending_assistant_message") or "")
+    if not last_assistant:
+        last_assistant = str(current_question.get("text") or "")
+    spec = _fold_decision_into_spec(business_spec, pending, last_assistant)
     turn = invoke_json(
         system=(
             "You are the Architect agent's Phase 0 interview conductor (Principal Architect).\n"
@@ -352,6 +526,14 @@ def _conduct_phase0_turn(
             "message first. The living spec was already updated from this message — "
             "do not drop those decisions. Focus assistant_message on acknowledging "
             "the decision and asking at most one next specific question.\n"
+            "Do not keep asking for a startup-style pain / opportunity / why-build "
+            "paragraph. If they named the product and job (public global video "
+            "platform, compete with YouTube, post/view videos), that IS the problem "
+            "statement — write it into ## Problem and move to a design-relevant "
+            "question (actors, v1 capabilities, topology). Those answers do not "
+            "change LLD vs HLD by themselves.\n"
+            "If they skip a question or say that is all they have, accept the "
+            "recommended default and do not re-ask.\n"
             "You may stay on the current question, skip ahead, rewrite a later "
             "question, or mark the interview complete — but never reply with only "
             "the next canned question.\n"
@@ -401,6 +583,11 @@ def _conduct_phase0_turn(
     complete = bool(turn.get("interview_complete")) or (
         bool(questions) and next_index >= len(questions)
     )
+    llm_spec = str(turn.get("updated_business_spec") or "").strip()
+    if llm_spec and spec_substance(llm_spec) > spec_substance(spec):
+        spec = append_spec_bullet(
+            llm_spec, heading_for_turn(last_assistant, pending), pending[:400]
+        )
     if complete:
         return _compile_phase0_spec(
             state,
@@ -475,7 +662,12 @@ def phase0_classify_node(state: DesignGraphState) -> dict[str, Any]:
     # If we have a compiled spec and user wants to proceed with classification
     if spec_compiled and interview_complete:
         # Concerns / edits after the compiled spec must be applied, not skipped.
-        if pending and is_revision_request(pending) and not is_step_approval_message(pending):
+        last_as = str(state.get("pending_assistant_message") or "")
+        if (
+            pending
+            and is_revision_request(pending, last_as)
+            and not is_step_approval_message(pending, last_as)
+        ):
             spec_update_result = invoke_json(
                 system=(
                     "You are the Architect agent's Phase 0 spec refiner (Principal Architect).\n"
@@ -514,6 +706,9 @@ def phase0_classify_node(state: DesignGraphState) -> dict[str, Any]:
                 spec_update_result.get("updated_business_spec") or business_spec,
                 pending,
             )
+            hydrated = _hydrate_living_spec(state, spec, pending=pending)
+            if spec_still_scaffold(spec) or spec_substance(hydrated) > spec_substance(spec):
+                spec = hydrated
             new_track, reclass_note = _lock_track(
                 state, new_track, pending, spec, require_track=True
             )
@@ -611,6 +806,9 @@ def phase0_classify_node(state: DesignGraphState) -> dict[str, Any]:
             spec = ensure_standalone_spec(
                 result.get("updated_business_spec") or business_spec, pending
             )
+            hydrated = _hydrate_living_spec(state, spec, pending=pending)
+            if spec_still_scaffold(spec) or spec_substance(hydrated) > spec_substance(spec):
+                spec = hydrated
             new_track, reclass_note = _lock_track(
                 state, new_track, pending, spec, require_track=True
             )
@@ -700,7 +898,7 @@ def phase0_classify_node(state: DesignGraphState) -> dict[str, Any]:
                 pending,
             )
 
-        if is_informational_query(pending):
+        if is_informational_query(pending, str(state.get("pending_assistant_message") or "")):
             return answer_before_approve(
                 state,
                 pending,
@@ -774,6 +972,9 @@ def phase0_classify_node(state: DesignGraphState) -> dict[str, Any]:
         spec = ensure_standalone_spec(
             result.get("updated_business_spec") or business_spec, pending
         )
+        hydrated = _hydrate_living_spec(state, spec, pending=pending)
+        if spec_still_scaffold(spec) or spec_substance(hydrated) > spec_substance(spec):
+            spec = hydrated
         new_track, reclass_note = _lock_track(
             state, new_track, pending, spec, require_track=True
         )
@@ -820,7 +1021,7 @@ def phase0_classify_node(state: DesignGraphState) -> dict[str, Any]:
     # A later user turn is never "start discovery". Fresh interview scripts only
     # on the first Phase 0 turn (no prior assistant, typically empty pending).
     if pending and _conversation_already_started(state):
-        if is_informational_query(pending):
+        if is_informational_query(pending, str(state.get("pending_assistant_message") or "")):
             return answer_before_approve(
                 state,
                 pending,
@@ -889,6 +1090,10 @@ def phase0_classify_node(state: DesignGraphState) -> dict[str, Any]:
             "or which alternative) and be answerable in one sentence. Avoid yes/no questions.\n"
             "NEVER ask them to 'tell me more about your system' or 'provide more details' "
             "without naming the missing fact.\n"
+            "Do NOT ask a problem / opportunity / pain-point / why-build-now question "
+            "when the request already names the product and job. That is not required "
+            "for system design. Ask design-relevant questions (who uploads vs watches, "
+            "v1 capabilities, public vs private, local vs distributed).\n"
             "Honor DISCUSSION MEMORY: do not ask about issues already settled.\n"
             f"{TRACK_CLASSIFICATION_RULES}\n"
             "If the user wants a local/self-contained/stand-alone app, ask about on-device "
@@ -920,6 +1125,14 @@ def phase0_classify_node(state: DesignGraphState) -> dict[str, Any]:
     if not isinstance(questions, list):
         questions = []
     questions = [q for q in questions if isinstance(q, dict) and str(q.get("text") or "").strip()]
+    spec_preview = living_spec_scaffold(business_spec)
+    if pending:
+        spec_preview = _fold_decision_into_spec(spec_preview, pending)
+    named_product = len("".join(ch for ch in spec_preview.lower() if ch.isalnum())) >= 40
+    if named_product:
+        questions = [
+            q for q in questions if not is_pain_opportunity_question(str(q.get("text") or ""))
+        ]
     assistant_message = str(questions_result.get("assistant_message") or "").strip()
     asked = extract_question_titles(
         [m for m in (state.get("messages") or []) if m.get("node") == "phase0"]
@@ -1027,10 +1240,9 @@ def phase0_wait_node(state: DesignGraphState) -> dict[str, Any]:
     if clar:
         return clar
     state["discussion_digest"] = keynotes
-    advance_now = is_advance_request(user_text)
-    action = promote_chat_to_approve(action, user_text, can_approve=ready)
-    if kind == "approve" and ready and action == "chat":
-        action = "approve"
+    last_as = str(state.get("pending_assistant_message") or "")
+    action = resolve_wait_action(action, user_text, last_as, consult_kind=kind)
+    advance_now = is_advance_request(user_text, last_as)
     msgs: list[dict[str, Any]] = []
     if user_text:
         msgs.append({"role": "user", "content": user_text, "node": "phase0"})
@@ -1077,7 +1289,7 @@ def phase0_wait_node(state: DesignGraphState) -> dict[str, Any]:
         if rewound is not None:
             return rewound
 
-    if user_text and is_informational_query(user_text):
+    if action == "answer" and user_text:
         return answer_before_approve(
             state,
             user_text,
@@ -1090,10 +1302,23 @@ def phase0_wait_node(state: DesignGraphState) -> dict[str, Any]:
             },
         )
 
+    spec = str(state.get("business_spec") or "")
+    if user_text and (action == "revise" or kind in {"answer", "complement", "concern"}):
+        last = str(state.get("pending_assistant_message") or "")
+        spec = lock_open_answer_into_spec(living_spec_scaffold(spec), last, user_text)
+        if looks_distributed(f"{user_text}\n{last}\n{spec}") and not wants_standalone(user_text):
+            spec = append_spec_bullet(
+                spec,
+                "## Deployment topology",
+                "Distributed topology (HLD): global multi-service platform, "
+                "not a single OS process.",
+            )
+
     return {
         "phase": "phase0",
         "design_track": track,  # type: ignore[typeddict-item]
         "design_step": 0,
+        "business_spec": spec,
         "ready_to_advance": False,
         "pending_user_feedback": user_text,
         "stay_on_interrupt": False,

@@ -192,6 +192,10 @@ def consult_user_turn(
     )
     if not pending_s or not last:
         return fallback
+    from engineer_agent.query_intent import classify_user_message
+
+    _category, classified = classify_user_message(pending_s, last)
+    forced_kind = "approve" if classified == "approve" else ""
     try:
         from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -220,6 +224,10 @@ def consult_user_turn(
         payload = parse_llm_json_object(str(content))
     except Exception:
         logger.exception("consult_user_turn failed; treating the turn as relevant")
+        if forced_kind:
+            return UserTurnConsult(
+                relevant=True, vague=False, kind=forced_kind, keynotes=prior, clarify_message=""
+            )
         return fallback
     relevant = bool(payload.get("relevant", True))
     vague = bool(payload.get("vague", False))
@@ -228,6 +236,14 @@ def consult_user_turn(
         kind = "unclear" if (vague or not relevant) else "complement"
     updated = str(payload.get("keynotes") or "").strip()
     clarify = str(payload.get("clarify_message") or "").strip()
+    if forced_kind:
+        return UserTurnConsult(
+            relevant=True,
+            vague=False,
+            kind=forced_kind,
+            keynotes=updated or prior,
+            clarify_message="",
+        )
     if (not relevant) or vague:
         if not clarify:
             clarify = (

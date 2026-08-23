@@ -2,6 +2,7 @@
 """Smoke: ingest HLD package → plan one service → v2 rename/drop → LLD track change."""
 from __future__ import annotations
 
+import inspect
 import os
 import sys
 import tempfile
@@ -20,9 +21,13 @@ from orchestrator_agent.graph import reset_graph
 from orchestrator_agent.graph.nodes.common import pick_assistant_message, service_focus_user_block
 from orchestrator_agent.llm import get_chat_model
 from orchestrator_agent.package_parse import extract_http_endpoints, format_agreed_endpoints, service_contract_section
+from orchestrator_agent import query_intent as orch_intent
 from orchestrator_agent.query_intent import (
     NEXT_PROMPT_HEADER,
     USER_MESSAGE_FIRST_RULES,
+    format_classify_context,
+    resolve_wait_action,
+    workflow_action,
     is_advance_request,
     is_full_phase_request,
     is_revision_request,
@@ -109,6 +114,11 @@ assert "POST /login" in pick_assistant_message(
     fallback="missing",
     artifact_keys=("api_design",),
 )
+assert "Last assistant message:" in format_classify_context("wf", "pick REST")
+assert "BOTH messages" in inspect.getsource(orch_intent._llm_turn_intent)
+assert "Latest user message:" in inspect.getsource(orch_intent._llm_turn_intent)
+assert workflow_action("revise") == "revise"
+assert resolve_wait_action("answer", "What features are in v1?") == "answer"
 assert wants_endpoint_list("Show me all URL enpoints we aggreed on")
 assert not is_revision_request("Show me all URL endpoints we agreed on")
 assert is_revision_request("Add a health check endpoint")

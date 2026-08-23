@@ -22,7 +22,9 @@ def classify_node(state: dict[str, Any]) -> dict[str, Any]:
     topology = str(state.get("topology") or "").lower()
     if (
         pending
-        and not is_revision_request(pending)
+        and not is_revision_request(
+            pending, str(state.get("pending_assistant_message") or "")
+        )
         and topology in {"standalone", "distributed"}
     ):
         assistant = answer_current_artifacts(

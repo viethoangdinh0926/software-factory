@@ -15,7 +15,7 @@ from orchestrator_agent.graph.nodes.common import (
     with_session_digest,
 )
 from orchestrator_agent.discussion_memory import consult_user_turn
-from orchestrator_agent.query_intent import promote_chat_to_approve
+from orchestrator_agent.query_intent import resolve_wait_action
 
 
 def _last_assistant(messages: list[dict[str, Any]] | None, fallback: str = "") -> str:
@@ -138,17 +138,20 @@ def wait_node(state: dict[str, Any]) -> dict[str, Any]:
         tile_can_approve = bool(
             preview and decorate_service(preview).get("can_approve")
         )
-        if user_text and action == "chat" and preview:
+        consult_kind = ""
+        last_as = _last_assistant(
+            list(preview.get("messages") or []) if preview else [],
+            str((preview or {}).get("pending_assistant_message") or ""),
+        )
+        if user_text and action in {"chat", "answer", "revise"} and preview:
             consult = consult_user_turn(
                 pending=user_text,
-                last_assistant=_last_assistant(
-                    list(preview.get("messages") or []),
-                    str(preview.get("pending_assistant_message") or ""),
-                ),
+                last_assistant=last_as,
                 keynotes=str(preview.get("discussion_digest") or ""),
                 phase=str(preview.get("status") or "tile"),
             )
-            if consult.needs_clarification:
+            consult_kind = consult.kind
+            if consult.needs_clarification and action != "approve":
                 services = _append_service_user(state, service_id, user_text)
                 patched = dict(state)
                 patched["services"] = services
@@ -179,9 +182,11 @@ def wait_node(state: dict[str, Any]) -> dict[str, Any]:
             if consult.kind == "approve" and tile_can_approve:
                 action = "approve"
 
-        action = promote_chat_to_approve(action, user_text, can_approve=tile_can_approve)
+        action = resolve_wait_action(
+            action, user_text, last_as, consult_kind=consult_kind
+        )
 
-        if user_text and action == "chat":
+        if user_text and action in {"chat", "revise", "answer"}:
             services = _append_service_user(state, service_id, user_text)
         elif action == "approve":
             services = _append_service_user(state, service_id, user_text or "Approved")
@@ -201,7 +206,7 @@ def wait_node(state: dict[str, Any]) -> dict[str, Any]:
             }
         status = str(svc.get("status") or "planning")
 
-        if action == "chat":
+        if action in {"chat", "revise", "answer"}:
             chat_route = {
                 "planning": "relations",
                 "awaiting_relations": "relations",
@@ -305,17 +310,20 @@ def wait_node(state: dict[str, Any]) -> dict[str, Any]:
             "messages": msgs,
         }
 
-    if user_text and action == "chat":
+    consult_kind = ""
+    last_as = _last_assistant(
+        list(state.get("messages") or []),
+        str(state.get("pending_assistant_message") or ""),
+    )
+    if user_text and action in {"chat", "answer", "revise"}:
         consult = consult_user_turn(
             pending=user_text,
-            last_assistant=_last_assistant(
-                list(state.get("messages") or []),
-                str(state.get("pending_assistant_message") or ""),
-            ),
+            last_assistant=last_as,
             keynotes=str(state.get("discussion_digest") or ""),
             phase=wait_kind or "session",
         )
-        if consult.needs_clarification:
+        consult_kind = consult.kind
+        if consult.needs_clarification and action != "approve":
             note = close_user_message(
                 consult.clarify_message,
                 approve_kind=wait_kind if session_can_approve else "",
@@ -345,14 +353,16 @@ def wait_node(state: dict[str, Any]) -> dict[str, Any]:
         if consult.kind == "approve" and session_can_approve:
             action = "approve"
 
-    action = promote_chat_to_approve(action, user_text, can_approve=session_can_approve)
+    action = resolve_wait_action(
+        action, user_text, last_as, consult_kind=consult_kind
+    )
 
-    if user_text and action == "chat":
+    if user_text and action in {"chat", "revise", "answer"}:
         msgs.append({"role": "user", "content": user_text, "node": wait_kind or "chat"})
     if action == "approve":
         msgs.append({"role": "user", "content": user_text or "Approved", "node": wait_kind or "approve"})
 
-    if action == "chat":
+    if action in {"chat", "revise", "answer"}:
         if wait_kind == "idle":
             note = close_user_message(
                 "No active planning step. Waiting for the next architect package, or end the session.",

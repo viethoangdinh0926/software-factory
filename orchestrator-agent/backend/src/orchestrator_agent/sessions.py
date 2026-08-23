@@ -22,7 +22,11 @@ from orchestrator_agent.git_access import (
 from orchestrator_agent.graph import build_graph, initial_state
 from orchestrator_agent.graph.nodes.common import decorate_service
 from orchestrator_agent.package_parse import ParsedPackage, parse_design_package
-from orchestrator_agent.query_intent import classify_user_message
+from orchestrator_agent.query_intent import (
+    classify_user_message,
+    format_classify_context,
+    workflow_action,
+)
 from orchestrator_agent.secrets_store import load_git_secrets, save_git_secrets
 
 logger = logging.getLogger(__name__)
@@ -370,7 +374,7 @@ class SessionStore:
         if session.finalized:
             return session
         if (
-            action in {"chat", "approve"}
+            action in {"chat", "approve", "revise", "answer"}
             and session.discussion_locked
             and action != "ingest"
         ):
@@ -404,13 +408,22 @@ class SessionStore:
             )
         else:
             can_approve = bool(session.to_public().get("can_approve"))
-        context = (
-            f"Orchestrator phase={session.phase} wait={session.wait_kind} "
-            f"service={service_id or 'session'} can_approve={can_approve}."
+        last = ""
+        for msg in reversed(session.messages or []):
+            if isinstance(msg, dict) and msg.get("role") == "assistant":
+                last = str(msg.get("content") or "")
+                break
+        context = format_classify_context(
+            workflow=(
+                f"Orchestrator phase={session.phase} wait={session.wait_kind} "
+                f"service={service_id or 'session'} can_approve={can_approve}."
+            ),
+            last_assistant=last,
         )
-        if classify_user_message(text, context)[1] == "approve":
-            return self.resume(session_id, action="approve", text=text, service_id=service_id)
-        return self.resume(session_id, action="chat", text=text, service_id=service_id)
+        _category, action = classify_user_message(text, context)
+        return self.resume(
+            session_id, action=workflow_action(action), text=text, service_id=service_id
+        )
 
     def approve(self, session_id: str, service_id: str | None = None) -> WorkflowSession:
         return self.resume(session_id, action="approve", service_id=service_id)

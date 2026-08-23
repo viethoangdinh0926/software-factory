@@ -374,6 +374,10 @@ _USER_STOP_PATTERNS = (
     re.compile(r"\benable approve\b", re.I),
     re.compile(r"\bapprove (the )?(business )?spec\b", re.I),
     re.compile(r"\bskip (the )?(rest of )?(the )?(interview|questions?)\b", re.I),
+    re.compile(r"\bthat'?s all I have\b", re.I),
+    re.compile(r"\bthat is all I have\b", re.I),
+    re.compile(r"\bthat'?s all for now\b", re.I),
+    re.compile(r"\bthat is all for now\b", re.I),
     re.compile(r"\bmove on\b", re.I),
     re.compile(r"\bproceed (to|with) (market|design|approval)\b", re.I),
     re.compile(r"\bgo ahead (and )?approve\b", re.I),
@@ -395,16 +399,254 @@ _USER_APPROVE_ANYWAY_PATTERNS = (
 )
 
 # Minimum topics needed before an honest system-design sketch is feasible.
-_REQUIRED_FOR_SKETCH = ("problem", "actors", "scope")
+# Problem / opportunity is optional: a named product + job already states it.
+_REQUIRED_FOR_SKETCH = ("actors", "scope")
+
+_SKIP_QUESTION_PATTERNS = (
+    re.compile(r"\bskip (this|that|the current) question\b", re.I),
+    re.compile(r"\bskip (this|that) (one|topic)\b", re.I),
+    re.compile(r"\blet'?s skip (this|that|it)\b", re.I),
+    re.compile(r"\bpass on (this|that) question\b", re.I),
+)
 
 
-def user_requests_ready(text: str | None) -> bool:
+def user_requests_ready(text: str | None, last_assistant: str = "") -> bool:
     """True when the user explicitly asks to stop questioning / approve / move on."""
-    if not text or not str(text).strip():
+    body = (text or "").strip()
+    if not body:
         return False
-    return any(p.search(str(text)) for p in _USER_STOP_PATTERNS) or user_requests_approve_anyway(
-        text
+    from architect_agent.query_intent import classify_user_message
+
+    if classify_user_message(body, last_assistant) == ("command", "approve"):
+        return True
+    return any(p.search(body) for p in _USER_STOP_PATTERNS) or user_requests_approve_anyway(
+        body
     )
+
+
+def user_skips_current_question(text: str | None, last_assistant: str = "") -> bool:
+    """True when they want to drop this one interview question, not the whole interview."""
+    body = (text or "").strip()
+    if not body:
+        return False
+    if user_requests_ready(body, last_assistant):
+        return False
+    from architect_agent.query_intent import classify_user_message
+
+    category, action = classify_user_message(body, last_assistant)
+    if category == "information" or action == "approve":
+        return False
+    return any(p.search(body) for p in _SKIP_QUESTION_PATTERNS)
+
+
+def is_interview_control_phrase(text: str | None) -> bool:
+    """True for skip / stop / help-me-answer lines that must never become spec bullets."""
+    body = (text or "").strip()
+    if not body:
+        return False
+    from architect_agent.query_intent import looks_like_help_answering
+
+    return (
+        user_skips_current_question(body)
+        or user_requests_ready(body)
+        or looks_like_help_answering(body)
+    )
+
+
+_ACCEPT_RECOMMENDED_PATTERNS = (
+    re.compile(r"\bas you recommended\b", re.I),
+    re.compile(r"\bas recommended\b", re.I),
+    re.compile(r"\byour recommendation\b", re.I),
+    re.compile(r"\bgo with (your|the) recommend", re.I),
+    re.compile(r"\blet'?s go with (that|your|the recommend)", re.I),
+    re.compile(r"\bi(?:'ll| will) (take|go with) (that|your)", re.I),
+    re.compile(r"\boption\s*1\b", re.I),
+    re.compile(r"\bthe first (one|option)\b", re.I),
+)
+
+_CANNOT_ANSWER_PATTERNS = (
+    re.compile(
+        r"\bi don.?t have\b.{0,40}\b(concrete|specific|role|roles|answer|preference)",
+        re.I,
+    ),
+    re.compile(
+        r"\bi do not have\b.{0,40}\b(concrete|specific|role|roles|answer|preference)",
+        re.I,
+    ),
+    re.compile(r"\bno concrete (role|roles|answer)", re.I),
+    re.compile(r"\bno (particular|specific) (role|preference|answer)", re.I),
+    re.compile(r"\bi (don.?t|do not) know what to (say|pick|choose)\b", re.I),
+)
+
+_RECOMMENDATION_BLOCK_RE = re.compile(
+    r"(?im)^\s*(?:\*{0,2}Recommendation\*{0,2}|We recommend|I recommend)\s*[:\-]\s*(.+)"
+)
+
+
+def accepts_recommended_default(text: str | None) -> bool:
+    """True when they accept the architect's recommended option instead of inventing one."""
+    body = (text or "").strip()
+    if not body:
+        return False
+    return any(p.search(body) for p in _ACCEPT_RECOMMENDED_PATTERNS)
+
+
+def cannot_answer_current_question(text: str | None) -> bool:
+    """True when they cannot name a concrete answer and we should take the default."""
+    body = (text or "").strip()
+    if not body:
+        return False
+    return any(p.search(body) for p in _CANNOT_ANSWER_PATTERNS)
+
+
+def _is_short_approval(text: str | None, last_assistant: str = "") -> bool:
+    body = (text or "").strip()
+    if not body or len(body.split()) > 8:
+        return False
+    from architect_agent.query_intent import is_step_approval_message
+
+    return is_step_approval_message(body, last_assistant)
+
+
+_CONTROL_BULLET_RE = re.compile(
+    r"(?im)^[-*]\s*(?:"
+    r"skip this question(?: please)?"
+    r"|skip (?:this|that) (?:one|topic|question)"
+    r"|let'?s skip (?:this|that|it)"
+    r"|that'?s all I have(?: for now)?"
+    r"|can you suggest a response\??"
+    r"|suggest a response"
+    r")\s*$"
+)
+
+
+def scrub_control_phrases_from_spec(spec: str) -> str:
+    """Drop skip/help control lines that leaked into the living spec."""
+    cleaned = _CONTROL_BULLET_RE.sub("", spec or "")
+    return re.sub(r"\n{3,}", "\n\n", cleaned).strip() + ("\n" if cleaned.strip() else "")
+
+
+_RECOMMENDED_RE = re.compile(
+    r"(?im)(?:➡️|→)?\s*\(\s*Recommended\s*\)\s*[:\-]?\s*(.+)"
+)
+_PAIN_QUESTION_RE = re.compile(
+    r"(?i)(pain point|problem / opportunity|why (?:build|now)|worth building|who hurts)"
+)
+
+
+def extract_recommended_default(*texts: str) -> str:
+    """Pull the recommended default from a question or last assistant turn."""
+    for text in texts:
+        for match in _RECOMMENDED_RE.finditer(text or ""):
+            line = (match.group(1) or "").strip()
+            if line:
+                return line.splitlines()[0].strip()
+    for text in texts:
+        for match in _RECOMMENDATION_BLOCK_RE.finditer(text or ""):
+            para = (match.group(1) or "").strip()
+            if not para:
+                continue
+            parts = re.split(r"(?<=[.!?])\s+", para, maxsplit=1)
+            taken = " ".join(part.strip() for part in parts if part.strip())
+            return taken[:400] or para.splitlines()[0].strip()
+    return ""
+
+
+def lock_open_answer_into_spec(spec: str, last_assistant: str, pending: str) -> str:
+    """Write this turn's answer or the accepted recommendation into the open section."""
+    living = living_spec_scaffold(spec)
+    pending_text = (pending or "").strip()
+    if not pending_text:
+        return living
+    heading = heading_for_turn(last_assistant, pending_text)
+    recommended = extract_recommended_default(last_assistant)
+    from architect_agent.query_intent import (
+        classify_user_message,
+        is_accept_recommendation_message,
+    )
+
+    _category, action = classify_user_message(pending_text, last_assistant)
+    take_default = (
+        user_skips_current_question(pending_text)
+        or cannot_answer_current_question(pending_text)
+        or (bool(recommended) and is_accept_recommendation_message(pending_text, last_assistant))
+        or (action == "approve" and bool(recommended))
+    )
+    if take_default:
+        if recommended:
+            living = append_spec_bullet(living, heading, recommended)
+        elif user_skips_current_question(pending_text) or cannot_answer_current_question(
+            pending_text
+        ):
+            living = apply_skipped_question(living, last_assistant, last_assistant)
+        return scrub_control_phrases_from_spec(living)
+    if is_interview_control_phrase(pending_text) or _is_short_approval(
+        pending_text, last_assistant
+    ):
+        return living
+    return append_spec_bullet(living, heading, pending_text[:400])
+
+
+def spec_still_scaffold(spec: str) -> bool:
+    """True when discovery sections are still placeholders."""
+    body = spec or ""
+    placeholders = len(re.findall(r"(?i)to be (?:captured|classified after discovery)", body))
+    return placeholders >= 3
+
+
+def hydrate_spec_from_transcript(
+    spec: str,
+    messages: Iterable[Any] | None,
+    digest: str = "",
+) -> str:
+    """Replay Phase 0 answers onto a scaffold that never absorbed the interview."""
+    del digest
+    living = living_spec_scaffold(spec)
+    last_assistant = ""
+    for msg in messages or []:
+        if not isinstance(msg, dict):
+            continue
+        content = str(msg.get("content") or "").strip()
+        if not content:
+            continue
+        role = str(msg.get("role") or "")
+        if role == "assistant":
+            last_assistant = content
+        elif role == "user":
+            living = lock_open_answer_into_spec(living, last_assistant, content)
+    return scrub_control_phrases_from_spec(living)
+
+
+def is_pain_opportunity_question(text: str) -> bool:
+    """True when a question is the optional business-case / why-build prompt."""
+    return bool(_PAIN_QUESTION_RE.search(text or ""))
+
+
+def apply_skipped_question(spec: str, question_text: str, last_assistant: str = "") -> str:
+    """Record the recommended default so a skipped question does not stay open."""
+    default = extract_recommended_default(question_text, last_assistant)
+    if not default:
+        default = (
+            "Accepted the recommended default for this question; no extra v1 constraint."
+        )
+    topic = question_topic_id(question_text)
+    if topic == "problem" or is_pain_opportunity_question(question_text):
+        heading = "## Problem"
+    elif topic == "actors":
+        heading = "## Actors"
+    elif topic == "scope":
+        heading = "## In scope (v1)"
+    elif topic == "nongoals":
+        heading = "## Out of scope"
+    elif topic == "invariants":
+        heading = "## Critical invariants"
+    elif topic == "success":
+        heading = "## Success criteria"
+    elif topic == "assumptions":
+        heading = "## Assumptions & risks"
+    else:
+        heading = guess_spec_section(question_text + " " + default)
+    return append_spec_bullet(spec, heading, default)
 
 
 def user_requests_approve_anyway(text: str | None) -> bool:
@@ -498,6 +740,41 @@ def living_spec_scaffold(spec: str) -> str:
     )
 
 
+_TOPIC_HEADINGS = {
+    "problem": "## Problem",
+    "actors": "## Actors",
+    "scope": "## In scope (v1)",
+    "nongoals": "## Out of scope",
+    "invariants": "## Critical invariants",
+    "success": "## Success criteria",
+    "assumptions": "## Assumptions & risks",
+}
+
+
+def heading_for_turn(question: str, answer: str) -> str:
+    """Pick the living-spec heading from the open question, then the answer."""
+    topic = question_topic_id(question)
+    if topic and topic in _TOPIC_HEADINGS:
+        return _TOPIC_HEADINGS[topic]
+    q = (question or "").lower()
+    if any(
+        token in q
+        for token in ("scale", "capacity", "dau", "qps", "concurrent", "storage volume")
+    ):
+        return "## Assumptions & risks"
+    return guess_spec_section(answer)
+
+
+def spec_substance(spec: str) -> int:
+    """Count characters that are not scaffold placeholders."""
+    body = re.sub(
+        r"(?i)to be (?:captured|classified after discovery|refined)|tbd",
+        "",
+        spec or "",
+    )
+    return len(re.sub(r"\s+", "", body))
+
+
 def guess_spec_section(answer: str) -> str:
     """Pick the living-spec heading a decision should land under."""
     lower = (answer or "").lower()
@@ -555,7 +832,13 @@ def append_spec_bullet(spec: str, heading: str, text: str) -> str:
     """Add a decision bullet under a markdown heading without dropping earlier bullets."""
     body = living_spec_scaffold(spec)
     bullet = re.sub(r"\s+", " ", (text or "").strip()).strip(" -")
-    if not bullet:
+    if (
+        not bullet
+        or is_interview_control_phrase(bullet)
+        or accepts_recommended_default(bullet)
+        or cannot_answer_current_question(bullet)
+        or _is_short_approval(bullet)
+    ):
         return body
     line = f"- {bullet}"
     compact = line.lower()

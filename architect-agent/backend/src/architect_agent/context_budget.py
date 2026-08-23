@@ -78,7 +78,13 @@ Effortless interview (grill-me, low friction):
    artifact in full using explicit labeled assumptions. Do not stall waiting for numbers.
 2. Ask at most ONE question per turn, and only if the answer would change a major
    boundary (LLD vs HLD, consistency vs availability, monolith vs services).
-3. Always include a (Recommended) default. Treat silence / "ok" / Approve as accepting it.
+   Do not stall on a startup-pitch "pain / opportunity / why build now" question
+   when the user already named the product and job (e.g. a public global video
+   platform). That is enough to write ## Problem and move on. Those answers do
+   not change topology or service shape.
+3. Always include a (Recommended) default. Treat silence / "ok" / Approve / skip
+   this question as accepting it. If they say that is all they have, stop
+   questioning, write defaults, and compile.
 4. NEVER repeat or rephrase a question already asked, and NEVER re-open an issue
    already settled in DISCUSSION MEMORY. If they did not answer, keep the
    recommended default in the artifact and ask them to confirm, approve, or agree.
@@ -111,19 +117,19 @@ GRILL_ME_DIGEST = INTERVIEW_TECHNIQUE_DIGEST
 _PRINCIPAL_ARCHITECT_RULES = """
 Principal Software Architect workflow:
 - Propose labeled assumptions instead of blocking on missing details.
-- Phase 0: classify LLD vs HLD from deployment topology, not product analogies.
-  LLD: single OS process, library, CLI, local self-contained stand-alone / desktop /
-  single-machine app, modular monolith on one host.
-  HLD: the user actually wants a distributed topology (microservices, multi-node
-  storage, multi-region, CDN/Kafka as required infra).
-  Analogies like YouTube/Netflix/Uber/SaaS do NOT lock HLD. An explicit local /
-  stand-alone / self-contained / not-distributed request OVERRIDES a prior HLD call.
+- Phase 0: classify LLD vs HLD as alternative tracks (never sequential phases)
+  from deployment topology, not product analogies. Use FACTORY LLD / HLD DEFINITIONS
+  only — do not invent textbook meanings. Analogies like YouTube/Netflix/Uber/SaaS
+  do NOT lock a track. An explicit local / stand-alone / self-contained /
+  not-distributed request is LLD and OVERRIDES a prior HLD call.
   Classify on the first turn whenever the spec is enough; do not interview for scale yet.
-- LLD: (1) gather rules with recommended defaults written into the spec (2) OO blueprint
-  + patterns + SOLID + class/structure Mermaid (3) verify; ask them to confirm & send.
-- HLD (strict order): (1) numeric capacity plan (2) domain model (3) core microservices
-  with owned objects/operations (4) communication schemes + infra + concrete Mermaid
-  (5) structured FMEA (6) synthesis. Do not ship HTTP API catalogs from HLD.
+- LLD track (only if topology is single-process): (1) gather rules with recommended
+  defaults written into the spec (2) OO blueprint + patterns + SOLID + class/structure
+  Mermaid (3) verify; ask them to confirm & send.
+- HLD track (only if topology is distributed; strict order): (1) numeric capacity plan
+  (2) domain model (3) core microservices with owned objects/operations (4) communication
+  schemes + infra + concrete Mermaid (5) structured FMEA (6) synthesis. Do not ship
+  HTTP API catalogs from HLD.
 - If a later-step change belongs earlier, rewind and walk forward. Keep later artifacts
   and patch them only where the earlier change requires it. Do not regenerate from scratch.
 - Do not hand off a package that is unchanged vs the last Orchestrator delivery.
@@ -164,27 +170,50 @@ DISCUSSION MEMORY / CONVERSATION KEYNOTES (durable session memory — honor it o
   drop interview chatter.
 """.strip()
 
+TRACK_CLASSIFICATION_RULES = """
+FACTORY LLD / HLD DEFINITIONS (use only these; never invent textbook or sequential meanings):
+LLD and HLD are mutually exclusive design TRACKS chosen from deployment topology.
+They are NOT two phases of one design. LLD does not precede, inform, constrain, or
+come before HLD. Do not say that LLD writes functional requirements / data models
+and HLD then writes architecture. Do not say you must finish LLD before starting HLD.
+
+- LLD (Low-Level Design): single OS process / library / CLI / local self-contained
+  stand-alone / desktop / single-machine app / modular monolith on one host.
+  Treatment: object-oriented design — classes, interfaces, relationships, patterns, SOLID.
+  Diagram: class / structure Mermaid showing object relationships. Not API gateway,
+  CDN, Kafka, or multi-node infra.
+- HLD (High-Level Design): a distributed topology the user actually wants —
+  microservices, multi-node storage, multi-region, API gateway, CDN, Kafka, and
+  named core services that own the business logic.
+  Treatment: capacity plan, domain objects, core microservices, communication schemes,
+  infrastructure. Diagram: clients, LB, API gateway, auth, named services, databases,
+  caches, brokers, CDN.
+
+Classification rules:
+- Pick from deployment topology, not product category.
+- Analogies like YouTube/Netflix/Uber/SaaS do not lock a track. An explicit local /
+  stand-alone / self-contained / not-distributed request is LLD and OVERRIDES a prior
+  HLD call. A YouTube-like / Netflix-like / Uber-like / multi-tenant SaaS / global
+  video-sharing product without that local request is HLD. "looks good" / approve
+  after you already argued HLD must stay HLD — do not flip to LLD.
+- Conservative, MVP, or niche scale is still HLD when the topology is distributed.
+  Smaller numbers do not make the system a single OS process.
+- Do not keep proposing distributed solutions after the user routed back to stand-alone.
+- After the project specification is compiled, you MUST pick lld or hld — never unset.
+  Recommend the closer topology and say so; the user can still correct it.
+- When asked to justify LLD vs HLD, quote these factory definitions only.
+""".strip()
+
 # Concatenated (not f-string) so nodes importing only this digest still get the depth bar.
 PRINCIPAL_ARCHITECT_DIGEST = (
     _PRINCIPAL_ARCHITECT_RULES
+    + "\n\n"
+    + TRACK_CLASSIFICATION_RULES
     + "\n\n"
     + DISCUSSION_MEMORY_RULES
     + "\n\n"
     + EXPLANATION_DEPTH_DIGEST
 )
-
-TRACK_CLASSIFICATION_RULES = """
-LLD vs HLD is a deployment-topology call, not a product-category call:
-- LLD: one OS process / library / CLI / local self-contained stand-alone / desktop /
-  single-machine app / modular monolith on one host.
-- HLD: distributed microservices, multi-node storage, multi-region, or CDN/Kafka
-  as a topology the user actually wants.
-- Explicit local / stand-alone / self-contained / not-distributed language OVERRIDES
-  analogies like YouTube/Netflix/Uber/SaaS and OVERRIDES a prior HLD classification.
-- Do not keep proposing distributed solutions after the user routed back to stand-alone.
-- After the project specification is compiled, you MUST pick lld or hld — never unset.
-  Recommend the closer topology and say so; the user can still correct it.
-""".strip()
 
 _SPEC_SECTIONS = (
     "Problem",
@@ -196,6 +225,7 @@ _SPEC_SECTIONS = (
     "Critical invariants",
     "Success criteria",
     "Assumptions & risks",
+    "Domain model",
     "Diagram components",
 )
 
@@ -309,10 +339,14 @@ Judge the latest user message against the previous assistant message as a human 
 Do not decide from isolated keywords.
 
 relevant=true when they answered a question, addressed a concern, complemented or
-changed the idea, or approved/disapproved something in that prior message or the
-live proposal.
-vague=true when the reply is too unclear to act on (even if it might be related).
-relevant=false when it is off-topic and does not engage the prior message.
+changed the idea, approved/disapproved something in that prior message or the
+live proposal, asked you to suggest/draft answers to YOUR questions, skipped a
+question, or said they are done / that is all they have.
+vague=true only when the reply is empty of intent (e.g. "maybe", "idk") and you
+cannot act. A product description (who uses it, what they post/view, compete
+with YouTube) is a valid answer to problem/opportunity — not vague.
+relevant=false when it is off-topic and does not engage the prior message
+(weather, asdf). Never mark skip / that's all / help-me-answer as unrelated.
 
 If relevant and not vague: rewrite conversation keynotes as a brief briefing of THIS
 chat — settled decisions, approvals, rejections, open questions. Keep prior keynotes.
@@ -367,6 +401,10 @@ def consult_user_turn(
     )
     if not pending_s or not last:
         return fallback
+    from architect_agent.query_intent import classify_user_message
+
+    _category, classified = classify_user_message(pending_s, last)
+    forced_kind = "approve" if classified == "approve" else ""
     try:
         from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -395,6 +433,10 @@ def consult_user_turn(
         payload = _parse_json_object(str(content))
     except Exception:
         logger.exception("consult_user_turn failed; treating the turn as relevant")
+        if forced_kind:
+            return UserTurnConsult(
+                relevant=True, vague=False, kind=forced_kind, keynotes=prior, clarify_message=""
+            )
         return fallback
     relevant = bool(payload.get("relevant", True))
     vague = bool(payload.get("vague", False))
@@ -403,6 +445,14 @@ def consult_user_turn(
         kind = "unclear" if (vague or not relevant) else "complement"
     updated = str(payload.get("keynotes") or "").strip()
     clarify = str(payload.get("clarify_message") or "").strip()
+    if forced_kind:
+        return UserTurnConsult(
+            relevant=True,
+            vague=False,
+            kind=forced_kind,
+            keynotes=updated or prior,
+            clarify_message="",
+        )
     if (not relevant) or vague:
         if not clarify:
             clarify = (

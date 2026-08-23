@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import logging
 import re
@@ -63,6 +64,66 @@ def parse_llm_json_object(text: str) -> dict[str, Any]:
         "Failed to parse model JSON into an object "
         f"({'; '.join(errors[:2]) or 'unknown'}; preview={cleaned[:240]!r})"
     )
+
+
+def _humanize_key(key: Any) -> str:
+    label = str(key).replace("_", " ").strip()
+    if not label:
+        return str(key)
+    return label[:1].upper() + label[1:]
+
+
+def _parse_structured_literal(text: str) -> dict[str, Any] | list[Any] | None:
+    body = (text or "").strip()
+    if not body or body[0] not in "{[":
+        return None
+    try:
+        parsed = json.loads(body)
+    except json.JSONDecodeError:
+        try:
+            parsed = ast.literal_eval(body)
+        except (ValueError, SyntaxError, MemoryError):
+            return None
+    return parsed if isinstance(parsed, (dict, list)) else None
+
+
+def coerce_artifact_markdown(value: Any) -> str:
+    """Turn an LLM dict/list (or its string repr) into readable markdown."""
+    if value is None:
+        return ""
+    if isinstance(value, dict):
+        if not value:
+            return ""
+        lines: list[str] = []
+        for key, item in value.items():
+            label = _humanize_key(key)
+            if isinstance(item, (dict, list)):
+                nested = coerce_artifact_markdown(item)
+                lines.append(f"- **{label}:**")
+                lines.extend(
+                    f"  {line}" if line.strip() else line for line in nested.splitlines()
+                )
+            else:
+                lines.append(f"- **{label}:** {item}")
+        return "\n".join(lines)
+    if isinstance(value, list):
+        lines = []
+        for item in value:
+            if isinstance(item, (dict, list)):
+                nested = coerce_artifact_markdown(item)
+                first, *rest = nested.splitlines() or [""]
+                lines.append(f"- {first}")
+                lines.extend(f"  {line}" for line in rest)
+            else:
+                lines.append(f"- {item}")
+        return "\n".join(lines)
+    text = str(value).strip()
+    if not text:
+        return ""
+    parsed = _parse_structured_literal(text)
+    if parsed is not None:
+        return coerce_artifact_markdown(parsed)
+    return text
 
 
 def coerce_diagram_text(payload: dict[str, Any], fallback: str = "") -> str:

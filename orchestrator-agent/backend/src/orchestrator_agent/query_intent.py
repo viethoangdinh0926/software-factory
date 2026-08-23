@@ -263,6 +263,8 @@ _TURN_INTENT_SYSTEM = (
     "revision and not their interview answer. Decide from intent, not wording.\n"
     "A concern that implies a missing feature (e.g. 'why is there no rate limiting?') "
     "is command/revise.\n"
+    "This classification is the instruction the agent will follow for this turn: "
+    "approve advances, revise writes their change, answer is Q&A only.\n"
     "Respond ONLY with JSON:\n"
     '{"category":"command|information","action":"approve|revise|pause|execute|answer|none"}'
 )
@@ -295,6 +297,8 @@ def _heuristic_turn_intent(text: str) -> tuple[str, str]:
     compact = _compact_user_text(raw).lower()
     if not compact:
         return "information", "none"
+    if re.search(r"\b(weather|asdf|qwerty|lorem ipsum)\b", compact):
+        return "information", "answer"
     if "?" in raw and any(hint in compact for hint in _CONCERN_HINTS):
         return "command", "revise"
     if _heuristic_approval(raw):
@@ -310,6 +314,24 @@ def _heuristic_turn_intent(text: str) -> tuple[str, str]:
     return "command", "revise"
 
 
+def format_classify_context(workflow: str = "", last_assistant: str = "") -> str:
+    """Pack workflow + last agent turn so every classify call sees both sides."""
+    return (
+        f"{(workflow or '').strip()}\n\n"
+        f"Last assistant message:\n{(last_assistant or '').strip() or '(none)'}"
+    ).strip()
+
+
+def _split_classify_context(context: str) -> tuple[str, str]:
+    ctx = (context or "").strip()
+    marker = "Last assistant message:"
+    if marker in ctx:
+        workflow, _, last = ctx.partition(marker)
+        return workflow.strip() or "(none)", last.strip() or "(none)"
+    # Bare context is the last assistant turn (wait nodes pass it that way).
+    return "(none)", ctx or "(none)"
+
+
 def _llm_turn_intent(text: str, context: str) -> tuple[str, str] | None:
     try:
         from langchain_core.messages import HumanMessage, SystemMessage
@@ -317,14 +339,17 @@ def _llm_turn_intent(text: str, context: str) -> tuple[str, str] | None:
         from orchestrator_agent.json_util import parse_llm_json_object
         from orchestrator_agent.llm import get_chat_model
 
+        workflow, last_assistant = _split_classify_context(context)
         model = get_chat_model()
         response = model.invoke(
             [
                 SystemMessage(content=_TURN_INTENT_SYSTEM),
                 HumanMessage(
                     content=(
-                        f"Workflow context:\n{context or '(none)'}\n\n"
-                        f"User message:\n{text}\n"
+                        "Classify this turn using BOTH messages.\n\n"
+                        f"Last assistant message:\n{last_assistant}\n\n"
+                        f"Latest user message:\n{text}\n\n"
+                        f"Workflow context:\n{workflow}\n"
                     )
                 ),
             ]
@@ -361,26 +386,26 @@ def classify_user_message(text: str, context: str = "") -> tuple[str, str]:
     return _heuristic_turn_intent(raw)
 
 
-def needs_artifact_update(text: str) -> bool:
+def needs_artifact_update(text: str, context: str = "") -> bool:
     """True when comments/concerns should rewrite the current proposal before Approve."""
     if not (text or "").strip():
         return False
-    return classify_user_message(text) == ("command", "revise")
+    return classify_user_message(text, context) == ("command", "revise")
 
 
-def is_informational_query(text: str) -> bool:
+def is_informational_query(text: str, context: str = "") -> bool:
     """True when chat should be answered from current artifacts, not used to rewrite them."""
     t = (text or "").strip()
     if not t:
         return False
-    return classify_user_message(t)[0] == "information"
+    return classify_user_message(t, context)[0] == "information"
 
 
-def is_revision_request(text: str) -> bool:
+def is_revision_request(text: str, context: str = "") -> bool:
     t = (text or "").strip()
     if not t:
         return True
-    return classify_user_message(t) == ("command", "revise")
+    return classify_user_message(t, context) == ("command", "revise")
 
 
 def is_full_phase_request(text: str) -> bool:
@@ -481,31 +506,62 @@ _ADVANCE_RE = re.compile(
 )
 
 
-def is_advance_request(text: str) -> bool:
+def is_advance_request(text: str, context: str = "") -> bool:
     """True when chat asks to wrap up this step and go to the next one immediately."""
     raw = (text or "").strip()
     if not raw:
         return False
-    category, action = classify_user_message(raw)
+    category, action = classify_user_message(raw, context)
     if category == "command" and action == "approve":
         return bool(_ADVANCE_RE.search(_compact_user_text(raw).lower()))
     return False
 
 
-def is_step_approval_message(text: str) -> bool:
+def is_step_approval_message(text: str, context: str = "") -> bool:
     """True when chat is a command to accept the current step and move on."""
     raw = (text or "").strip()
     if not raw:
         return False
-    return classify_user_message(raw) == ("command", "approve")
+    return classify_user_message(raw, context) == ("command", "approve")
 
 
-def promote_chat_to_approve(action: str, text: str, *, can_approve: bool = True) -> str:
+def promote_chat_to_approve(
+    action: str, text: str, *, can_approve: bool = True, context: str = ""
+) -> str:
     del can_approve
     if action != "chat":
         return action
-    if is_step_approval_message(text):
+    if is_step_approval_message(text, context):
         return "approve"
+    return action
+
+
+def workflow_action(action: str) -> str:
+    """Map classify action onto the resume action the graph understands."""
+    mapped = (action or "").strip().lower()
+    if mapped in {"approve", "revise", "answer", "pause", "execute"}:
+        return mapped
+    return "chat"
+
+
+def resolve_wait_action(
+    resume_action: str,
+    user_text: str,
+    context: str = "",
+    *,
+    consult_kind: str = "",
+) -> str:
+    """Honor the chat-entry classify; only re-classify leftover ``chat``."""
+    action = (resume_action or "chat").strip().lower()
+    if action in {"pause", "execute"}:
+        action = "chat"
+    if action in {"approve", "revise", "answer", "session_done"}:
+        return action
+    action = promote_chat_to_approve("chat", user_text, context=context)
+    if consult_kind == "approve" and action == "chat":
+        return "approve"
+    if action == "chat" and user_text and is_informational_query(user_text, context):
+        return "answer"
     return action
 
 

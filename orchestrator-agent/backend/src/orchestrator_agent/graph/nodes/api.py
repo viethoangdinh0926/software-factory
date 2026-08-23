@@ -182,7 +182,9 @@ def relations_node(state: dict[str, Any]) -> dict[str, Any]:
     pending = (state.get("pending_user_feedback") or "").strip()
     existing = relation_artifact(svc)
     prior_status = str(svc.get("status") or "awaiting_relations")
-    if pending and existing and not is_revision_request(pending):
+    if pending and existing and not is_revision_request(
+        pending, str(svc.get("pending_assistant_message") or state.get("pending_assistant_message") or "")
+    ):
         assistant = _answer_from_current_spec(state, svc, pending, existing)
         return _finish_service_turn(
             state, svc, assistant=assistant, node="relations", pending=pending

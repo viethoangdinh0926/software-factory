@@ -75,17 +75,34 @@ export function extractDiagramComponents(diagram: string): { id: string; label: 
   return out;
 }
 
-export function extractSpecSection(spec: string, heading: string): string {
+function sectionBounds(spec: string, heading: string): { start: number; end: number; contentStart: number } | null {
   const title = heading.startsWith("## ") ? heading : `## ${heading}`;
-  const re = new RegExp(`^${escapeRegExp(title)}\\s*\\n([\\s\\S]*?)(?=^## |$)`, "m");
-  const match = (spec || "").match(re);
-  return (match?.[1] || "").trim();
+  const body = spec || "";
+  const startRe = new RegExp(`(?:^|\\n)${escapeRegExp(title)}\\s*\\n`);
+  const found = startRe.exec(body);
+  if (!found) return null;
+  const start = found.index + (found[0].startsWith("\n") ? 1 : 0);
+  const contentStart = found.index + found[0].length;
+  const rest = body.slice(contentStart);
+  // Next H2 only (`\\n## `). Do not stop at `###` or at end-of-line.
+  const relEnd = rest.search(/\n## /);
+  const end = relEnd < 0 ? body.length : contentStart + relEnd;
+  return { start, end, contentStart };
+}
+
+export function extractSpecSection(spec: string, heading: string): string {
+  const bounds = sectionBounds(spec, heading);
+  if (!bounds) return "";
+  return (spec || "").slice(bounds.contentStart, bounds.end).trim();
 }
 
 export function stripSpecSection(spec: string, heading: string): string {
-  const title = heading.startsWith("## ") ? heading : `## ${heading}`;
-  const re = new RegExp(`\\n*${escapeRegExp(title)}\\s*\\n[\\s\\S]*?(?=^## |$)`, "m");
-  return (spec || "").replace(re, "\n").replace(/\n{3,}/g, "\n\n").trim();
+  const bounds = sectionBounds(spec, heading);
+  if (!bounds) return (spec || "").trim();
+  const body = spec || "";
+  return `${body.slice(0, bounds.start)}\n${body.slice(bounds.end)}`
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 export function catalogCoversDiagram(catalog: string, diagram: string): boolean {

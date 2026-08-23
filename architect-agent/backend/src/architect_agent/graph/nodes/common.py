@@ -11,11 +11,13 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from architect_agent.context_budget import (
     EXPLANATION_DEPTH_DIGEST,
+    TRACK_CLASSIFICATION_RULES,
     consult_user_turn,
     format_phase_context,
     refresh_discussion_digest,
 )
 from architect_agent.json_util import (
+    coerce_artifact_markdown,
     parse_llm_json_object,
     recover_architecture_payload_from_prose,
 )
@@ -230,7 +232,7 @@ def gate_user_chat(
     If the payload is set, the wait node must return it and not proceed.
     """
     keynotes = str(state.get("discussion_digest") or "")
-    if action != "chat" or not (user_text or "").strip():
+    if action in {"approve", "session_done"} or not (user_text or "").strip():
         return keynotes, "", None
     last = _last_assistant_text(state)
     if not last.strip():
@@ -241,7 +243,9 @@ def gate_user_chat(
         keynotes=keynotes,
         phase=node,
     )
-    if consult.needs_clarification:
+    # Approve is an explicit advance. Every other classified action can still
+    # bounce as off-topic.
+    if consult.needs_clarification and action != "approve":
         msg = without_user_echo(
             (consult.clarify_message or "").strip()
             or (
@@ -275,7 +279,9 @@ def answer_open_query(state: dict[str, Any], question: str, *, node: str) -> str
             extract_http_endpoints(apis, str(state.get("design_justification") or ""))
         )
     grade = str(state.get("market_evaluation_grade") or "").strip()
-    if grade and "grade" in q.lower() and not is_revision_request(q):
+    if grade and "grade" in q.lower() and not is_revision_request(
+        q, str(state.get("pending_assistant_message") or "")
+    ):
         return f"The market evaluation grade for this design version is **{grade}**."
     extra_user = f"\n\n{_suggested_answer_context(state)}"
     history = format_phase_context(
@@ -288,6 +294,7 @@ def answer_open_query(state: dict[str, Any], question: str, *, node: str) -> str
             "Answer the user's question from the current artifacts. This is Q&A "
             "before they approve this workflow step.\n"
             f"Current node: {node}.\n"
+            f"{TRACK_CLASSIFICATION_RULES}\n"
             f"{USER_MESSAGE_FIRST_RULES}\n"
             f"{SUGGESTED_ANSWER_RULES}\n"
             "Use concrete facts (numbers, service names, owned objects, communication "
@@ -457,25 +464,77 @@ def assistant_message_is_thin(text: str) -> bool:
     return False
 
 
+def _domain_model_briefing_body(spec: str) -> str:
+    """HLD step 2 must brief the domain catalog, not the whole Phase 0 scaffold."""
+    from architect_agent.design_diagram import extract_spec_section
+
+    domain = extract_spec_section(spec or "", "Domain model")
+    if domain and "(to be captured)" not in domain.lower():
+        return f"## Domain model\n\n{domain}"
+    return ""
+
+
 def _primary_artifact_body(artifacts: dict[str, str], primary_field: str) -> str:
     """Full step artifact for chat — never a mid-word or mid-markup clip."""
-    body = (artifacts.get(primary_field) or "").strip()
-    if body:
-        return body
-    for key in (
-        "scale_estimates",
-        "api_contracts",
-        "communication_schemes",
-        "fmea_notes",
-        "design_justification",
-        "business_spec",
-        "tradeoff_ledger",
-        "design_diagram",
-    ):
-        body = (artifacts.get(key) or "").strip()
-        if body:
-            return body
-    return "(artifact captured on this step)"
+    if primary_field == "business_spec":
+        domain = _domain_model_briefing_body(artifacts.get("business_spec") or "")
+        if domain:
+            return domain
+    return coerce_artifact_markdown(artifacts.get(primary_field) or "")
+
+
+_FMEA_BRIEFING_MARKERS = (
+    "spof",
+    "single point",
+    "bottleneck",
+    "race",
+    "split-brain",
+    "split brain",
+    "failure mode",
+    "mitigation",
+    "fmea",
+)
+
+
+def _artifact_fingerprint(body: str) -> str:
+    for line in (body or "").splitlines():
+        text = line.strip().lstrip("#*-| ").strip()
+        if len(text) >= 20:
+            return text[:48]
+    return ""
+
+
+def briefing_misses_primary(
+    message: str,
+    *,
+    track: str,
+    step: int,
+    primary_field: str,
+    artifacts: dict[str, str],
+) -> bool:
+    """True when chat claims this step is done but shows a different artifact."""
+    raw = (message or "").strip()
+    if not raw:
+        return True
+    lower = raw.lower()
+    walkthrough = "here is what each box on the" in lower
+    on_diagram = (track == "hld" and step == 4) or (track == "lld" and step == 2)
+    if walkthrough and not on_diagram:
+        return True
+    looks_like_review = (
+        "complete enough to review" in lower
+        or "here is what this step locked in" in lower
+    )
+    if not looks_like_review:
+        return False
+    if primary_field == "fmea_notes":
+        hits = sum(1 for key in _FMEA_BRIEFING_MARKERS if key in lower)
+        return hits < 2
+    body = _primary_artifact_body(artifacts, primary_field)
+    if not body.strip():
+        return True
+    snippet = _artifact_fingerprint(body)
+    return bool(snippet) and snippet not in raw
 
 
 def synthesize_step_briefing(
@@ -500,6 +559,12 @@ def synthesize_step_briefing(
         nodes = len(set(re.findall(r"\b([A-Za-z][\w]*)\s*(?:\[|\(|\{)", diagram)))
         extra = f"\n\nThe system diagram now has about **{nodes or 'several'}** named nodes (clients, gateway, services, stores)."
     nxt = _NEXT_STEP_HINT.get((track, step), "If this looks right, confirm, approve, or agree so we can continue.")
+    if not body.strip():
+        return (
+            f"**{label} step {step} — {title}** is not ready to review yet.\n\n"
+            f"This step must lock in **{primary_field.replace('_', ' ')}**. "
+            "I still need that artifact before we move on."
+        )
     return (
         f"**{label} step {step} — {title}** is complete enough to review.\n\n"
         f"Here is what this step locked in:\n\n{body}{extra}\n\n"
@@ -519,7 +584,23 @@ def ensure_step_briefing(
 ) -> str:
     """Replace empty/status-line chat with a briefing of what the step completed."""
     raw = without_user_echo((message or "").strip(), pending)
-    if not assistant_message_is_thin(raw):
+    leaked_scaffold = (
+        track == "hld"
+        and step == 2
+        and (
+            "(to be captured)" in raw.lower()
+            or "skip this question" in raw.lower()
+        )
+        and bool(_domain_model_briefing_body(artifacts.get("business_spec") or ""))
+    )
+    wrong_artifact = briefing_misses_primary(
+        raw,
+        track=track,
+        step=step,
+        primary_field=primary_field,
+        artifacts=artifacts,
+    )
+    if not assistant_message_is_thin(raw) and not leaked_scaffold and not wrong_artifact:
         return raw
     return synthesize_step_briefing(
         track=track,

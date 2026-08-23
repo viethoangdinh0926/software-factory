@@ -239,10 +239,15 @@ def _stub_turn_intent(blob: str) -> dict[str, str]:
     for marker in ("User message:", "Latest user message:"):
         if marker in blob:
             user = blob.split(marker, 1)[1].strip()
+            for stop in ("Workflow context:", "Last assistant message:", "Return the full"):
+                if stop in user:
+                    user = user.split(stop, 1)[0].strip()
             break
     if not user:
         user = blob
     compact = re.sub(r"\s+", " ", user).strip().lower().rstrip(".!")
+    if re.search(r"\b(weather|asdf|qwerty|lorem ipsum)\b", compact):
+        return {"category": "information", "action": "answer"}
     if _stub_help_answering_questions(user):
         return {"category": "information", "action": "answer"}
     if re.search(r"\bwhy should i approve\b", compact) or (

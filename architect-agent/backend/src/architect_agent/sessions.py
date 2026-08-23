@@ -23,9 +23,27 @@ from architect_agent.design_diagram import (
 )
 from architect_agent.design_progress import NO_UPDATES_TO_DELIVER, package_fingerprint
 from architect_agent.graph import build_graph, initial_state
-from architect_agent.graph.nodes.common import approve_label, design_step_title
+from architect_agent.graph.nodes.common import approve_label, design_step_title, ensure_step_briefing
+from architect_agent.graph.nodes.hld import (
+    ensure_domain_model,
+    fallback_fmea_notes,
+    fmea_notes_are_concrete,
+)
+from architect_agent.interview_progress import (
+    hydrate_spec_from_transcript,
+    scrub_control_phrases_from_spec,
+    spec_still_scaffold,
+    spec_substance,
+)
+from architect_agent.scope import ensure_classified_topology
 from architect_agent.mermaid_sanitize import sanitize_mermaid
-from architect_agent.query_intent import classify_user_message, with_next_prompt
+from architect_agent.json_util import coerce_artifact_markdown
+from architect_agent.query_intent import (
+    classify_user_message,
+    format_classify_context,
+    with_next_prompt,
+    workflow_action,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -137,7 +155,7 @@ class DesignSession:
             "design_diagram": self.design_diagram,
             "design_justification": self.design_justification,
             "tradeoff_ledger": self.tradeoff_ledger,
-            "scale_estimates": self.scale_estimates,
+            "scale_estimates": coerce_artifact_markdown(self.scale_estimates),
             "api_contracts": self.api_contracts,
             "communication_schemes": self.communication_schemes,
             "fmea_notes": self.fmea_notes,
@@ -170,7 +188,7 @@ def _session_from_disk(data: dict[str, Any]) -> DesignSession:
         design_diagram=str(data.get("design_diagram") or ""),
         design_justification=str(data.get("design_justification") or ""),
         tradeoff_ledger=str(data.get("tradeoff_ledger") or ""),
-        scale_estimates=str(data.get("scale_estimates") or ""),
+        scale_estimates=coerce_artifact_markdown(data.get("scale_estimates") or ""),
         api_contracts=str(data.get("api_contracts") or ""),
         communication_schemes=str(data.get("communication_schemes") or ""),
         fmea_notes=str(data.get("fmea_notes") or ""),
@@ -234,7 +252,10 @@ class SessionStore:
             )
 
         self._ensure_graph_resumable(session)
+        self._fill_missing_phase0_spec(session)
         self._fill_missing_diagram(session)
+        self._fill_missing_domain_model(session)
+        self._fill_missing_fmea(session)
         return session
 
     def _config(self, session_id: str) -> dict[str, Any]:
@@ -382,7 +403,7 @@ class SessionStore:
         if values.get("tradeoff_ledger") is not None:
             session.tradeoff_ledger = str(values.get("tradeoff_ledger") or "")
         if values.get("scale_estimates") is not None:
-            session.scale_estimates = str(values.get("scale_estimates") or "")
+            session.scale_estimates = coerce_artifact_markdown(values.get("scale_estimates") or "")
         if values.get("api_contracts") is not None:
             session.api_contracts = str(values.get("api_contracts") or "")
         if values.get("communication_schemes") is not None:
@@ -413,7 +434,7 @@ class SessionStore:
         if preserve_messages is not None:
             session.messages = list(preserve_messages)
 
-        if user_text and action == "chat":
+        if user_text and action in {"chat", "revise", "answer"}:
             node = self._active_message_node(session)
             last = session.messages[-1] if session.messages else None
             if not last or last.get("role") != "user" or last.get("content") != user_text:
@@ -458,7 +479,9 @@ class SessionStore:
             if payload.get("tradeoff_ledger") is not None:
                 session.tradeoff_ledger = str(payload.get("tradeoff_ledger") or "")
             if payload.get("scale_estimates") is not None:
-                session.scale_estimates = str(payload.get("scale_estimates") or "")
+                session.scale_estimates = coerce_artifact_markdown(
+                    payload.get("scale_estimates") or ""
+                )
             if payload.get("api_contracts") is not None:
                 session.api_contracts = str(payload.get("api_contracts") or "")
             if payload.get("communication_schemes") is not None:
@@ -480,8 +503,72 @@ class SessionStore:
                 session.messages.append({"role": "assistant", "content": msg, "node": node})
 
         session.finalized = session.phase == "done"
+        self._fill_missing_phase0_spec(session)
         self._fill_missing_diagram(session)
+        self._fill_missing_domain_model(session)
+        self._fill_missing_fmea(session)
         self._persist(session)
+
+    def _fill_missing_phase0_spec(self, session: DesignSession) -> None:
+        """Replay Phase 0 chat onto a living spec that never absorbed the interview."""
+        if not spec_still_scaffold(session.business_spec):
+            return
+        if not session.messages:
+            return
+        next_spec = hydrate_spec_from_transcript(
+            session.business_spec,
+            session.messages,
+            session.discussion_digest,
+        )
+        if session.design_track in {"lld", "hld"}:
+            next_spec = ensure_classified_topology(next_spec, session.design_track)
+        if spec_substance(next_spec) <= spec_substance(session.business_spec):
+            return
+        session.business_spec = next_spec
+        logger.info(
+            "Hydrated living spec from interview transcript for session %s",
+            session.session_id,
+        )
+        self._persist(session)
+
+    def _fill_missing_domain_model(self, session: DesignSession) -> None:
+        """Write ## Domain model when HLD step 2+ loaded with only the Phase 0 scaffold."""
+        if session.design_track != "hld" or int(session.design_step or 0) < 2:
+            return
+        if session.phase not in {"hld", "market_research", "done"}:
+            return
+        spec = scrub_control_phrases_from_spec(session.business_spec)
+        next_spec = ensure_domain_model(
+            spec, session.scale_estimates, session.tradeoff_ledger
+        )
+        changed = next_spec != session.business_spec
+        if changed:
+            session.business_spec = next_spec
+        last = ""
+        if session.messages:
+            last = str((session.messages[-1] or {}).get("content") or "")
+        leaked = session.messages and session.messages[-1].get("role") == "assistant" and (
+            "(to be captured)" in last.lower() or "skip this question" in last.lower()
+        ) and "hld step 2" in last.lower()
+        if leaked:
+            brief = ensure_step_briefing(
+                last,
+                track="hld",
+                step=2,
+                title="Domain object modeling",
+                artifacts={"business_spec": session.business_spec},
+                primary_field="business_spec",
+            )
+            if brief and brief != last:
+                session.messages[-1]["content"] = brief
+                changed = True
+        if changed:
+            logger.info(
+                "Filled missing domain model for session %s (hld step %s)",
+                session.session_id,
+                session.design_step,
+            )
+            self._persist(session)
 
     def _fill_missing_diagram(self, session: DesignSession) -> None:
         """Attach a sketch and component catalog once the track is past the diagram step."""
@@ -518,7 +605,14 @@ class SessionStore:
             if next_spec != session.business_spec:
                 session.business_spec = next_spec
                 changed = True
-        if catalog and not chat_describes_components(session.messages, diagram):
+        on_diagram_step = (track == "hld" and int(session.design_step or 0) == 4) or (
+            track == "lld" and int(session.design_step or 0) == 2
+        )
+        if (
+            on_diagram_step
+            and catalog
+            and not chat_describes_components(session.messages, diagram)
+        ):
             session.messages.append(
                 {
                     "role": "assistant",
@@ -532,6 +626,51 @@ class SessionStore:
                 "Filled missing design diagram artifacts for session %s (%s step %s)",
                 session.session_id,
                 track,
+                session.design_step,
+            )
+            self._persist(session)
+
+    def _fill_missing_fmea(self, session: DesignSession) -> None:
+        """Write structured FMEA when HLD step 5+ loaded with scale or a diagram tour."""
+        if session.design_track != "hld" or int(session.design_step or 0) < 5:
+            return
+        if session.phase not in {"hld", "market_research", "done"}:
+            return
+        changed = False
+        if not fmea_notes_are_concrete(session.fmea_notes):
+            session.fmea_notes = fallback_fmea_notes(
+                apis=session.api_contracts,
+                comms=session.communication_schemes,
+            )
+            changed = True
+        last = ""
+        if session.messages:
+            last = str((session.messages[-1] or {}).get("content") or "")
+        step5 = (
+            session.messages
+            and session.messages[-1].get("role") == "assistant"
+            and (
+                "hld step 5" in last.lower()
+                or "vulnerability" in last.lower()
+                or "here is what each box on the" in last.lower()
+            )
+        )
+        if step5:
+            brief = ensure_step_briefing(
+                last,
+                track="hld",
+                step=5,
+                title="Vulnerability & edge-case analysis (FMEA)",
+                artifacts={"fmea_notes": session.fmea_notes},
+                primary_field="fmea_notes",
+            )
+            if brief and brief != last:
+                session.messages[-1]["content"] = brief
+                changed = True
+        if changed:
+            logger.info(
+                "Filled missing FMEA notes for session %s (hld step %s)",
+                session.session_id,
                 session.design_step,
             )
             self._persist(session)
@@ -650,14 +789,20 @@ class SessionStore:
 
     def chat(self, session_id: str, text: str) -> DesignSession:
         session = self.get(session_id)
-        context = (
-            f"Architect {session.phase} / {session.design_track} step {session.design_step}. "
-            "They can approve this step, ask a question, or request a change."
+        last = ""
+        for msg in reversed(session.messages or []):
+            if isinstance(msg, dict) and msg.get("role") == "assistant":
+                last = str(msg.get("content") or "")
+                break
+        context = format_classify_context(
+            workflow=(
+                f"Architect {session.phase} / {session.design_track} step {session.design_step}. "
+                "They can approve this step, ask a question, or request a change."
+            ),
+            last_assistant=last,
         )
         _category, action = classify_user_message(text, context)
-        if action == "approve":
-            return self.resume(session_id, action="approve", text=text)
-        return self.resume(session_id, action="chat", text=text)
+        return self.resume(session_id, action=workflow_action(action), text=text)
 
     def approve(self, session_id: str) -> DesignSession:
         return self.resume(session_id, action="approve")

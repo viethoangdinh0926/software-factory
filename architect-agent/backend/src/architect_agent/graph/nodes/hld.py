@@ -35,11 +35,13 @@ from architect_agent.design_diagram import (
     diagram_is_concrete,
     ensure_component_catalog,
     ensure_design_diagram,
+    extract_spec_section,
     upsert_spec_section,
     with_component_walkthrough,
 )
+from architect_agent.interview_progress import scrub_control_phrases_from_spec
 from architect_agent.graph.state import DesignGraphState
-from architect_agent.json_util import coerce_diagram_text
+from architect_agent.json_util import coerce_artifact_markdown, coerce_diagram_text
 from architect_agent.mermaid_sanitize import sanitize_mermaid
 from architect_agent.query_intent import (
     FEEDBACK_RESOLUTION_RULES,
@@ -47,6 +49,7 @@ from architect_agent.query_intent import (
     is_advance_request,
     is_informational_query,
     promote_chat_to_approve,
+    resolve_wait_action,
     with_next_prompt,
     with_resolution_close,
 )
@@ -207,7 +210,7 @@ def _comms_are_concrete(text: str) -> bool:
     return styles >= 2 and planes >= 3
 
 
-def _fmea_notes_are_concrete(text: str) -> bool:
+def fmea_notes_are_concrete(text: str) -> bool:
     """Step 5 depth bar: multiple failure modes with mitigations."""
     body = (text or "").strip()
     if len(body) < 450:
@@ -257,6 +260,25 @@ def _fmea_notes_are_concrete(text: str) -> bool:
     return True
 
 
+def fallback_fmea_notes(*, apis: str = "", comms: str = "") -> str:
+    """Concrete FMEA when the model left `fmea_notes` empty or shallow."""
+    del comms
+    names = re.findall(r"(?im)^###?\s+([A-Z][\w /.-]*Service)", apis or "")
+    catalog = names[0] if names else "the primary metadata store"
+    worker = next((n for n in names if "content" in n.lower() or "media" in n.lower()), "transcoder workers")
+    return (
+        "### FMEA\n"
+        "| Failure mode | Impact | Mitigation |\n"
+        "|---|---|---|\n"
+        f"| SPOF: primary Postgres / {catalog} | Catalog or auth outage | Sync replicas + automated failover; reads on replicas |\n"
+        f"| Bottleneck: {worker} / ingest backlog | Upload-to-playable delay | Priority queues + worker autoscaling + degraded lower-res publish |\n"
+        "| Race: concurrent metadata edits | Lost title/visibility updates | Conditional writes / etags on the owning service |\n"
+        "| Split-brain: dual-writer cache | Stale authz or wrong entitlement | Single-writer keys; sticky cache ownership |\n"
+        "| CDN origin overload | Playback errors at peak | Multi-CDN + origin shield + high cache TTLs |\n"
+        "| Hot partition / poison message | One shard or consumer stalls | Partition keys by id hash; quarantine + retry with backoff |\n"
+    )
+
+
 _HLD_PRIMARY_FIELD = {
     1: "scale_estimates",
     2: "updated_business_spec (domain model section) + tradeoff_ledger",
@@ -265,6 +287,180 @@ _HLD_PRIMARY_FIELD = {
     5: "fmea_notes",
     6: "design_justification",
 }
+
+_VIDEO_DOMAIN_HINTS = (
+    "video",
+    "youtube",
+    "watch",
+    "upload",
+    "stream",
+    "channel",
+    "creator",
+    "tiktok",
+)
+
+_ENTITY_HEADING_RE = re.compile(
+    r"(?m)^(?:###\s+|\*\*|[-*]\s+\*\*)([A-Z][A-Za-z0-9]+)"
+)
+_RESERVED_ENTITY_NAMES = {
+    "domain",
+    "entity",
+    "entities",
+    "attributes",
+    "relationships",
+    "ownership",
+    "model",
+}
+
+
+def listed_domain_entities(body: str) -> list[str]:
+    """Entity names from ### headings or bold list items in a domain-model section."""
+    names: list[str] = []
+    seen: set[str] = set()
+    for match in _ENTITY_HEADING_RE.finditer(body or ""):
+        name = match.group(1)
+        key = name.lower()
+        if key in _RESERVED_ENTITY_NAMES or key in seen:
+            continue
+        seen.add(key)
+        names.append(name)
+    return names
+
+
+def domain_model_is_concrete(spec: str) -> bool:
+    """Step 2 depth bar: ≥5 named entities with attributes or relationships."""
+    section = extract_spec_section(spec, "Domain model") or ""
+    body = section or (spec or "")
+    if not section and "## problem" in body.lower():
+        return False
+    entities = listed_domain_entities(body)
+    if len(entities) < 5:
+        return False
+    lower = body.lower()
+    rel_hits = sum(
+        1
+        for token in ("1:n", "1:1", "n:m", "n:1", "owns", "relationship", "belongs")
+        if token in lower
+    )
+    attr_hits = lower.count("attribute") + len(re.findall(r"\bid\b", lower))
+    return rel_hits >= 1 or attr_hits >= 3
+
+
+def fallback_domain_model(spec: str, scale: str = "") -> str:
+    """Deterministic domain catalog when the model did not write ## Domain model."""
+    blob = f"{spec}\n{scale}".lower()
+    if any(hint in blob for hint in _VIDEO_DOMAIN_HINTS):
+        entities = (
+            (
+                "User",
+                "id, handle, email, created_at, status",
+                "1:N Channel (owns); 1:N WatchEvent; 1:N Subscription; 1:N Comment",
+            ),
+            (
+                "Channel",
+                "id, owner_user_id, name, description, created_at",
+                "N:1 User; 1:N Video; 1:N Subscription",
+            ),
+            (
+                "Video",
+                "id, channel_id, title, description, visibility, duration_s, created_at",
+                "N:1 Channel; 1:N TranscodeJob; 1:N WatchEvent; 1:N Comment",
+            ),
+            (
+                "TranscodeJob",
+                "id, video_id, rendition, status, created_at",
+                "N:1 Video",
+            ),
+            (
+                "WatchEvent",
+                "id, user_id, video_id, position_s, watched_at",
+                "N:1 User; N:1 Video",
+            ),
+            (
+                "Subscription",
+                "id, subscriber_user_id, channel_id, created_at",
+                "N:1 User; N:1 Channel",
+            ),
+            (
+                "Comment",
+                "id, video_id, author_user_id, body, created_at",
+                "N:1 Video; N:1 User",
+            ),
+        )
+    else:
+        entities = (
+            (
+                "User",
+                "id, handle, email, created_at, status",
+                "1:N Session; 1:N Account",
+            ),
+            (
+                "Session",
+                "id, user_id, issued_at, expires_at",
+                "N:1 User",
+            ),
+            (
+                "Account",
+                "id, owner_user_id, plan, created_at",
+                "N:1 User; 1:N Resource",
+            ),
+            (
+                "Resource",
+                "id, account_id, title, status, created_at",
+                "N:1 Account; 1:N AuditEvent",
+            ),
+            (
+                "AuditEvent",
+                "id, actor_user_id, resource_id, action, created_at",
+                "N:1 User; N:1 Resource",
+            ),
+            (
+                "Notification",
+                "id, user_id, kind, body, created_at",
+                "N:1 User",
+            ),
+        )
+    lines = [
+        "Entities, attributes, and ownership for later bounded-context splits "
+        "(labeled assumptions from the living spec).",
+        "",
+    ]
+    for name, attrs, rels in entities:
+        lines.extend(
+            [
+                f"### {name}",
+                f"- Attributes: {attrs}",
+                f"- Relationships: {rels}",
+                f"- Owner: {name} aggregate (split into a service in the next step)",
+                "",
+            ]
+        )
+    return "\n".join(lines).strip() + "\n"
+
+
+def ensure_domain_model(spec: str, scale: str = "", ledger: str = "") -> str:
+    """Guarantee a ## Domain model section exists before the step can brief or advance."""
+    living = spec or ""
+    if domain_model_is_concrete(living):
+        return living
+    ledger_body = (ledger or "").strip()
+    if ledger_body and domain_model_is_concrete(f"## Domain model\n\n{ledger_body}"):
+        return upsert_spec_section(living, "Domain model", ledger_body)
+    return upsert_spec_section(living, "Domain model", fallback_domain_model(living, scale))
+
+
+def _merge_domain_into_spec(updated: str, prior: str) -> str:
+    """Keep the living spec when the model returns only a domain-model fragment."""
+    raw = (updated or "").strip()
+    base = prior or ""
+    if not raw:
+        return base
+    domain = extract_spec_section(raw, "Domain model")
+    if domain and "## problem" not in raw.lower() and base.lower().count("##") >= 3:
+        return upsert_spec_section(base, "Domain model", domain)
+    if domain_model_is_concrete(raw) and "## problem" not in raw.lower() and base.lower().count("##") >= 3:
+        return upsert_spec_section(base, "Domain model", raw)
+    return raw
 
 
 def _step_artifact_rules(step: int) -> str:
@@ -368,6 +564,7 @@ def _apply_depth_gates(
     comms: str,
     fmea: str,
     diagram: str,
+    spec: str = "",
 ) -> tuple[bool, dict[str, Any]]:
     """Block advance when artifacts are shallow; unlock when the depth bar is met."""
     hint = ""
@@ -380,6 +577,16 @@ def _apply_depth_gates(
                 "Scale estimates are still too brief. Expand `scale_estimates` into a structured "
                 "capacity plan with numeric DAU/concurrent users, read/write QPS, storage, "
                 "bandwidth/egress, and latency/availability targets before we advance."
+            )
+    elif step == 2:
+        if domain_model_is_concrete(spec):
+            ready_advance = True
+        else:
+            ready_advance = False
+            hint = (
+                "The domain model is still too brief. Write a `## Domain model` section with "
+                "at least five entities, each with attributes and relationships "
+                "(1:1 / 1:N / N:M), before we split them into services."
             )
     elif step == 3:
         if _core_services_are_concrete(apis):
@@ -419,7 +626,7 @@ def _apply_depth_gates(
                     "caches, brokers, CDN, and distinct storage systems before we advance."
                 )
     elif step == 5:
-        if _fmea_notes_are_concrete(fmea):
+        if fmea_notes_are_concrete(fmea):
             ready_advance = True
         else:
             ready_advance = False
@@ -552,14 +759,18 @@ def hld_step_node(state: DesignGraphState) -> dict[str, Any]:
     prior_diagram = str(state.get("design_diagram") or "")
 
     picker = keep_or_patch if keep_mode else _prefer_richer_text
-    scale = picker(str(result.get("scale_estimates") or ""), prior_scale)
+    scale = picker(coerce_artifact_markdown(result.get("scale_estimates")), prior_scale)
     apis = picker(
-        str(result.get("core_microservices") or result.get("api_contracts") or ""),
+        coerce_artifact_markdown(
+            result.get("core_microservices") or result.get("api_contracts")
+        ),
         prior_apis,
     )
-    comms = picker(str(result.get("communication_schemes") or ""), prior_comms)
-    fmea = picker(str(result.get("fmea_notes") or ""), prior_fmea)
-    ledger = picker(str(result.get("tradeoff_ledger") or ""), prior_ledger)
+    comms = picker(coerce_artifact_markdown(result.get("communication_schemes")), prior_comms)
+    fmea = picker(coerce_artifact_markdown(result.get("fmea_notes")), prior_fmea)
+    if step == 5 and not fmea_notes_are_concrete(fmea):
+        fmea = fallback_fmea_notes(apis=apis, comms=comms)
+    ledger = picker(coerce_artifact_markdown(result.get("tradeoff_ledger")), prior_ledger)
 
     new_diagram = sanitize_mermaid(
         coerce_diagram_text(result, fallback="")
@@ -583,11 +794,14 @@ def hld_step_node(state: DesignGraphState) -> dict[str, Any]:
         if keep_mode
         else str(result.get("design_justification") or state.get("design_justification") or "")
     )
-    spec_out = (
-        keep_or_patch(str(result.get("updated_business_spec") or ""), business_spec)
-        if keep_mode
-        else (result.get("updated_business_spec") or business_spec)
-    )
+    raw_spec = str(result.get("updated_business_spec") or "")
+    if keep_mode:
+        spec_out = keep_or_patch(raw_spec, business_spec)
+    else:
+        spec_out = _merge_domain_into_spec(raw_spec, business_spec)
+    spec_out = scrub_control_phrases_from_spec(str(spec_out or business_spec))
+    if step == 2:
+        spec_out = ensure_domain_model(spec_out, scale, ledger)
     catalog = ""
     if step >= 4 and diagram_is_concrete(diagram, minimum=6):
         catalog = ensure_component_catalog(
@@ -615,6 +829,7 @@ def hld_step_node(state: DesignGraphState) -> dict[str, Any]:
         comms=comms,
         fmea=fmea,
         diagram=diagram,
+        spec=str(spec_out),
     )
     if keep_mode:
         ready_advance = True
@@ -648,7 +863,7 @@ def hld_step_node(state: DesignGraphState) -> dict[str, Any]:
         primary_field="design_justification" if step == 4 and catalog else primary_field,
         pending=pending,
     )
-    if catalog:
+    if catalog and step == 4:
         assistant = with_component_walkthrough(assistant, catalog)
     if pending:
         changed = (
@@ -747,12 +962,9 @@ def hld_wait_node(state: DesignGraphState) -> dict[str, Any]:
     if clar:
         return clar
     state["discussion_digest"] = keynotes
-    advance_now = is_advance_request(user_text)
-    action = promote_chat_to_approve(
-        action, user_text, can_approve=ready or design_approve
-    )
-    if kind == "approve" and (ready or design_approve) and action == "chat":
-        action = "approve"
+    last_as = str(state.get("pending_assistant_message") or "")
+    action = resolve_wait_action(action, user_text, last_as, consult_kind=kind)
+    advance_now = is_advance_request(user_text, last_as)
     msgs: list[dict[str, Any]] = []
     if user_text:
         msgs.append({"role": "user", "content": user_text, "node": "hld"})
@@ -828,7 +1040,7 @@ def hld_wait_node(state: DesignGraphState) -> dict[str, Any]:
         if rewound is not None:
             return rewound
 
-    if user_text and is_informational_query(user_text):
+    if action == "answer" and user_text:
         return answer_before_approve(
             state,
             user_text,

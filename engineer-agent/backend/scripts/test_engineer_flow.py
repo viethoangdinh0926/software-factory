@@ -2,6 +2,7 @@
 """Smoke: ingest specs → plan → execute/pause/revise → ship; new spec interrupts work."""
 from __future__ import annotations
 
+import inspect
 import os
 import sys
 import tempfile
@@ -19,10 +20,13 @@ print("importing…", flush=True)
 from engineer_agent.config import get_settings
 from engineer_agent.llm import get_chat_model
 from engineer_agent.plan_parse import parse_handoff, parse_related_entities, sub_agent_id
+from engineer_agent import query_intent as engineer_intent
 from engineer_agent.query_intent import (
     NEXT_PROMPT_HEADER,
     USER_MESSAGE_FIRST_RULES,
+    format_classify_context,
     user_message_first_block,
+    workflow_action,
 )
 import engineer_agent.sessions as sessions_mod
 from engineer_agent.sessions import SessionStore, reset_store
@@ -35,6 +39,12 @@ reset_store()
 assert "Latest user message is the work" in USER_MESSAGE_FIRST_RULES
 assert user_message_first_block("add thumbnail_url")
 assert not user_message_first_block("")
+assert "Last assistant message:" in format_classify_context("wf", "pause if you need to change it")
+assert "BOTH messages" in inspect.getsource(engineer_intent._llm_turn_intent)
+assert "Latest user message:" in inspect.getsource(engineer_intent._llm_turn_intent)
+assert workflow_action("pause") == "pause"
+assert workflow_action("execute") == "execute"
+assert workflow_action("revise") == "revise"
 
 SESSION = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 IDENTITY = "11111111-1111-1111-1111-111111111111"
