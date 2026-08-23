@@ -57,6 +57,8 @@ class StubChatModel(BaseChatModel):
             payload = _stub_relations(blob)
         elif "orchestrator api design proposer" in lower:
             payload = _stub_relations(blob)
+        elif "orchestrator spec update advisor" in lower:
+            payload = _stub_spec_update(blob)
         elif "orchestrator tech stack advisor" in lower:
             payload = _stub_tech_stack(blob)
         else:
@@ -410,6 +412,86 @@ def _stub_features(blob: str) -> dict[str, Any]:
     }
 
 
+def _stub_extract_marked(blob: str, marker: str) -> str:
+    lower = blob.lower()
+    key = marker.lower()
+    if key not in lower:
+        return ""
+    start = lower.index(key) + len(key)
+    chunk = blob[start:].lstrip("\n")
+    for stop in (
+        "\nPrior bugs",
+        "\nCurrent bugs",
+        "\nWeb search",
+        "\nLast shipped",
+        "\nNext spec",
+        "\nLatest user message",
+        "\nPeer core",
+    ):
+        idx = chunk.find(stop)
+        if idx >= 0:
+            chunk = chunk[:idx]
+    body = chunk.strip()
+    if body.lower() in {"(none)", "none"}:
+        return ""
+    return body
+
+
+def _stub_spec_update(blob: str) -> dict[str, Any]:
+    name = "Service"
+    focus = re.search(r"Focus microservice:\s*([A-Za-z0-9]+)", blob)
+    if focus:
+        name = focus.group(1)
+    pending = blob.split("Latest user message:", 1)[-1] if "Latest user message:" in blob else blob
+    lower = pending.lower()
+    features = _stub_extract_marked(blob, "Prior agreed features for this service:")
+    if not features:
+        features = _stub_extract_marked(blob, "Agreed features / functionality:")
+    if not features:
+        features = str(_stub_features(blob).get("feature_spec") or "")
+    bugs = _stub_extract_marked(blob, "Prior bugs for this service:")
+    if not bugs:
+        bugs = _stub_extract_marked(blob, "Current bugs:")
+    changes: list[str] = []
+    if "health check" in lower:
+        if "health check" not in features.lower():
+            features = features.rstrip() + (
+                "\n- Health check: expose a liveness probe so callers and infra can "
+                "tell whether this service is ready to take traffic.\n"
+            )
+        changes.append("Added a health check capability.")
+    if "bug" in lower or "lockout" in lower:
+        if "lockout" not in bugs.lower():
+            bugs = (
+                (bugs.rstrip() + "\n\n" if bugs else "")
+                + "## Login lockout\n\n"
+                "- Existing accounts can be brute-forced; add lockout after repeated "
+                "failed authentications and a clear unlock path.\n"
+            )
+        else:
+            bugs = bugs.rstrip() + (
+                "\n- Update: lockout must persist across instances and reset only via "
+                "the documented unlock path.\n"
+            )
+        changes.append("Recorded an authentication lockout bug.")
+    if not changes:
+        extra = re.sub(r"\s+", " ", pending.strip())[:160]
+        if extra and extra.lower() not in {"(none)", "none"} and extra.lower() not in features.lower():
+            features = features.rstrip() + f"\n- Spec update: {extra}\n"
+            changes.append("Applied the requested spec update.")
+    changelog = "\n".join(f"- {line}" for line in changes) or "- No spec changes."
+    return {
+        "feature_spec": features,
+        "bug_spec": bugs,
+        "spec_changelog": changelog,
+        "assistant_message": (
+            f"Drafted an incremental spec update for **{name}**. Features and bugs from "
+            "the last shipped version stay unless this increment changes them. Confirm, "
+            "approve, or agree to send a new spec version to the engineer."
+        ),
+    }
+
+
 def _stub_relations(blob: str) -> dict[str, Any]:
     name = "Service"
     focus = re.search(r"Focus microservice:\s*([A-Za-z0-9]+)", blob)
@@ -461,7 +543,12 @@ def _stub_comms(blob: str) -> dict[str, Any]:
 
 
 def _stub_tech_stack(blob: str) -> dict[str, Any]:
-    lower = blob.lower()
+    pending = blob
+    if "Latest user message:" in blob:
+        pending = blob.split("Latest user message:", 1)[-1]
+    elif "User feedback:" in blob:
+        pending = blob.split("User feedback:", 1)[-1]
+    lower = pending.lower()
     if "java" in lower or "spring" in lower:
         stack = (
             "## Tech stack\n"

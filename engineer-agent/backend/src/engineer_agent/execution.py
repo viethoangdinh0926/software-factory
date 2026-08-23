@@ -7,7 +7,7 @@ from typing import Any
 
 VALID_KINDS = {"feature", "bug", "feature_update"}
 TERMINAL_ITEM = {"done", "skipped"}
-RUNNABLE_ITEM = {"pending", "consulting", "in_progress"}
+RUNNABLE_ITEM = {"pending", "consulting", "in_progress", "blocked"}
 
 
 def plan_items(plan: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -115,6 +115,11 @@ def next_runnable_item(plan: dict[str, Any] | None) -> dict[str, Any] | None:
     items = plan_items(plan)
     done_ids = {str(item.get("id")) for item in items if str(item.get("status")) in TERMINAL_ITEM}
 
+    blocked = [item for item in items if str(item.get("status")) == "blocked"]
+    if blocked:
+        blocked.sort(key=lambda item: (int(item.get("priority") or 99), str(item.get("id"))))
+        return blocked[0]
+
     in_progress = [item for item in items if str(item.get("status")) == "in_progress"]
     if in_progress:
         in_progress.sort(key=lambda item: (int(item.get("priority") or 99), str(item.get("id"))))
@@ -159,11 +164,20 @@ def snapshot_peer_contracts(
         key = name.lower()
         peer = by_name.get(key) or by_id.get(key)
         api = str((peer or {}).get("offered_api") or "").strip()
-        if api:
+        if peer_contract_ready(peer) and api:
             contracts[name] = api
         else:
             missing.append(name)
     return contracts, missing
+
+
+def peer_contract_ready(peer: dict[str, Any] | None) -> bool:
+    """True when the peer sub-engineer can settle a communication contract."""
+    if not peer:
+        return False
+    if str(peer.get("status") or "") == "suspended":
+        return False
+    return bool(str(peer.get("offered_api") or "").strip())
 
 
 def replace_item(plan: dict[str, Any], updated: dict[str, Any]) -> dict[str, Any]:
@@ -180,4 +194,13 @@ def replace_item(plan: dict[str, Any], updated: dict[str, Any]) -> dict[str, Any
     if not found:
         items.append(updated)
     out["items"] = items
+    return out
+
+
+def clear_blocked_items(plan: dict[str, Any] | None) -> dict[str, Any]:
+    """Retry items that were blocked; keep completed work."""
+    out = normalize_plan(plan)
+    for item in out["items"]:
+        if str(item.get("status") or "") == "blocked":
+            item["status"] = "pending"
     return out

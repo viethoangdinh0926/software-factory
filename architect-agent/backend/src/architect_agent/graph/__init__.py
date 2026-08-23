@@ -52,39 +52,46 @@ def _after_phase0_wait(
     return "phase0_classify"
 
 
-def _after_lld_wait(
-    state: DesignGraphState,
-) -> Literal["lld_step", "lld_wait", "market_research", "__end__"]:
-    if state.get("phase") == "done":
-        return "__end__"
-    if state.get("phase") == "market_research":
-        return "market_research"
-    if state.get("stay_on_interrupt"):
-        return "lld_wait"
-    return "lld_step"
-
-
 def _after_hld_wait(
     state: DesignGraphState,
-) -> Literal["hld_step", "hld_wait", "market_research", "__end__"]:
+) -> Literal["hld_step", "hld_wait", "market_research", "phase0_classify", "phase0_wait", "__end__"]:
     if state.get("phase") == "done":
         return "__end__"
     if state.get("phase") == "market_research":
         return "market_research"
+    if state.get("phase") == "phase0":
+        if state.get("stay_on_interrupt"):
+            return "phase0_wait"
+        return "phase0_classify"
     if state.get("stay_on_interrupt"):
         return "hld_wait"
     return "hld_step"
 
 
+def _after_lld_wait(
+    state: DesignGraphState,
+) -> Literal["lld_step", "lld_wait", "market_research", "phase0_classify", "phase0_wait", "__end__"]:
+    if state.get("phase") == "done":
+        return "__end__"
+    if state.get("phase") == "market_research":
+        return "market_research"
+    if state.get("phase") == "phase0":
+        if state.get("stay_on_interrupt"):
+            return "phase0_wait"
+        return "phase0_classify"
+    if state.get("stay_on_interrupt"):
+        return "lld_wait"
+    return "lld_step"
+
+
 def _after_market_wait(
     state: DesignGraphState,
-) -> Literal["lld_step", "hld_step", "market_wait"]:
-    if state.get("stay_on_interrupt"):
+) -> Literal["phase0_wait", "phase0_classify", "market_wait"]:
+    if state.get("stay_on_interrupt") and state.get("phase") == "market_research":
         return "market_wait"
-    track = state.get("design_track") or "hld"
-    if track == "lld":
-        return "lld_step"
-    return "hld_step"
+    if state.get("phase") == "phase0" and not state.get("stay_on_interrupt"):
+        return "phase0_classify"
+    return "phase0_wait"
 
 
 def build_graph() -> CompiledStateGraph:
@@ -123,6 +130,8 @@ def build_graph() -> CompiledStateGraph:
             "lld_step": "lld_step",
             "lld_wait": "lld_wait",
             "market_research": "market_research",
+            "phase0_classify": "phase0_classify",
+            "phase0_wait": "phase0_wait",
             "__end__": END,
         },
     )
@@ -134,6 +143,8 @@ def build_graph() -> CompiledStateGraph:
             "hld_step": "hld_step",
             "hld_wait": "hld_wait",
             "market_research": "market_research",
+            "phase0_classify": "phase0_classify",
+            "phase0_wait": "phase0_wait",
             "__end__": END,
         },
     )
@@ -142,8 +153,8 @@ def build_graph() -> CompiledStateGraph:
         "market_wait",
         _after_market_wait,
         {
-            "lld_step": "lld_step",
-            "hld_step": "hld_step",
+            "phase0_wait": "phase0_wait",
+            "phase0_classify": "phase0_classify",
             "market_wait": "market_wait",
         },
     )
@@ -186,4 +197,6 @@ def initial_state(session_id: str, markdown: str) -> dict[str, Any]:
         "fmea_notes": "",
         "resume_after_market": False,
         "stay_on_interrupt": False,
+        "carry_change": "",
+        "rewalk_until_step": 0,
     }

@@ -32,6 +32,15 @@ export type ExecutionPlan = {
   items: PlanItem[];
 };
 
+export type BlockIssue = {
+  kind: string;
+  title: string;
+  detail: string;
+  item_id?: string;
+  item_title?: string;
+  instructions?: string;
+};
+
 export type SubEngineer = {
   sub_agent_id: string;
   design_session_id: string;
@@ -58,6 +67,7 @@ export type SubEngineer = {
   workspace_path?: string;
   git_ship_status?: string;
   git_ship_error?: string;
+  block_issue?: BlockIssue | null;
 };
 
 export type FleetSession = {

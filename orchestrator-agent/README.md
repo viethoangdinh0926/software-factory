@@ -16,7 +16,7 @@ Receives architect **design packages** (A2A markdown) keyed by the architect `de
 
 The orchestrator does **not** lock communication schemes, protocols, or API catalogs. Engineer sub-agents own offered APIs and consult peers they initiate toward.
 
-Distributed workflows stay open: reopen `/sessions/{design_session_id}` anytime to revise a service's relationships and hand off an update. Stand-alone discussion locks after the first engineer handoff until the architect sends a new package.
+Distributed workflows stay open after the first engineer ship: reopen `/sessions/{design_session_id}` anytime to add or update features and bugs and hand off a new spec version. A full re-walk of every planning phase (relationships, features, stack) starts only when the architect sends a new design package. Stand-alone discussion locks after the first engineer handoff until the architect sends a new package.
 
 Each session has a **Git repo** panel: save an SSH remote and private key, then **Send to engineer**. The orchestrator runs `git ls-remote` with that key first. Failures show on the panel with **Resend to engineer**. The private key is stored under `backend/data/secrets/` (mode 0600) and is never returned by the API.
 

@@ -20,6 +20,13 @@ from architect_agent.graph.nodes.common import (
     invoke_json,
     is_design_approve_step,
 )
+from architect_agent.design_progress import (
+    KEEP_AND_PATCH_RULES,
+    keep_or_patch,
+    rewind_or_block_skip,
+    should_keep_and_patch,
+    with_rewind_notice,
+)
 from architect_agent.graph.state import DesignGraphState
 from architect_agent.json_util import coerce_diagram_text
 from architect_agent.mermaid_sanitize import sanitize_mermaid
@@ -46,6 +53,9 @@ def lld_step_node(state: DesignGraphState) -> dict[str, Any]:
     ledger = state.get("tradeoff_ledger") or ""
     diagram = state.get("design_diagram") or ""
     justification = maybe_compact_design_justification(state.get("design_justification") or "")
+    keep_mode = should_keep_and_patch(state, step)
+    carry = str(state.get("carry_change") or "").strip()
+    keep_block = KEEP_AND_PATCH_RULES if keep_mode else ""
 
     result = invoke_json(
         system=(
@@ -55,6 +65,7 @@ def lld_step_node(state: DesignGraphState) -> dict[str, Any]:
             f"{JSON_OUTPUT_DIGEST}\n\n"
             f"Current LLD step: {step} — {_STEP_TITLES.get(step, '')}.\n"
             f"{USER_MESSAGE_FIRST_RULES if pending else ''}"
+            f"{keep_block}"
             "Fill THIS step's primary artifact in full using recommended defaults. "
             "If the user just commented, address that comment before restating the step.\n"
             "Do not stall on missing details.\n"
@@ -66,7 +77,8 @@ def lld_step_node(state: DesignGraphState) -> dict[str, Any]:
             "design_ready_to_approve=true when blueprint is coherent. Ask them to confirm, "
             "approve, or agree before sending. Never tell them to click a button.\n"
             "Leave non-primary fields as \"\" / [] to preserve prior values, EXCEPT you "
-            "must always fill the primary field(s) for this step (never empty).\n"
+            "must always fill the primary field(s) for this step (never empty) unless "
+            "a keep-existing-artifacts instruction is in force.\n"
             "assistant_message MUST brief what this step completed: name the rules, "
             "types, or diagram nodes you wrote, why those defaults, what you rejected, "
             "and what it costs. Never write a status line such as "
@@ -92,23 +104,40 @@ def lld_step_node(state: DesignGraphState) -> dict[str, Any]:
             f"Current justification:\n{justification or '(none)'}\n\n"
             f"Recent LLD turns:\n{history_tail}\n\n"
             f"Latest user message:\n{pending or '(none)'}\n"
+            f"Carry-forward change to apply if this step is affected:\n{carry or '(none)'}\n"
         ),
     )
 
-    new_diagram = sanitize_mermaid(coerce_diagram_text(result, fallback=diagram))
-    new_just = maybe_compact_design_justification(
-        str(result.get("design_justification") or justification)
+    new_diagram = sanitize_mermaid(
+        coerce_diagram_text(result, fallback="" if keep_mode else diagram)
     )
+    if keep_mode:
+        new_diagram = sanitize_mermaid(keep_or_patch(new_diagram, diagram))
+        new_just = maybe_compact_design_justification(
+            keep_or_patch(str(result.get("design_justification") or ""), justification)
+        )
+        new_spec = keep_or_patch(str(result.get("updated_business_spec") or ""), business_spec)
+        new_ledger = keep_or_patch(str(result.get("tradeoff_ledger") or ""), ledger)
+    else:
+        new_just = maybe_compact_design_justification(
+            str(result.get("design_justification") or justification)
+        )
+        new_spec = str(result.get("updated_business_spec") or business_spec)
+        new_ledger = str(result.get("tradeoff_ledger") or ledger)
     ready_advance = bool(result.get("ready_to_advance"))
     design_ready = bool(result.get("design_ready_to_approve")) or (
         step >= 3 and bool(new_diagram.strip())
     )
     if step >= 3:
         ready_advance = design_ready
+    if keep_mode:
+        ready_advance = True
+        if step >= 3:
+            design_ready = True
+            ready_advance = True
     primary_field = {1: "business_spec", 2: "design_justification", 3: "design_justification"}.get(
         step, "business_spec"
     )
-    new_spec = str(result.get("updated_business_spec") or business_spec)
     assistant = ensure_step_briefing(
         str(result.get("assistant_message") or ""),
         track="lld",
@@ -116,7 +145,7 @@ def lld_step_node(state: DesignGraphState) -> dict[str, Any]:
         title=_STEP_TITLES.get(step, "Low-level design"),
         artifacts={
             "business_spec": new_spec,
-            "tradeoff_ledger": str(result.get("tradeoff_ledger") or ledger),
+            "tradeoff_ledger": new_ledger,
             "design_diagram": new_diagram,
             "design_justification": new_just,
         },
@@ -125,19 +154,20 @@ def lld_step_node(state: DesignGraphState) -> dict[str, Any]:
     )
     if pending:
         changed = (
-            str(result.get("updated_business_spec") or business_spec) != business_spec
-            or str(result.get("tradeoff_ledger") or ledger) != ledger
+            new_spec != business_spec
+            or new_ledger != ledger
             or new_diagram != diagram
             or new_just != justification
         )
         assistant = with_resolution_close(str(assistant), changed=changed)
+    assistant = with_rewind_notice(str(assistant), str(state.get("rewind_notice") or ""))
 
     return {
         "phase": "lld",
         "design_track": "lld",
         "design_step": step,
-        "business_spec": result.get("updated_business_spec") or business_spec,
-        "tradeoff_ledger": result.get("tradeoff_ledger") or ledger,
+        "business_spec": new_spec,
+        "tradeoff_ledger": new_ledger,
         "design_diagram": new_diagram,
         "design_justification": new_just,
         "ready_to_advance": ready_advance,
@@ -145,6 +175,7 @@ def lld_step_node(state: DesignGraphState) -> dict[str, Any]:
         "ready_for_design": design_ready,
         "pending_user_feedback": "",
         "pending_assistant_message": assistant,
+        "rewind_notice": "",
         "publish_requested": False,
         "stay_on_interrupt": False,
         "messages": [{"role": "assistant", "content": assistant, "node": "lld"}],
@@ -244,6 +275,19 @@ def lld_wait_node(state: DesignGraphState) -> dict[str, Any]:
             "stay_on_interrupt": False,
             "messages": msgs,
         }
+
+    if user_text:
+        rewound = rewind_or_block_skip(
+            state,
+            user_text,
+            node="lld",
+            current_phase="lld",
+            current_track="lld",
+            current_step=step,
+            msgs=msgs,
+        )
+        if rewound is not None:
+            return rewound
 
     if user_text and is_informational_query(user_text):
         return answer_before_approve(

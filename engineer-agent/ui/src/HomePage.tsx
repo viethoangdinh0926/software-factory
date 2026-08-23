@@ -6,6 +6,29 @@ function getUserFriendlyError(_err: unknown): string {
   return "Something went wrong. Please try again.";
 }
 
+const FLOW_STEPS = [
+  {
+    n: "1",
+    title: "Ingest a plan spec",
+    body: "Each core microservice gets its own sub-engineer tile. The sub-engineer drafts an offered API and an execution plan in priority order.",
+  },
+  {
+    n: "2",
+    title: "Approve the plan",
+    body: "Confirm the plan in chat or the UI. Coding starts only after that. Pause later if you need to revise, then execute the updated plan.",
+  },
+  {
+    n: "3",
+    title: "One item at a time",
+    body: "The sub-engineer follows the plan closely: one feature update, new feature, or bug at a time. It adds tests and moves on only when every workspace test passes.",
+  },
+  {
+    n: "4",
+    title: "Pause on issues",
+    body: "If git pull fails, a peer contract cannot be settled, or tests fail, development pauses and the tile updates in real time. Chat with instructions, then approve to continue.",
+  },
+];
+
 export function HomePage() {
   const navigate = useNavigate();
   const [sessions, setSessions] = useState<FleetSummary[]>([]);
@@ -48,6 +71,37 @@ export function HomePage() {
           </p>
         </div>
       </header>
+
+      <section className="panel flow-guide" aria-labelledby="flow-heading">
+        <div className="panel-head">
+          <h2 id="flow-heading">How a sub-engineer codes a service</h2>
+          <span className="panel-kicker">In order</span>
+        </div>
+        <ol className="flow-steps">
+          {FLOW_STEPS.map((step) => (
+            <li key={step.n}>
+              <span className="flow-index">{step.n}</span>
+              <div>
+                <strong>{step.title}</strong>
+                <p>{step.body}</p>
+              </div>
+            </li>
+          ))}
+        </ol>
+        <ul className="flow-rules">
+          <li>Follow the execution plan in the listed priority order. Do not skip ahead.</li>
+          <li>
+            Pause-and-revise is separate from a blocker: Execute plan resumes after you rewrite the
+            plan; Approve to continue resumes after an issue is resolved and follows any
+            instructions you chatted.
+          </li>
+          <li>
+            The fleet page streams status as it happens. You do not need to refresh to see a
+            blocker.
+          </li>
+          <li>Confirm, approve, or agree in chat, or use the UI action. Either works.</li>
+        </ul>
+      </section>
 
       {error ? (
         <div className="error banner" role="alert">

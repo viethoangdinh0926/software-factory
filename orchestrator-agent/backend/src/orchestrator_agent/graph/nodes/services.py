@@ -242,6 +242,8 @@ def prime_all_services_node(state: dict[str, Any]) -> dict[str, Any]:
         "awaiting_api_type",
         "awaiting_api_design",
         "awaiting_stack",
+        "discussing_spec_update",
+        "awaiting_spec_update",
     }
     services = list(state.get("services") or [])
     out = list(services)

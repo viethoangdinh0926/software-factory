@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import queue
 import threading
 import time
 from copy import deepcopy
@@ -14,6 +15,7 @@ from engineer_agent.config import get_settings
 from engineer_agent.execution import (
     all_items_terminal,
     apply_transition,
+    clear_blocked_items,
     has_plan_items,
     next_runnable_item,
     normalize_plan,
@@ -29,12 +31,19 @@ from engineer_agent.query_intent import (
     with_resolution_close,
 )
 from engineer_agent.secrets_store import load_git_secrets, save_git_secrets
-from engineer_agent.workspace import prepare_workspace, private_dir_name, ship_workspace, write_item_work
+from engineer_agent.workspace import (
+    prepare_workspace,
+    private_dir_name,
+    run_workspace_tests,
+    ship_workspace,
+    write_item_work,
+)
 
 logger = logging.getLogger(__name__)
 
 APPROVE_LABELS = {
     "awaiting_plan": "Approve plan",
+    "blocked": "Approve to continue",
 }
 
 PLAN_EDITABLE = {"awaiting_plan", "paused"}
@@ -70,6 +79,8 @@ def _prompt_mode(status: str, can_approve: bool) -> str:
         return "executing"
     if status == "paused":
         return "paused"
+    if status == "blocked":
+        return "blocked"
     if status == "shipped":
         return "shipped"
     if status in {"ready", "suspended"}:
@@ -86,6 +97,20 @@ def _close(message: str, *, status: str, can_approve: bool) -> str:
         can_approve=can_approve,
         mode=_prompt_mode(status, can_approve),
     )
+
+
+def _can_approve(sub: dict[str, Any]) -> bool:
+    return bool(decorate_sub(sub).get("can_approve"))
+
+
+def _close_sub(sub: dict[str, Any], message: str) -> str:
+    status = str(sub.get("status") or "")
+    return _close(message, status=status, can_approve=_can_approve(sub))
+
+
+def _issue_instructions(sub: dict[str, Any]) -> str:
+    issue = sub.get("block_issue") if isinstance(sub.get("block_issue"), dict) else {}
+    return str(sub.get("resume_instructions") or issue.get("instructions") or "").strip()
 
 
 def _taken_workspace_names(session: FleetSession, sub_id: str) -> set[str]:
@@ -119,6 +144,7 @@ def empty_sub(
         "plan_spec": "",
         "entity_relationships": "",
         "feature_spec": "",
+        "bug_spec": "",
         "tech_stack": "",
         "offered_api": "",
         "implementation_notes": "",
@@ -135,6 +161,8 @@ def empty_sub(
         "git_ship_status": "",
         "git_ship_error": "",
         "interrupted_from": "",
+        "block_issue": {},
+        "resume_instructions": "",
     }
 
 
@@ -144,14 +172,24 @@ def decorate_sub(sub: dict[str, Any]) -> dict[str, Any]:
     suspended = status == "suspended"
     plan = out.get("execution_plan") if isinstance(out.get("execution_plan"), dict) else {}
     has_items = has_plan_items(plan)
-    can_approve = status == "awaiting_plan" and has_items and not suspended
+    blocked = status == "blocked"
+    can_approve = ((status == "awaiting_plan" and has_items) or blocked) and not suspended
     out["can_approve"] = can_approve
-    out["approve_kind"] = "awaiting_plan" if can_approve else ""
-    out["approve_label"] = APPROVE_LABELS["awaiting_plan"] if can_approve else ""
+    if blocked:
+        out["approve_kind"] = "blocked"
+        out["approve_label"] = APPROVE_LABELS["blocked"]
+    elif can_approve:
+        out["approve_kind"] = "awaiting_plan"
+        out["approve_label"] = APPROVE_LABELS["awaiting_plan"]
+    else:
+        out["approve_kind"] = ""
+        out["approve_label"] = ""
     out["can_pause"] = status == "executing" and not suspended
     out["can_execute"] = status == "paused" and has_items and not suspended
-    out["plan_locked"] = status == "executing" and not suspended
+    out["plan_locked"] = status in {"executing", "blocked"} and not suspended
     out["discussion_open"] = not suspended
+    issue = out.get("block_issue") if isinstance(out.get("block_issue"), dict) else {}
+    out["block_issue"] = issue if blocked and issue else None
     return out
 
 
@@ -257,6 +295,8 @@ class SessionStore:
         self._workers: dict[str, threading.Thread] = {}
         self._pause_events: dict[str, threading.Event] = {}
         self._workers_guard = threading.Lock()
+        self._watchers: dict[str, list[queue.Queue[dict[str, Any] | None]]] = {}
+        self._watchers_guard = threading.Lock()
         self._load_disk()
 
     def _lock_for(self, session_id: str) -> threading.Lock:
@@ -301,6 +341,42 @@ class SessionStore:
                 ssh_private_key=session.git_ssh_private_key,
             )
         self._cache[session.design_session_id] = session
+        self._notify_watchers(session)
+
+    def watch(self, session_id: str) -> queue.Queue[dict[str, Any] | None]:
+        """Subscribe to live public snapshots for this fleet (SSE)."""
+        watcher: queue.Queue[dict[str, Any] | None] = queue.Queue(maxsize=8)
+        with self._watchers_guard:
+            self._watchers.setdefault(session_id, []).append(watcher)
+        return watcher
+
+    def unwatch(self, session_id: str, watcher: queue.Queue[dict[str, Any] | None]) -> None:
+        with self._watchers_guard:
+            rows = self._watchers.get(session_id) or []
+            self._watchers[session_id] = [item for item in rows if item is not watcher]
+            if not self._watchers[session_id]:
+                self._watchers.pop(session_id, None)
+        try:
+            watcher.put_nowait(None)
+        except queue.Full:
+            pass
+
+    def _notify_watchers(self, session: FleetSession) -> None:
+        payload = session.to_public()
+        with self._watchers_guard:
+            watchers = list(self._watchers.get(session.design_session_id) or [])
+        for watcher in watchers:
+            try:
+                watcher.put_nowait(payload)
+            except queue.Full:
+                try:
+                    watcher.get_nowait()
+                except queue.Empty:
+                    pass
+                try:
+                    watcher.put_nowait(payload)
+                except queue.Full:
+                    pass
 
     def _hydrate_git_secrets(self, session: FleetSession) -> None:
         secrets = load_git_secrets(session.design_session_id)
@@ -440,6 +516,24 @@ class SessionStore:
             if action == "pause":
                 return self._chat_locked(session, sub, text, "Nothing is executing, so there is nothing to pause.")
 
+            if status == "blocked":
+                if action == "approve":
+                    return self._approve_locked(session, sub)
+                if action == "execute":
+                    return self._chat_locked(
+                        session,
+                        sub,
+                        text,
+                        "I paused this item on an issue. Chat with instructions if you have "
+                        "them, then approve to continue. Execute plan is for after you pause "
+                        "to revise the plan.",
+                    )
+                extra = ""
+                if _is_peer_data_request(text):
+                    extra = self._handle_peer_data_request(session, dict(sub), text)
+                    sub = session.find(str(sub.get("microservice_id") or "")) or sub
+                return self._record_block_instructions(session, sub, text, extra=extra)
+
             if status == "paused" and action == "execute":
                 return self._execute_locked(session, sub)
 
@@ -464,6 +558,77 @@ class SessionStore:
         msgs = list(updated.get("messages") or [])
         msgs.append({"role": "user", "content": text, "node": str(updated.get("status") or "chat")})
         msgs.append({"role": "assistant", "content": assistant, "node": str(updated.get("status") or "chat")})
+        updated["messages"] = msgs
+        session.replace(updated)
+        self._refresh_consults(session)
+        self._persist(session)
+        return session
+
+    def _record_block_instructions(
+        self,
+        session: FleetSession,
+        sub: dict[str, Any],
+        text: str,
+        *,
+        extra: str = "",
+    ) -> FleetSession:
+        issue = dict(sub.get("block_issue") if isinstance(sub.get("block_issue"), dict) else {})
+        prior = str(issue.get("instructions") or sub.get("resume_instructions") or "").strip()
+        result = invoke_json(
+            system=(
+                "You are the engineer blocked issue advisor.\n"
+                f"{_skill_digest()}\n"
+                "Development is paused on an issue. The user is chatting about how to "
+                "resolve it. If they give instructions, store the combined instructions "
+                "to follow after they approve to continue. If they only ask a question, "
+                "answer it and keep the previous instructions unchanged.\n"
+                'Respond ONLY with JSON: {"assistant_message": string, "instructions": string}'
+            ),
+            user=(
+                f"Service: {sub.get('microservice_name')}\n"
+                f"Issue kind: {issue.get('kind') or ''}\n"
+                f"Issue title: {issue.get('title') or ''}\n"
+                f"Issue detail: {issue.get('detail') or ''}\n"
+                f"Paused item: {issue.get('item_title') or ''}\n"
+                f"Current instructions:\n{prior}\n\n"
+                f"User message:\n{text}"
+            ),
+        )
+        instructions = str(result.get("instructions") or prior).strip()
+        compact = text.strip().lower()
+        asking = "?" in text or compact.startswith(("why", "what", "which", "how", "show", "explain", "list"))
+        if not asking and text.strip():
+            if not instructions:
+                instructions = text.strip()
+            elif prior and prior not in instructions and text.strip() not in instructions:
+                instructions = f"{prior}\n{text.strip()}".strip()
+        issue["instructions"] = instructions
+        updated = dict(sub)
+        updated["block_issue"] = issue
+        updated["resume_instructions"] = instructions
+        msgs = list(updated.get("messages") or [])
+        note = str(result.get("assistant_message") or "").strip()
+        extra_text = (extra or "").strip()
+        if extra_text:
+            note = f"{extra_text}\n\n{note}".strip() if note else extra_text
+        if not note:
+            note = (
+                "I recorded your instructions for this issue. When you approve to continue, "
+                "I will follow them and retry the paused item."
+            )
+        if instructions and not asking:
+            note = (
+                f"{note}\n\nI will follow these instructions after you approve to continue:\n"
+                f"{instructions[:2000]}"
+            )
+        msgs.append({"role": "user", "content": text, "node": "blocked"})
+        msgs.append(
+            {
+                "role": "assistant",
+                "content": _close(note, status="blocked", can_approve=True),
+                "node": "blocked",
+            }
+        )
         updated["messages"] = msgs
         session.replace(updated)
         self._refresh_consults(session)
@@ -497,6 +662,10 @@ class SessionStore:
                 return self._approve_locked(session, sub)
             if status == "paused":
                 return self._execute_locked(session, sub)
+            if status == "blocked":
+                raise PermissionError(
+                    "This sub-engineer is paused on an issue. Approve to continue after it is resolved."
+                )
             raise PermissionError("Execute is only available after you approve a plan or pause one that is running.")
 
     def tick_execution(self, session_id: str, *, service_id: str | None = None) -> FleetSession:
@@ -520,6 +689,10 @@ class SessionStore:
             raise PermissionError("Nothing to approve on this sub-engineer yet.")
         updated = dict(sub)
         msgs = list(updated.get("messages") or [])
+        if str(updated.get("status") or "") == "blocked":
+            msgs.append({"role": "user", "content": "Approve to continue", "node": "continue"})
+            updated["messages"] = msgs
+            return self._continue_locked(session, updated)
         msgs.append({"role": "user", "content": "Approved", "node": "approve"})
         updated["messages"] = msgs
         return self._start_execute_locked(session, updated, user_note="Approved the execution plan.")
@@ -604,14 +777,17 @@ class SessionStore:
         sub["plan_spec"] = parsed.markdown
         sub["entity_relationships"] = parsed.entity_relationships
         sub["feature_spec"] = parsed.feature_spec
+        sub["bug_spec"] = parsed.bug_spec
         sub["tech_stack"] = parsed.tech_stack
         sub["status"] = "awaiting_plan"
         sub["git_ship_status"] = ""
         sub["git_ship_error"] = ""
+        sub["block_issue"] = {}
+        sub["resume_instructions"] = ""
         self._draft_offered_api(sub)
         self._draft_execution_plan(sub)
         msgs = list(sub.get("messages") or [])
-        if had_plan or str(sub.get("interrupted_from") or "") in {"executing", "paused"}:
+        if had_plan or str(sub.get("interrupted_from") or "") in {"executing", "paused", "blocked"}:
             note = (
                 f"Stopped current development for `{sub['sub_agent_id']}` (**{sub['microservice_name']}**). "
                 "I compared the new spec with the previous one and drafted a new execution plan "
@@ -649,6 +825,7 @@ class SessionStore:
                 f"Focus microservice: {name}\n\n"
                 f"Entity relationships:\n{(sub.get('entity_relationships') or '')[:4000]}\n\n"
                 f"Features:\n{(sub.get('feature_spec') or '')[:3000]}\n\n"
+                f"Bugs:\n{(sub.get('bug_spec') or '')[:2000]}\n\n"
                 f"Tech stack:\n{(sub.get('tech_stack') or '')[:1500]}"
             ),
         )
@@ -677,7 +854,8 @@ class SessionStore:
             msg,
             changed=True,
             approve_label=APPROVE_LABELS.get(str(sub.get("status") or ""), "Approve"),
-            can_approve=str(sub.get("status") or "") == "awaiting_plan",
+            can_approve=_can_approve(sub),
+            mode=_prompt_mode(str(sub.get("status") or ""), _can_approve(sub)),
         )
 
     def _draft_execution_plan(self, sub: dict[str, Any]) -> None:
@@ -704,6 +882,7 @@ class SessionStore:
                 f"Focus microservice: {name}\n\n"
                 f"Entity relationships:\n{(sub.get('entity_relationships') or '')[:4000]}\n\n"
                 f"Features:\n{(sub.get('feature_spec') or '')[:3000]}\n\n"
+                f"Bugs:\n{(sub.get('bug_spec') or '')[:2000]}\n\n"
                 f"Tech stack:\n{(sub.get('tech_stack') or '')[:1500]}\n\n"
                 f"{prior_bits}"
             ),
@@ -744,8 +923,8 @@ class SessionStore:
             msg,
             changed=True,
             approve_label=APPROVE_LABELS.get(status, "Approve"),
-            can_approve=status == "awaiting_plan",
-            mode=_prompt_mode(status, status == "awaiting_plan"),
+            can_approve=_can_approve(sub),
+            mode=_prompt_mode(status, _can_approve(sub)),
         )
 
     def _start_execute_locked(
@@ -759,9 +938,10 @@ class SessionStore:
         new = sub.get("execution_plan") if isinstance(sub.get("execution_plan"), dict) else {}
         plan = apply_transition(old, new)
         sub["execution_plan"] = plan
-        sub["status"] = "executing"
         sub["git_ship_status"] = ""
         sub["git_ship_error"] = ""
+        sub["block_issue"] = {}
+        sub["resume_instructions"] = ""
         self._clear_stop(str(sub.get("sub_agent_id") or ""))
         private, err = prepare_workspace(
             session_id=session.design_session_id,
@@ -772,14 +952,30 @@ class SessionStore:
         )
         sub["workspace_path"] = str(private)
         sub["workspace_error"] = err
+        if (err or "").strip():
+            self._block_locked(
+                session,
+                sub,
+                kind="git_pull",
+                title="Could not pull the git repo",
+                detail=(
+                    "I could not pull the codebase from the remote git repo, so I paused "
+                    f"before writing code. {err.strip()}"
+                ),
+            )
+            self._persist(session)
+            return session
+        sub["status"] = "executing"
         transition = str(plan.get("transition") or "").strip()
         note = user_note
         if transition:
             note = f"{user_note} Transition: {transition}"
         note = (
-            f"{note} I will code and test each item in priority order, consult peer "
-            "sub-engineers for communication contracts when an item depends on them, "
-            "and ship to git only after the entire plan is done."
+            f"{note} I will follow this service's execution plan closely: one item at a "
+            "time in priority order (feature updates, new features, then bugs). For each "
+            "item I add tests and only move on when every test in the workspace passes. "
+            "I consult peer sub-engineers for communication contracts when an item depends "
+            "on them, and ship to git only after the entire plan is done."
         )
         msgs = list(sub.get("messages") or [])
         msgs.append(
@@ -795,6 +991,112 @@ class SessionStore:
         self._maybe_spawn(session.design_session_id, str(sub.get("sub_agent_id") or ""))
         return session
 
+    def _continue_locked(self, session: FleetSession, sub: dict[str, Any]) -> FleetSession:
+        instructions = _issue_instructions(sub)
+        plan = sub.get("execution_plan") if isinstance(sub.get("execution_plan"), dict) else {}
+        sub["execution_plan"] = clear_blocked_items(plan)
+        sub["resume_instructions"] = instructions
+        sub["block_issue"] = {}
+        self._clear_stop(str(sub.get("sub_agent_id") or ""))
+        private, err = prepare_workspace(
+            session_id=session.design_session_id,
+            microservice_id=str(sub.get("microservice_id") or "app"),
+            microservice_name=str(sub.get("microservice_name") or "Service"),
+            git_data=session.git_data(),
+            taken=_taken_workspace_names(session, str(sub.get("sub_agent_id") or "")),
+        )
+        sub["workspace_path"] = str(private)
+        sub["workspace_error"] = err
+        if (err or "").strip():
+            self._block_locked(
+                session,
+                sub,
+                kind="git_pull",
+                title="Could not pull the git repo",
+                detail=(
+                    "The git pull still failed, so I am staying paused. "
+                    f"{err.strip()}"
+                ),
+            )
+            self._persist(session)
+            return session
+        sub["status"] = "executing"
+        note = (
+            "Continuing the execution plan from the blocked item. I will retry that "
+            "item, keep tests green, then move to the next priority item."
+        )
+        if instructions:
+            note = (
+                "Continuing with your instructions. I will follow them to resolve this "
+                f"issue, then retry the paused item.\n\n{instructions[:2000]}"
+            )
+        msgs = list(sub.get("messages") or [])
+        msgs.append(
+            {
+                "role": "assistant",
+                "content": _close(note, status="executing", can_approve=False),
+                "node": "continue",
+            }
+        )
+        sub["messages"] = msgs
+        session.replace(sub)
+        self._persist(session)
+        self._maybe_spawn(session.design_session_id, str(sub.get("sub_agent_id") or ""))
+        return session
+
+    def _block_locked(
+        self,
+        session: FleetSession,
+        sub: dict[str, Any],
+        *,
+        kind: str,
+        title: str,
+        detail: str,
+        item: dict[str, Any] | None = None,
+        plan: dict[str, Any] | None = None,
+    ) -> None:
+        updated = dict(sub)
+        self._request_stop(str(updated.get("sub_agent_id") or ""))
+        if item is not None:
+            blocked_item = dict(item)
+            blocked_item["status"] = "blocked"
+            blocked_item["notes"] = detail
+            source = plan if isinstance(plan, dict) else (
+                updated.get("execution_plan") if isinstance(updated.get("execution_plan"), dict) else {}
+            )
+            updated["execution_plan"] = replace_item(source, blocked_item)
+        else:
+            blocked_item = {}
+        kept = _issue_instructions(updated)
+        updated["status"] = "blocked"
+        updated["resume_instructions"] = kept
+        updated["block_issue"] = {
+            "kind": kind,
+            "title": title,
+            "detail": detail,
+            "item_id": str(blocked_item.get("id") or ""),
+            "item_title": str(blocked_item.get("title") or ""),
+            "instructions": kept,
+        }
+        msgs = list(updated.get("messages") or [])
+        msgs.append(
+            {
+                "role": "assistant",
+                "content": _close(
+                    f"**Development paused.** {title}\n\n{detail}\n\n"
+                    "Chat with me if you have instructions for how to resolve this. "
+                    "When you are ready, approve to continue; I will follow those "
+                    "instructions (if any) and retry this item. I will not start the "
+                    "next plan item until then.",
+                    status="blocked",
+                    can_approve=True,
+                ),
+                "node": "blocked",
+            }
+        )
+        updated["messages"] = msgs
+        session.replace(updated)
+
     def _tick_locked(self, session: FleetSession, sub: dict[str, Any]) -> bool:
         updated = dict(sub)
         plan = updated.get("execution_plan") if isinstance(updated.get("execution_plan"), dict) else {}
@@ -806,18 +1108,40 @@ class SessionStore:
             session.replace(updated)
             return False
         item = dict(nxt)
+        resume = str(updated.get("resume_instructions") or "").strip()
         peers_needed = [str(p).strip() for p in (item.get("peer_services") or []) if str(p).strip()]
         if peers_needed:
             item["status"] = "consulting"
             live = [s for s in session.sub_agents if str(s.get("status")) != "suspended"]
             contracts, missing = snapshot_peer_contracts(item, live)
             item["contracts"] = contracts
+            if missing and resume:
+                for name in missing:
+                    contracts[name] = resume
+                item["contracts"] = contracts
+                item["notes"] = (
+                    "Settled communication contracts from your instructions for "
+                    + ", ".join(missing)
+                )
+                missing = []
             if missing:
-                item["notes"] = f"Waiting to settle communication contracts with: {', '.join(missing)}."
-                updated["execution_plan"] = replace_item(plan, item)
-                session.replace(updated)
-                return False
-            item["notes"] = "Settled communication contracts with " + ", ".join(sorted(contracts))
+                names = ", ".join(missing)
+                self._block_locked(
+                    session,
+                    updated,
+                    kind="peer_contract",
+                    title="Cannot settle a communication contract",
+                    detail=(
+                        f"Item **{item.get('title')}** needs a communication contract with "
+                        f"**{names}**, but that peer spec is not complete yet (or the peer "
+                        "sub-engineer cannot settle the contract). I paused this item."
+                    ),
+                    item=item,
+                    plan=plan,
+                )
+                return True
+            if not str(item.get("notes") or "").strip():
+                item["notes"] = "Settled communication contracts with " + ", ".join(sorted(contracts))
         item["status"] = "in_progress"
         private = Path(str(updated.get("workspace_path") or ""))
         if not private.is_dir():
@@ -830,12 +1154,46 @@ class SessionStore:
             )
             updated["workspace_path"] = str(private)
             updated["workspace_error"] = err
+            if (err or "").strip():
+                self._block_locked(
+                    session,
+                    updated,
+                    kind="git_pull",
+                    title="Could not pull the git repo",
+                    detail=(
+                        "I could not pull the codebase from the remote git repo while "
+                        f"working on **{item.get('title')}**. {err.strip()}"
+                    ),
+                    item=item,
+                    plan=plan,
+                )
+                return True
         write_item_work(
             private,
             item=item,
             microservice_name=str(updated.get("microservice_name") or "Service"),
+            instructions=resume,
         )
+        ok, test_detail = run_workspace_tests(private)
+        if not ok:
+            self._block_locked(
+                session,
+                updated,
+                kind="tests_failed",
+                title="Tests did not pass",
+                detail=(
+                    f"I added tests for **{item.get('title')}** and ran the workspace "
+                    f"suites before moving on. {test_detail}"
+                ),
+                item=item,
+                plan=plan,
+            )
+            return True
         item["status"] = "done"
+        item["notes"] = (
+            f"{str(item.get('notes') or '').strip()} {test_detail}".strip()
+        )
+        updated["resume_instructions"] = ""
         updated["execution_plan"] = replace_item(plan, item)
         if all_items_terminal(updated["execution_plan"]):
             self._ship_locked(session, updated)
@@ -971,21 +1329,18 @@ class SessionStore:
             ),
             user=f"Current artifacts:\n{artifacts}\n\nUser question:\n{question}",
         )
-        status = str(sub.get("status") or "")
-        return _close(
+        return _close_sub(
+            sub,
             str(result.get("assistant_message") or "I can answer from this sub-engineer's artifacts."),
-            status=status,
-            can_approve=status == "awaiting_plan",
         )
 
     def _handle_peer_data_request(self, session: FleetSession, sub: dict[str, Any], text: str) -> str:
         peer = _peer_from_message(session, sub, text)
         if not peer:
-            return _close(
+            return _close_sub(
+                sub,
                 "Name the peer core microservice you initiate toward so I can ask its "
                 "sub-engineer to add or drop fields on their offered API.",
-                status=str(sub.get("status") or ""),
-                can_approve=str(sub.get("status") or "") == "awaiting_plan",
             )
         result = invoke_json(
             system=(
@@ -1017,10 +1372,9 @@ class SessionStore:
         )
         peer["incoming_api_requests"] = incoming
         peer_msgs = list(peer.get("messages") or [])
-        peer_note = _close(
+        peer_note = _close_sub(
+            peer,
             str(result.get("assistant_message") or "Updated offered API for a peer request."),
-            status=str(peer.get("status") or ""),
-            can_approve=str(peer.get("status") or "") == "awaiting_plan",
         )
         peer_msgs.append({"role": "assistant", "content": peer_note, "node": "peer_request"})
         peer["messages"] = peer_msgs
@@ -1030,11 +1384,8 @@ class SessionStore:
             f"API. {result.get('assistant_message') or ''}".strip(),
             changed=True,
             approve_label=APPROVE_LABELS.get(str(sub.get("status") or ""), "Approve"),
-            can_approve=str(sub.get("status") or "") == "awaiting_plan",
-            mode=_prompt_mode(
-                str(sub.get("status") or ""),
-                str(sub.get("status") or "") == "awaiting_plan",
-            ),
+            can_approve=_can_approve(sub),
+            mode=_prompt_mode(str(sub.get("status") or ""), _can_approve(sub)),
         )
 
     def _refresh_consults(self, session: FleetSession) -> None:

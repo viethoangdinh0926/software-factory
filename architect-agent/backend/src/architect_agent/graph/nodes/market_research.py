@@ -4,6 +4,11 @@ from typing import Any
 
 from langgraph.types import interrupt
 
+from architect_agent.design_progress import (
+    NEW_ROUND_AFTER_HANDOFF,
+    max_track_step,
+    rewind_or_block_skip,
+)
 from architect_agent.graph.nodes.common import answer_before_approve, approve_label
 from architect_agent.graph.state import DesignGraphState
 from architect_agent.market_research import generate_market_evaluation_report
@@ -49,8 +54,8 @@ def market_research_node(state: DesignGraphState) -> dict[str, Any]:
         f"Market evaluation for {version_hint} complete — idea grade **{grade}**.\n\n"
         f"{summary}\n\n"
         "Review the **Market evaluation** report. If this looks right, confirm, "
-        "approve, or agree so we can hand off the design package and "
-        f"resume **{str(track).upper()}** design iteration."
+        "approve, or agree so we can hand off the design package. After that "
+        "attempt, a new design round starts at Phase 0."
     )
 
     return {
@@ -120,9 +125,20 @@ def market_wait_node(state: DesignGraphState) -> dict[str, Any]:
             "messages": msgs,
         }
 
-    if action == "chat" and user_text and (
-        is_informational_query(user_text) or is_revision_request(user_text)
-    ):
+    if action == "chat" and user_text:
+        rewound = rewind_or_block_skip(
+            state,
+            user_text,
+            node="market_research",
+            current_phase="market_research",
+            current_track=track if track in {"lld", "hld"} else "hld",
+            current_step=int(state.get("design_step") or 0),
+            msgs=msgs,
+        )
+        if rewound is not None:
+            return rewound
+
+    if action == "chat" and user_text and is_informational_query(user_text):
         return answer_before_approve(
             state,
             user_text,
@@ -139,33 +155,45 @@ def market_wait_node(state: DesignGraphState) -> dict[str, Any]:
             },
         )
 
-    # Resume design iteration: HLD → step 4; LLD → step 3 (verify).
-    if track == "lld":
-        next_phase = "lld"
-        next_step = 3
-    else:
-        next_phase = "hld"
-        next_step = 4
+    if action == "chat" and user_text:
+        if is_revision_request(user_text):
+            return answer_before_approve(
+                state,
+                user_text,
+                node="market_research",
+                base={
+                    "phase": "market_research",
+                    "design_track": track if track in {"lld", "hld"} else "hld",
+                    "design_step": int(state.get("design_step") or 0),
+                    "market_evaluation_done": True,
+                    "market_evaluation_report": report,
+                    "market_evaluation_grade": grade,
+                    "resume_after_market": True,
+                    "ready_to_advance": True,
+                },
+            )
 
-    proceed_msg = (
-        "Continuing after market evaluation: design package will be handed off, "
-        f"then resume **{str(track).upper()}** at step {next_step}."
-    )
+    proceed_msg = "Closing market evaluation and returning to Phase 0."
     msgs.append({"role": "assistant", "content": proceed_msg, "node": "market_research"})
 
+    track_name = track if track in {"lld", "hld"} else "hld"
     return {
-        "phase": next_phase,  # type: ignore[typeddict-item]
-        "design_track": track if track in {"lld", "hld"} else "hld",  # type: ignore[typeddict-item]
-        "design_step": next_step,
+        "phase": "phase0",
+        "design_track": track_name,
+        "design_step": 0,
         "market_evaluation_done": True,
         "market_evaluation_report": report,
         "market_evaluation_grade": grade,
         "publish_requested": True,
         "resume_after_market": False,
-        "ready_to_advance": False,
+        "ready_to_advance": True,
         "design_ready_to_approve": False,
-        "pending_user_feedback": user_text if action == "chat" else "",
-        "pending_assistant_message": proceed_msg,
-        "stay_on_interrupt": False,
+        "interview_complete": True,
+        "spec_compiled": True,
+        "pending_user_feedback": "",
+        "pending_assistant_message": NEW_ROUND_AFTER_HANDOFF,
+        "carry_change": "",
+        "rewalk_until_step": max_track_step(track_name),
+        "stay_on_interrupt": True,
         "messages": msgs,
     }

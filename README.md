@@ -5,7 +5,7 @@ A local multi-agent design factory. The **Architect** turns a vague idea into an
 | Agent | UI / API | Default URL |
 | --- | --- | --- |
 | Architect | design interview, LLD/HLD, market eval | http://127.0.0.1:8080/ |
-| Orchestrator | entity relationships + stack, engineer handoff | http://127.0.0.1:8090/ |
+| Orchestrator | entity relationships + stack, engineer specs | http://127.0.0.1:8090/ |
 | Engineer | sub-engineer fleet, offered APIs, peer consult | http://127.0.0.1:8091/ |
 
 Set `ENGINEER_AGENT_URL=http://127.0.0.1:8091` in `orchestrator-agent/.env`. If that peer is down, plan specs still land under `orchestrator-agent/backend/data/plan_specs/`.
@@ -119,7 +119,10 @@ flowchart LR
   Class -->|"distributed"| Tiles["Prime all microservices<br/>one UI tile each"]
   Tiles --> PerSvc["Per tile: entity relationships → features → stack"]
   PerSvc --> PlanB["Plan spec per service"]
-  PlanB --> Open["Tile stays open<br/>revise relationships anytime"]
+  PlanB --> Open["Tile stays open<br/>feature/bug spec updates"]
+  Open --> Full{"New architect package?"}
+  Full -->|"yes"| Tiles
+  Full -->|"no"| Open
 
   PlanA --> Eng["Engineer fleet"]
   PlanB --> Eng
@@ -127,7 +130,7 @@ flowchart LR
   Sub --> Consult["Initiator consults peer API"]
 ```
 
-**Distributed:** every live microservice is discussed at once. The orchestrator maps related entities and who initiates; it does not lock protocols. Reopen `/sessions/{design_session_id}` on the orchestrator to change relationships and hand off again. The engineer opens a matching sub-engineer tile (`design_session_id` + `microservice_id`) that owns the offered API and consults peers it initiates toward.
+**Distributed:** every live microservice is discussed at once. The orchestrator maps related entities and who initiates; it does not lock protocols. After the first engineer ship, reopen `/sessions/{design_session_id}` to add or update features and bugs and hand off a new spec version. A full re-walk of every planning phase starts only when the architect sends a new design package. The engineer opens a matching sub-engineer tile (`design_session_id` + `microservice_id`) that owns the offered API and consults peers it initiates toward.
 
 **Stand-alone:** after the first engineer handoff, orchestrator chat/approve are locked until the architect sends another package. The session remains readable in the UI.
 

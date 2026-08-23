@@ -128,7 +128,7 @@ function InterviewResultsModal({
 function ServiceInterviewArtifacts({ svc }: { svc: MicroservicePlan }) {
   const relations = svc.entity_relationships || svc.api_design;
   const hasAny = Boolean(
-    svc.feature_spec || relations || svc.tech_stack || svc.plan_spec,
+    svc.feature_spec || relations || svc.tech_stack || svc.plan_spec || svc.bug_spec,
   );
   if (!hasAny) {
     return (
@@ -153,6 +153,14 @@ function ServiceInterviewArtifacts({ svc }: { svc: MicroservicePlan }) {
           <h3>Features</h3>
           <div className="doc">
             <MarkdownView content={svc.feature_spec} />
+          </div>
+        </article>
+      ) : null}
+      {svc.bug_spec ? (
+        <article className="artifact">
+          <h3>Bugs</h3>
+          <div className="doc">
+            <MarkdownView content={svc.bug_spec} />
           </div>
         </article>
       ) : null}
@@ -200,8 +208,17 @@ function ServiceTile({
       svc.entity_relationships ||
       svc.api_design ||
       svc.tech_stack ||
-      svc.plan_spec,
+      svc.plan_spec ||
+      svc.bug_spec,
   );
+  const shipped = svc.status === "sent" || svc.status === "approved";
+  const revisingSpec =
+    svc.status === "awaiting_spec_update" || svc.status === "discussing_spec_update";
+  const composerPlaceholder = shipped
+    ? "Add or update features and bugs… Enter to send"
+    : revisingSpec
+      ? "Revise this spec increment… Enter to send"
+      : "Discuss this service… Enter to send";
   const closeSpec = useCallback(() => setSpecOpen(false), []);
 
   async function onChat(e: FormEvent) {
@@ -296,7 +313,7 @@ function ServiceTile({
               onKeyDown={onComposerKey}
               rows={2}
               disabled={busy}
-              placeholder="Discuss this service… Enter to send"
+              placeholder={composerPlaceholder}
             />
             <button className="btn" type="submit" disabled={busy || !message.trim()}>
               Send

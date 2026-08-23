@@ -8,6 +8,29 @@ function getUserFriendlyError(_err: unknown): string {
   return "Something went wrong. Please try again.";
 }
 
+const FLOW_STEPS = [
+  {
+    n: "1",
+    title: "Ingest the design package",
+    body: "Packages arrive from the architect (same design session ID) or you can paste one here to test.",
+  },
+  {
+    n: "2",
+    title: "Plan each core microservice",
+    body: "Distributed designs open a tile per service. Confirm related entities, then features, then stack. The first approve ships spec version 1 to the Engineer.",
+  },
+  {
+    n: "3",
+    title: "Incremental spec updates",
+    body: "After that first ship, add or update features and bugs on the same tile and ship a new spec version. The agreed entity map and stack stay.",
+  },
+  {
+    n: "4",
+    title: "Full update after a new package",
+    body: "Walking every planning phase again (relationships, features, stack) starts only when the architect ships a new design package.",
+  },
+];
+
 export function HomePage() {
   const navigate = useNavigate();
   const [sessions, setSessions] = useState<WorkflowSummary[]>([]);
@@ -51,11 +74,46 @@ export function HomePage() {
         </div>
       </header>
 
+      <section className="panel flow-guide" aria-labelledby="flow-heading">
+        <div className="panel-head">
+          <h2 id="flow-heading">How a planning round works</h2>
+          <span className="panel-kicker">In order</span>
+        </div>
+        <ol className="flow-steps">
+          {FLOW_STEPS.map((step) => (
+            <li key={step.n}>
+              <span className="flow-index">{step.n}</span>
+              <div>
+                <strong>{step.title}</strong>
+                <p>{step.body}</p>
+              </div>
+            </li>
+          ))}
+        </ol>
+        <ul className="flow-rules">
+          <li>
+            After the first engineer ship, keep the tile open for feature and bug
+            spec updates. Ship those as new spec versions.
+          </li>
+          <li>
+            A full update of a core microservice — every working phase — waits for
+            a new architect design package.
+          </li>
+          <li>
+            Stand-alone apps lock after the first handoff until the architect sends
+            an updated package.
+          </li>
+          <li>
+            Confirm, approve, or agree in chat, or use the UI action. Either works.
+          </li>
+        </ul>
+      </section>
+
       {error ? (
         <div className="error banner" role="alert">
           <p>{error}</p>
-          <button 
-            className="btn ghost" 
+          <button
+            className="btn ghost"
             onClick={() => setError(null)}
             type="button"
           >

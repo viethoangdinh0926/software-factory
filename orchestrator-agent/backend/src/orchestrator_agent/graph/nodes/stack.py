@@ -14,6 +14,7 @@ from orchestrator_agent.graph.nodes.common import (
     service_focus_system,
     service_focus_user_block,
     skill_digest,
+    spec_delta_is_ready,
 )
 from orchestrator_agent.json_util import recover_markdown_field_from_prose
 from orchestrator_agent.query_intent import FEEDBACK_RESOLUTION_RULES, is_revision_request
@@ -221,26 +222,68 @@ def emit_plan_node(state: dict[str, Any]) -> dict[str, Any]:
             return {"route": "wait", "wait_kind": "distributed", "phase": "distributed"}
         name = (svc.get("names") or ["Service"])[-1]
         mid = str(svc.get("microservice_id") or "")
+        prior_status = str(svc.get("status") or "")
+        prior_version = int(svc.get("spec_version") or 0)
+        incremental = prior_status in {"awaiting_spec_update", "discussing_spec_update"}
+        if incremental and not spec_delta_is_ready(svc):
+            note = close_user_message(
+                "There is no spec update to deliver. Describe feature or bug changes "
+                "first, or wait for a new architect design package for a full-phase update.",
+                svc=svc,
+            )
+            updated = dict(svc)
+            svc_msgs = list(updated.get("messages") or [])
+            svc_msgs.append({"role": "assistant", "content": note, "node": "emit"})
+            updated["messages"] = svc_msgs
+            return {
+                "services": replace_service(list(state.get("services") or []), updated),
+                "phase": "distributed",
+                "route": "wait",
+                "wait_kind": "distributed",
+                "can_approve": False,
+                "messages": [{"role": "assistant", "content": note, "node": "emit"}],
+            }
+        spec_version = prior_version + 1
+        update_kind = "incremental" if incremental else "full"
+        bugs = str(svc.get("bug_spec") or "").strip() or "(none)"
+        changelog = str(svc.get("spec_changelog") or "").strip()
+        if not changelog:
+            changelog = (
+                "- Incremental feature and bug updates."
+                if incremental
+                else "- First full plan spec for this microservice."
+                if prior_version == 0
+                else "- Full update after a new architect design package."
+            )
         spec = (
             f"# Plan spec\n\n"
             f"- action: `plan`\n"
             f"- design_session_id: `{session_id}`\n"
             f"- design_version: `{version}`\n"
+            f"- spec_version: `{spec_version}`\n"
+            f"- update_kind: `{update_kind}`\n"
             f"- microservice_id: `{mid}`\n"
             f"- microservice_name: `{name}`\n\n"
             f"## Entity relationships\n\n"
             f"{svc.get('entity_relationships') or svc.get('api_design') or ''}\n\n"
             f"## Features / functionality\n\n{svc.get('feature_spec') or ''}\n\n"
+            f"## Bugs\n\n{bugs}\n\n"
+            f"## Spec updates\n\n{changelog}\n\n"
             f"## Tech stack\n\n{svc.get('tech_stack') or ''}\n\n"
             f"## System design (architect package)\n\n{package}\n"
         )
         updated = dict(svc)
         updated["plan_spec"] = spec
         updated["status"] = "sent"
+        updated["spec_version"] = spec_version
+        updated["update_kind"] = update_kind
+        updated["shipped_feature_spec"] = str(svc.get("feature_spec") or "").strip()
+        updated["shipped_bug_spec"] = str(svc.get("bug_spec") or "").strip()
+        updated["spec_changelog"] = changelog
         svc_msgs = list(updated.get("messages") or [])
         sent_msg = close_user_message(
-            f"Plan spec for **{name}** queued for the engineer "
-            f"(design `{session_id}`, microservice `{mid}`).",
+            f"Plan spec v{spec_version} ({update_kind}) for **{name}** queued for the "
+            f"engineer (design `{session_id}`, microservice `{mid}`).",
             svc=updated,
         )
         svc_msgs.append({"role": "assistant", "content": sent_msg, "node": "emit"})

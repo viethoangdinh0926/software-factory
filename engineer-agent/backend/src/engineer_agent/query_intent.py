@@ -534,6 +534,13 @@ def format_next_prompt(
                 "- Chat if you need a follow-up, or wait for the next spec version.",
             ]
         )
+    elif mode == "blocked":
+        lines.extend(
+            [
+                "- Chat with instructions for how to resolve the issue.",
+                "- When you are ready, confirm, approve, or agree to continue this item.",
+            ]
+        )
     elif can_approve:
         lines.extend(
             [

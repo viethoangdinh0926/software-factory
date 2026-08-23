@@ -7,6 +7,7 @@ import os
 import re
 import stat
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -107,6 +108,7 @@ def write_item_work(
     *,
     item: dict[str, Any],
     microservice_name: str,
+    instructions: str = "",
 ) -> Path:
     """Write stub code + test for one plan item under the private folder."""
     item_id = _SAFE_ID_RE.sub("-", str(item.get("id") or "item")) or "item"
@@ -125,12 +127,14 @@ def write_item_work(
             "## Communication contracts\n\n"
             "This item depends on other services, but contracts were not settled yet.\n"
         )
+    instr = (instructions or "").strip()
+    instr_md = f"## Resume instructions\n\n{instr}\n\n" if instr else ""
     (dest / "README.md").write_text(
         f"# {title}\n\n"
         f"- Kind: `{kind}`\n"
         f"- Service: **{microservice_name}**\n"
         f"- Priority: {item.get('priority')}\n\n"
-        f"{contract_md}",
+        f"{instr_md}{contract_md}",
         encoding="utf-8",
     )
     (dest / "impl.py").write_text(
@@ -143,13 +147,58 @@ def write_item_work(
     )
     (dest / "test_impl.py").write_text(
         f'"""Tests for {title}."""\n\n'
+        f"import unittest\n\n"
         f"from impl import apply\n\n\n"
-        f"def test_apply() -> None:\n"
-        f"    result = apply()\n"
-        f"    assert result['item_id'] == {item_id!r}\n",
+        f"class TestImpl(unittest.TestCase):\n"
+        f"    def test_apply(self) -> None:\n"
+        f"        result = apply()\n"
+        f"        self.assertEqual(result['item_id'], {item_id!r})\n"
+        f"        self.assertEqual(result['service'], {microservice_name!r})\n",
         encoding="utf-8",
     )
     return dest
+
+
+def run_workspace_tests(private_dir: Path) -> tuple[bool, str]:
+    """Run every item test suite in the private folder. All must pass before the next item."""
+    root = Path(private_dir)
+    suites = sorted({path.parent.resolve() for path in root.glob("items/*/test_*.py")})
+    if not suites:
+        return False, "No tests were added for the current item."
+    failures: list[str] = []
+    for dest in suites:
+        try:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "unittest",
+                    "discover",
+                    "-s",
+                    str(dest),
+                    "-p",
+                    "test_*.py",
+                    "-q",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=90,
+                cwd=str(dest),
+                env={**os.environ, "PYTHONPATH": str(dest)},
+            )
+        except subprocess.TimeoutExpired:
+            failures.append(f"{dest.name}: tests timed out.")
+            continue
+        except Exception as exc:  # noqa: BLE001
+            failures.append(f"{dest.name}: could not run tests ({exc}).")
+            continue
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "tests failed").strip()
+            failures.append(f"{dest.name}: {detail[:800]}")
+    if failures:
+        return False, "Tests failed; I will not start the next plan item.\n" + "\n".join(failures)
+    return True, f"All tests passed ({len(suites)} item suite(s))."
 
 
 def ship_workspace(

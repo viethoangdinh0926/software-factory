@@ -20,8 +20,9 @@ from engineer_agent.config import get_settings
 from engineer_agent.llm import get_chat_model
 from engineer_agent.plan_parse import parse_handoff, parse_related_entities, sub_agent_id
 from engineer_agent.query_intent import NEXT_PROMPT_HEADER
+import engineer_agent.sessions as sessions_mod
 from engineer_agent.sessions import SessionStore, reset_store
-from engineer_agent.workspace import private_dir_for, private_dir_name
+from engineer_agent.workspace import private_dir_for, private_dir_name, run_workspace_tests, write_item_work
 
 get_settings.cache_clear()
 get_chat_model.cache_clear()
@@ -32,17 +33,28 @@ IDENTITY = "11111111-1111-1111-1111-111111111111"
 CATALOG = "22222222-2222-2222-2222-222222222222"
 
 
-def _plan(*, mid: str, name: str, relations: str, version: int = 1, features: str | None = None) -> str:
+def _plan(
+    *,
+    mid: str,
+    name: str,
+    relations: str,
+    version: int = 1,
+    features: str | None = None,
+    bugs: str | None = None,
+    session: str = SESSION,
+) -> str:
     feat = features or "- v1: own the primary resource."
+    bug_block = f"## Bugs\n\n{bugs}\n\n" if bugs else ""
     return (
         f"# Plan spec\n\n"
         f"- action: `plan`\n"
-        f"- design_session_id: `{SESSION}`\n"
+        f"- design_session_id: `{session}`\n"
         f"- design_version: `{version}`\n"
         f"- microservice_id: `{mid}`\n"
         f"- microservice_name: `{name}`\n\n"
         f"## Entity relationships\n\n{relations}\n\n"
         f"## Features / functionality\n\n{feat}\n\n"
+        f"{bug_block}"
         f"## Tech stack\n\n- Language: Python 3.12\n"
     )
 
@@ -82,6 +94,16 @@ assert sub_agent_id(SESSION, IDENTITY) == f"{SESSION}:{IDENTITY}"
 parsed = parse_handoff(_plan(mid=IDENTITY, name="IdentityService", relations=identity_relations))
 assert parsed.design_session_id == SESSION
 assert parsed.microservice_id == IDENTITY
+assert parsed.bug_spec == ""
+parsed_bugs = parse_handoff(
+    _plan(
+        mid=IDENTITY,
+        name="IdentityService",
+        relations=identity_relations,
+        bugs="- Login lockout after repeated failed authentications.",
+    )
+)
+assert "lockout" in parsed_bugs.bug_spec.lower()
 
 print("ingest identity…", flush=True)
 store = SessionStore()
@@ -147,6 +169,10 @@ assert ident is not None
 assert ident["status"] == "executing"
 done = [it for it in (ident.get("execution_plan") or {}).get("items") or [] if it.get("status") == "done"]
 assert len(done) == 1, ident.get("execution_plan")
+assert any("tests passed" in str(it.get("notes") or "").lower() for it in done), done
+assert any((private / "items").glob("*/test_impl.py"))
+ok_tests, test_detail = run_workspace_tests(private)
+assert ok_tests, test_detail
 
 print("plan locked during execute…", flush=True)
 try:
@@ -178,12 +204,14 @@ s = store.ingest(
         relations=identity_relations,
         version=2,
         features="- v2: own the primary resource.\n- v2: session revocation.",
+        bugs="- Login lockout must persist across instances.",
     )
 )
 ident = s.find(IDENTITY)
 assert ident is not None
 assert ident["status"] == "awaiting_plan"
 assert str(ident.get("previous_plan_spec") or "").strip()
+assert "lockout" in str(ident.get("bug_spec") or "").lower()
 assert (ident.get("previous_execution_plan") or {}).get("items")
 assert ident.get("interrupted_from") == "executing"
 assert "new spec" in ((ident.get("execution_plan") or {}).get("transition") or "").lower() or (
@@ -250,6 +278,243 @@ assert data["repo_url"].startswith("git@")
 assert "BEGIN OPENSSH PRIVATE KEY" in data["ssh_private_key"]
 ident = s.find(IDENTITY)
 assert ident is not None
+
+print("item tests must pass before the next item…", flush=True)
+fail_root = tmp / "fail-ws"
+fail_root.mkdir()
+write_item_work(
+    fail_root,
+    item={"id": "item-x", "title": "X", "kind": "feature", "priority": 1},
+    microservice_name="Svc",
+)
+ok_tests, test_detail = run_workspace_tests(fail_root)
+assert ok_tests, test_detail
+failing = next(fail_root.glob("items/*/test_impl.py"))
+failing.write_text(
+    "import unittest\n\n"
+    "class T(unittest.TestCase):\n"
+    "    def test_x(self) -> None:\n"
+    "        self.fail('intentional')\n",
+    encoding="utf-8",
+)
+ok_tests, test_detail = run_workspace_tests(fail_root)
+assert not ok_tests
+assert "failed" in test_detail.lower() or "intentional" in test_detail.lower()
+
+print("peer contract blocker waits for approve to continue…", flush=True)
+PEER_SID = "bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee"
+s = store.ingest(
+    _plan(
+        mid=IDENTITY,
+        name="IdentityService",
+        relations=identity_relations,
+        session=PEER_SID,
+    )
+)
+ident = s.find(IDENTITY)
+assert ident is not None
+assert ident["status"] == "awaiting_plan"
+s = store.approve(PEER_SID, service_id=IDENTITY)
+ident = s.find(IDENTITY)
+assert ident is not None
+assert ident["status"] == "executing"
+for _ in range(6):
+    ident = s.find(IDENTITY)
+    if ident and ident.get("status") == "blocked":
+        break
+    s = store.tick_execution(PEER_SID, service_id=IDENTITY)
+ident = s.find(IDENTITY)
+assert ident is not None
+assert ident["status"] == "blocked", ident.get("status")
+issue = ident.get("block_issue") or {}
+assert issue.get("kind") == "peer_contract", issue
+pub = next(row for row in s.to_public()["sub_agents"] if row["microservice_id"] == IDENTITY)
+assert pub["can_approve"] is True
+assert pub["approve_label"] == "Approve to continue"
+assert pub["block_issue"]["kind"] == "peer_contract"
+assert "click" not in ((ident.get("messages") or [{}])[-1].get("content") or "").lower()
+try:
+    store.execute(PEER_SID, service_id=IDENTITY)
+    raise AssertionError("execute must not resume a blocker")
+except PermissionError:
+    pass
+s = store.chat(PEER_SID, "execute", service_id=IDENTITY)
+ident = s.find(IDENTITY)
+assert ident is not None
+assert ident["status"] == "blocked"
+s = store.ingest(
+    _plan(
+        mid=CATALOG,
+        name="VideoCatalogService",
+        relations=catalog_relations,
+        session=PEER_SID,
+    )
+)
+ident = s.find(IDENTITY)
+assert ident is not None
+assert ident["status"] == "blocked"
+s = store.approve(PEER_SID, service_id=IDENTITY)
+ident = s.find(IDENTITY)
+assert ident is not None
+assert ident["status"] == "executing"
+assert not ident.get("block_issue")
+s = store.tick_execution(PEER_SID, service_id=IDENTITY)
+ident = s.find(IDENTITY)
+assert ident is not None
+assert ident["status"] == "shipped", ident.get("status")
+peer_item = next(
+    it
+    for it in (ident.get("execution_plan") or {}).get("items") or []
+    if it.get("peer_services")
+)
+assert peer_item.get("status") == "done"
+assert "VideoCatalogService" in (peer_item.get("contracts") or {}), peer_item
+
+print("blocked chat instructions then approve…", flush=True)
+INSTR_SID = "eeeeeeee-eeee-ffff-0000-111111111111"
+s = store.ingest(
+    _plan(
+        mid=IDENTITY,
+        name="IdentityService",
+        relations=identity_relations,
+        session=INSTR_SID,
+    )
+)
+s = store.approve(INSTR_SID, service_id=IDENTITY)
+for _ in range(6):
+    ident = s.find(IDENTITY)
+    if ident and ident.get("status") == "blocked":
+        break
+    s = store.tick_execution(INSTR_SID, service_id=IDENTITY)
+ident = s.find(IDENTITY)
+assert ident is not None
+assert ident["status"] == "blocked", ident.get("status")
+watcher = store.watch(INSTR_SID)
+s = store.chat(
+    INSTR_SID,
+    "Use this contract with VideoCatalogService: GET /videos/{id} returns owner_id.",
+    service_id=IDENTITY,
+)
+ident = s.find(IDENTITY)
+assert ident is not None
+assert ident["status"] == "blocked"
+issue = ident.get("block_issue") or {}
+assert "GET /videos" in str(issue.get("instructions") or ""), issue
+live = watcher.get(timeout=2)
+assert live is not None
+assert live["design_session_id"] == INSTR_SID
+blocked_pub = next(row for row in live["sub_agents"] if row["microservice_id"] == IDENTITY)
+assert "GET /videos" in str((blocked_pub.get("block_issue") or {}).get("instructions") or "")
+store.unwatch(INSTR_SID, watcher)
+s = store.chat(INSTR_SID, "Why are you blocked?", service_id=IDENTITY)
+ident = s.find(IDENTITY)
+assert ident is not None
+assert ident["status"] == "blocked"
+assert "GET /videos" in str((ident.get("block_issue") or {}).get("instructions") or "")
+s = store.approve(INSTR_SID, service_id=IDENTITY)
+ident = s.find(IDENTITY)
+assert ident is not None
+assert ident["status"] == "executing"
+s = store.tick_execution(INSTR_SID, service_id=IDENTITY)
+ident = s.find(IDENTITY)
+assert ident is not None
+assert ident["status"] == "shipped", ident.get("status")
+peer_item = next(
+    it
+    for it in (ident.get("execution_plan") or {}).get("items") or []
+    if it.get("peer_services")
+)
+assert peer_item.get("status") == "done"
+assert "GET /videos" in str((peer_item.get("contracts") or {}).get("VideoCatalogService") or ""), peer_item
+
+print("git pull blocker waits for approve to continue…", flush=True)
+GIT_SID = "cccccccc-cccc-dddd-eeee-ffffffffffff"
+GIT_MID = "33333333-3333-3333-3333-333333333333"
+orig_prep = sessions_mod.prepare_workspace
+
+def _failing_prep(**kwargs):
+    private, _err = orig_prep(**kwargs)
+    return private, "Authentication failed against the git remote."
+
+sessions_mod.prepare_workspace = _failing_prep
+try:
+    s = store.ingest(
+        _plan(
+            mid=GIT_MID,
+            name="BillingService",
+            relations=(
+                "### User (kind: user)\n"
+                "- We initiate: no. Callers initiate toward this service.\n"
+                "- Relationship: invoices.\n"
+            ),
+            session=GIT_SID,
+        )
+    )
+    s = store.approve(GIT_SID, service_id=GIT_MID)
+    billing = s.find(GIT_MID)
+    assert billing is not None
+    assert billing["status"] == "blocked", billing.get("status")
+    issue = billing.get("block_issue") or {}
+    assert issue.get("kind") == "git_pull", issue
+    assert "git" in str(issue.get("detail") or "").lower()
+    pub = next(row for row in s.to_public()["sub_agents"] if row["microservice_id"] == GIT_MID)
+    assert pub["approve_label"] == "Approve to continue"
+    s = store.approve(GIT_SID, service_id=GIT_MID)
+    billing = s.find(GIT_MID)
+    assert billing is not None
+    assert billing["status"] == "blocked"
+finally:
+    sessions_mod.prepare_workspace = orig_prep
+s = store.approve(GIT_SID, service_id=GIT_MID)
+billing = s.find(GIT_MID)
+assert billing is not None
+assert billing["status"] == "executing", billing.get("status")
+assert not billing.get("block_issue")
+
+print("failed item tests block until approve to continue…", flush=True)
+TEST_SID = "dddddddd-dddd-eeee-ffff-000000000000"
+TEST_MID = "44444444-4444-4444-4444-444444444444"
+orig_run = sessions_mod.run_workspace_tests
+
+def _failing_run(_private):
+    return False, "Tests failed; I will not start the next plan item.\nbogus suite"
+
+sessions_mod.run_workspace_tests = _failing_run
+try:
+    s = store.ingest(
+        _plan(
+            mid=TEST_MID,
+            name="NotifyService",
+            relations=(
+                "### User (kind: user)\n"
+                "- We initiate: no.\n"
+                "- Relationship: notifications.\n"
+            ),
+            session=TEST_SID,
+        )
+    )
+    s = store.approve(TEST_SID, service_id=TEST_MID)
+    s = store.tick_execution(TEST_SID, service_id=TEST_MID)
+    notify = s.find(TEST_MID)
+    assert notify is not None
+    assert notify["status"] == "blocked", notify.get("status")
+    issue = notify.get("block_issue") or {}
+    assert issue.get("kind") == "tests_failed", issue
+    blocked_items = [
+        it
+        for it in (notify.get("execution_plan") or {}).get("items") or []
+        if it.get("status") == "blocked"
+    ]
+    assert blocked_items, notify.get("execution_plan")
+finally:
+    sessions_mod.run_workspace_tests = orig_run
+s = store.approve(TEST_SID, service_id=TEST_MID)
+s = store.tick_execution(TEST_SID, service_id=TEST_MID)
+notify = s.find(TEST_MID)
+assert notify is not None
+assert notify["status"] == "executing"
+done = [it for it in (notify.get("execution_plan") or {}).get("items") or [] if it.get("status") == "done"]
+assert done, notify.get("execution_plan")
 
 print("OK", flush=True)
 sys.exit(0)

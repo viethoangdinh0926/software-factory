@@ -14,6 +14,7 @@ from orchestrator_agent.graph.nodes.classify import classify_node
 from orchestrator_agent.graph.nodes.features import feature_discuss_node
 from orchestrator_agent.graph.nodes.ingest import handle_update_node, ingest_node
 from orchestrator_agent.graph.nodes.services import extract_services_node, prime_all_services_node
+from orchestrator_agent.graph.nodes.spec_update import spec_update_node
 from orchestrator_agent.graph.nodes.stack import emit_plan_node, stack_research_node
 from orchestrator_agent.graph.nodes.wait import wait_node
 from orchestrator_agent.graph.state import OrchestratorGraphState
@@ -56,6 +57,7 @@ _WAIT_MAP: dict[str, Any] = {
     "api_type_research": "relations",
     "api_design_propose": "relations",
     "stack_research": "stack_research",
+    "spec_update": "spec_update",
     "emit_plan": "emit_plan",
     "wait": "wait",
     "distributed": "wait",
@@ -80,6 +82,7 @@ def build_graph() -> CompiledStateGraph:
     graph.add_node("api_type_research", relations_node)
     graph.add_node("api_design_propose", relations_node)
     graph.add_node("stack_research", stack_research_node)
+    graph.add_node("spec_update", spec_update_node)
     graph.add_node("emit_plan", emit_plan_node)
     graph.add_node("wait", wait_node)
 
@@ -109,6 +112,7 @@ def build_graph() -> CompiledStateGraph:
     graph.add_edge("api_type_research", "wait")
     graph.add_edge("api_design_propose", "wait")
     graph.add_edge("stack_research", "wait")
+    graph.add_edge("spec_update", "wait")
     graph.add_conditional_edges(
         "emit_plan",
         _route,

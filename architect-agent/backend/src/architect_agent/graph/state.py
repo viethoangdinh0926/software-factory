@@ -83,6 +83,9 @@ class DesignGraphState(TypedDict):
     communication_schemes: Annotated[str, _replace_str]
     fmea_notes: Annotated[str, _replace_str]
     spec_enhanced: NotRequired[bool]
+    rewind_notice: NotRequired[str]
+    carry_change: Annotated[str, _replace_str]
+    rewalk_until_step: Annotated[int, _replace_int]
     # After market continue: resume_track + resume_step for handoff loop.
     resume_after_market: Annotated[bool, _replace_bool]
     # Chat answered a question: loop back to the same wait node without regenerating.

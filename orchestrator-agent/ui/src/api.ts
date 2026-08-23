@@ -30,6 +30,10 @@ export type MicroservicePlan = {
   api_design: string;
   tech_stack: string;
   plan_spec: string;
+  bug_spec?: string;
+  spec_version?: number;
+  spec_changelog?: string;
+  update_kind?: string;
   status: string;
   messages: ChatMessage[];
   search_notes: string;

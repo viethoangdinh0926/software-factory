@@ -12,6 +12,7 @@ from architect_agent.context_budget import (
     format_history_tail,
     maybe_compact_business_spec,
 )
+from architect_agent.design_progress import rewind_or_block_skip, with_rewind_notice
 from architect_agent.graph.nodes.common import answer_before_approve, approve_label, invoke_json
 from architect_agent.graph.state import DesignGraphState
 from architect_agent.query_intent import (
@@ -107,7 +108,25 @@ def phase0_classify_node(state: DesignGraphState) -> dict[str, Any]:
             new_track = str(spec_update_result.get("design_track") or "unset").lower()
             if new_track not in {"unset", "lld", "hld"}:
                 new_track = "unset"
-            ready = bool(spec_update_result.get("ready_to_advance")) and new_track in {"lld", "hld"}
+            prior_track = str(state.get("design_track") or "unset").lower()
+            pending_l = pending.lower()
+            asks_reclass = any(
+                token in pending_l
+                for token in (
+                    "should be lld",
+                    "should be hld",
+                    "other track",
+                    "single process",
+                    "not distributed",
+                    "this is lld",
+                    "this is hld",
+                )
+            )
+            if prior_track in {"lld", "hld"} and not asks_reclass:
+                new_track = prior_track
+            elif new_track == "unset" and prior_track in {"lld", "hld"}:
+                new_track = prior_track
+            ready = bool(spec_update_result.get("ready_to_advance", True)) and new_track in {"lld", "hld"}
             spec = spec_update_result.get("updated_business_spec") or business_spec
             assistant = without_user_echo(
                 str(spec_update_result.get("assistant_message") or ""), pending
@@ -116,6 +135,20 @@ def phase0_classify_node(state: DesignGraphState) -> dict[str, Any]:
                 assistant = with_resolution_close(
                     assistant or "Updated the specification from your comments.",
                     changed=spec != business_spec,
+                )
+            assistant = with_rewind_notice(assistant, str(state.get("rewind_notice") or ""))
+            later_work = bool(
+                int(state.get("rewalk_until_step") or 0)
+                or state.get("scale_estimates")
+                or state.get("api_contracts")
+                or state.get("design_diagram")
+                or state.get("communication_schemes")
+                or state.get("fmea_notes")
+            )
+            if later_work:
+                assistant = (
+                    f"{assistant}\n\nLater-step design artifacts stay in place. "
+                    "As we walk the track again I will patch them only where this spec change requires it."
                 )
 
             return {
@@ -132,6 +165,8 @@ def phase0_classify_node(state: DesignGraphState) -> dict[str, Any]:
                 "spec_compiled": True,
                 "pending_user_feedback": "",
                 "pending_assistant_message": assistant,
+                "rewind_notice": "",
+                "carry_change": pending,
                 "publish_requested": False,
                 "stay_on_interrupt": False,
                 "messages": [{"role": "assistant", "content": assistant, "node": "phase0"}],
@@ -188,6 +223,7 @@ def phase0_classify_node(state: DesignGraphState) -> dict[str, Any]:
                     str(assistant),
                     changed=spec != business_spec or new_track != str(state.get("design_track") or "unset"),
                 )
+            assistant = with_rewind_notice(str(assistant), str(state.get("rewind_notice") or ""))
 
             return {
                 "phase": "phase0",
@@ -203,6 +239,7 @@ def phase0_classify_node(state: DesignGraphState) -> dict[str, Any]:
                 "spec_compiled": True,
                 "pending_user_feedback": "",
                 "pending_assistant_message": assistant,
+                "rewind_notice": "",
                 "publish_requested": False,
                 "stay_on_interrupt": False,
                 "messages": [{"role": "assistant", "content": assistant, "node": "phase0"}],
@@ -453,6 +490,7 @@ def phase0_classify_node(state: DesignGraphState) -> dict[str, Any]:
                 changed=new_track != str(state.get("design_track") or "unset")
                 or spec != business_spec,
             )
+        assistant = with_rewind_notice(str(assistant), str(state.get("rewind_notice") or ""))
 
         return {
             "phase": "phase0",
@@ -464,8 +502,11 @@ def phase0_classify_node(state: DesignGraphState) -> dict[str, Any]:
             "ready_for_design": ready,
             "design_ready_to_approve": False,
             "spec_enhanced": False,
+            "interview_complete": True,
+            "spec_compiled": True,
             "pending_user_feedback": "",
             "pending_assistant_message": assistant,
+            "rewind_notice": "",
             "publish_requested": False,
             "stay_on_interrupt": False,
             "messages": [{"role": "assistant", "content": assistant, "node": "phase0"}],
@@ -636,6 +677,19 @@ def phase0_wait_node(state: DesignGraphState) -> dict[str, Any]:
             "stay_on_interrupt": False,
             "messages": msgs,
         }
+
+    if user_text:
+        rewound = rewind_or_block_skip(
+            state,
+            user_text,
+            node="phase0",
+            current_phase="phase0",
+            current_track=track if track in {"unset", "lld", "hld"} else "unset",
+            current_step=0,
+            msgs=msgs,
+        )
+        if rewound is not None:
+            return rewound
 
     if user_text and is_informational_query(user_text):
         return answer_before_approve(

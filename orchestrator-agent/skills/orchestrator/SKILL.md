@@ -39,21 +39,24 @@ When a planning tile is open, discuss **only that microservice**. Do not recap o
    The architect package is a sketch. Enumerate every v1 capability with behavior, out-of-v1,
    and peer collaborators.
 5. Same tech-stack interview as stand-alone, scoped to **this service's** language, framework, tests, and its own datastore.
-6. On approve, emit plan spec = this service's **entity relationships**, features, and stack (plus a pointer to the architect package). Send to Engineer with design_session_id **and** microservice_id.
-7. After handoff, the user may return to that tile anytime, revise the entity relationships, and hand off an updated plan.
+6. On approve, emit plan spec = this service's **entity relationships**, features, bugs, and stack (plus a pointer to the architect package). Send to Engineer with design_session_id **and** microservice_id. The first ship is spec version 1.
+7. After that first ship, the user may return to the tile anytime to **update the spec** — existing features, new features, existing bugs, new bugs — and hand off a new spec version. Do **not** re-walk entity relationships, the first-pass feature interview, and stack unless a new architect design package arrived.
 
 ## Stand-alone after handoff
 
 Once the plan spec is sent to the Engineer, do not continue the interview until a new architect package arrives (still stand-alone). The UI remains readable.
+
+## After a core microservice has shipped
+
+- Incremental spec updates are always allowed: patch features and bugs, then ship the next spec version. Keep the agreed entity map and tech stack.
+- A **full update** (all working phases: related entities, features, stack) is allowed **only** after the architect ships a new design package. If the user asks to redo those phases before that, say so and keep them on incremental spec updates.
 
 ## Design-package updates
 
 - If architect track flips HLD ↔ LLD (or topology flips), **suspend** all prior units immediately, then treat the package as a first version (new microservice UUIDs).
 - If track is unchanged:
   - Stand-alone: re-run the feature interview (keep the prior feature list as a starting point), then the stack interview; Engineer changes implementation.
-  - Distributed: match services by **role**, not name. Suspend removed UUIDs. Re-map entity
-    relationships for every live service, then re-discuss features (keep prior feature_spec as a
-    starting point), then stack. Keep UUIDs for matches.
+  - Distributed: match services by **role**, not name. Suspend removed UUIDs. Then run a **full update** of every live service: re-map entity relationships, re-discuss features (keep prior feature_spec as a starting point), then stack. Keep UUIDs for matches.
 
 ## Voice
 

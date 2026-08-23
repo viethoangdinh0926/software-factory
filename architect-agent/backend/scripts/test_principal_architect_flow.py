@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Smoke: Phase 0 → HLD steps → design approve → market → handoff → resume step 4.
+"""Smoke: Phase 0 → HLD steps → design approve → market → handoff → new round at Phase 0.
 Also covers a short LLD path."""
 from __future__ import annotations
 
@@ -31,6 +31,7 @@ from architect_agent.query_intent import (
 )
 from architect_agent.json_util import parse_llm_json_object
 from architect_agent.graph.nodes.common import assistant_message_is_thin, ensure_step_briefing
+from architect_agent.design_progress import classify_rewind_stage, design_position, package_fingerprint
 from architect_agent.sessions import SessionStore, _legacy_map
 
 get_settings.cache_clear()
@@ -89,6 +90,19 @@ assert "Session marked done." == with_next_prompt("Session marked done.")
 assert assistant_message_is_thin("LLD step 1 update.")
 assert assistant_message_is_thin("HLD step 2 update.")
 assert assistant_message_is_thin("Design updated.")
+assert design_position("phase0", "hld", 0) == 0
+assert design_position("hld", "hld", 2) < design_position("hld", "hld", 4)
+assert classify_rewind_stage(
+    "We also need GDPR: EU-only users in v1.",
+    "phase=hld track=hld step=2",
+    "hld",
+) == "phase0"
+assert classify_rewind_stage("Skip to FMEA", "phase=hld track=hld step=1", "hld") == "ahead"
+assert package_fingerprint(
+    "# System Design Package\nDesign version: `1`\nGenerated: a\n\n## Spec\nhello\n"
+) == package_fingerprint(
+    "# System Design Package\nDesign version: `2`\nGenerated: b\n\n## Spec\nhello\n"
+)
 assert not assistant_message_is_thin(
     "HLD step 1 locked a 50k DAU / 120k read-QPS plan because catalog reads dominate "
     "writes; a single-region monolith was rejected for tenant isolation. "
@@ -163,10 +177,42 @@ for step in range(1, 7):
         last_hld.split("**What you can do next**")[0]
     ), last_hld[:400]
     if step == 1:
+        s = store.chat(s.session_id, "Skip to FMEA")
+        print("  skip ahead blocked", s.phase, s.design_step, flush=True)
+        assert s.phase == "hld" and s.design_step == 1
+        skip_last = s.messages[-1]["content"]
+        assert "jump" in skip_last.lower() or "one confirmed step" in skip_last.lower(), skip_last[:400]
         s = store.chat(s.session_id, "next step")
         print(f"  after next-step chat@{step}", s.phase, s.design_step, flush=True)
         assert s.phase == "hld" and s.design_step == 2
         assert NEXT_PROMPT_HEADER not in s.messages[-1]["content"]
+        continue
+    if step == 2:
+        scale_before = s.scale_estimates
+        assert scale_before.strip(), "HLD step 1 capacity plan should already exist"
+        s = store.chat(
+            s.session_id,
+            "We also need GDPR: EU-only users in v1 as a spec requirement.",
+        )
+        print("  rewind to phase0", s.phase, s.design_step, s.design_track, s.ready_to_advance, flush=True)
+        assert s.phase == "phase0", s.phase
+        assert s.design_track == "hld", s.design_track
+        assert s.to_public()["can_approve"]
+        assert s.scale_estimates.strip() == scale_before.strip()
+        rewind_last = s.messages[-1]["content"]
+        assert "Phase 0" in rewind_last, rewind_last[:400]
+        assert "stay" in rewind_last.lower() or "later" in rewind_last.lower() or "patch" in rewind_last.lower(), rewind_last[:400]
+        s = store.approve(s.session_id)
+        print("  after rewind approve", s.phase, s.design_step, flush=True)
+        assert s.phase == "hld" and s.design_step == 1, (s.phase, s.design_step)
+        assert s.scale_estimates.strip() == scale_before.strip()
+        # Re-walk to the step the outer loop expects next.
+        s = store.approve(s.session_id)
+        print("  rewalk to step 2", s.phase, s.design_step, flush=True)
+        assert s.phase == "hld" and s.design_step == 2
+        assert s.scale_estimates.strip() == scale_before.strip()
+        s = store.approve(s.session_id)
+        print(f"  after approve@{step}", s.phase, s.design_step, flush=True)
         continue
     if step == 3:
         assert s.to_public()["design_step_title"] == "Core microservices"
@@ -206,8 +252,10 @@ for step in range(1, 7):
 version_before = s.design_version
 s = store.approve(s.session_id)
 print("  after market continue", s.phase, s.design_step, s.design_version, flush=True)
-assert s.phase == "hld" and s.design_step == 4, (s.phase, s.design_step)
+assert s.phase == "phase0" and s.design_step == 0, (s.phase, s.design_step)
 assert s.design_version == version_before + 1
+round_last = s.messages[-1]["content"]
+assert "Phase 0" in round_last, round_last[:400]
 assert s.design_diagram.strip()
 assert s.communication_schemes.strip()
 assert s.tradeoff_ledger.strip()
@@ -215,6 +263,26 @@ pkg = store.final_design_markdown(s.session_id)
 assert "## Core Microservices" in pkg
 assert "## Communication Schemes" in pkg
 assert "## API Contracts" not in pkg
+
+print("second round with no changes skips handoff…", flush=True)
+v1 = s.design_version
+scale_kept = s.scale_estimates
+apis_kept = s.api_contracts
+s = store.approve(s.session_id)
+print("  second-round hld1", s.phase, s.design_step, flush=True)
+assert s.phase == "hld" and s.design_step == 1
+assert s.scale_estimates.strip() == scale_kept.strip()
+assert s.api_contracts.strip() == apis_kept.strip()
+for _ in range(6):
+    s = store.approve(s.session_id)
+    print(f"  second-round", s.phase, s.design_step, flush=True)
+assert s.phase == "market_research", s.phase
+s = store.approve(s.session_id)
+print("  second-round after market", s.phase, s.design_version, flush=True)
+assert s.phase == "phase0" and s.design_step == 0
+assert s.design_version == v1, s.design_version
+skip_last = s.messages[-1]["content"]
+assert "no design updates" in skip_last.lower(), skip_last[:400]
 
 print("LLD path…", flush=True)
 get_settings.cache_clear()
@@ -244,8 +312,9 @@ for step in range(1, 4):
     print(f"  after approve@{step}", s2.phase, s2.design_step, flush=True)
 assert s2.phase == "market_research"
 s2 = store2.approve(s2.session_id)
-assert s2.phase == "lld" and s2.design_step == 3
+assert s2.phase == "phase0" and s2.design_step == 0, (s2.phase, s2.design_step)
 assert s2.design_version >= 1
+assert "Phase 0" in s2.messages[-1]["content"]
 
 print("phase0 suggests answers to its own questions…", flush=True)
 get_settings.cache_clear()
@@ -285,14 +354,16 @@ assert "Updates to this proposal" in last3, last3[:400]
 # Must not be only the next canned question.
 assert len(last3) > 120, last3
 
-print("hld concern is addressed…", flush=True)
+print("new-round spec update stays on phase0…", flush=True)
 s = store.chat(s.session_id, "We should add rate limiting at the gateway.")
-# After market continue, s is at hld step 4
-assert s.phase == "hld", s.phase
-hld_last = s.messages[-1]["content"]
-assert "rate limit" in hld_last.lower(), hld_last[:400]
-assert "We should add rate limiting at the gateway." not in hld_last, hld_last[:400]
-assert "Updates to this proposal" in hld_last, hld_last[:400]
+assert s.phase == "phase0", s.phase
+round_edit = s.messages[-1]["content"]
+assert "We should add rate limiting at the gateway." not in round_edit, round_edit[:400]
+assert (
+    "rate limit" in round_edit.lower()
+    or "updated" in round_edit.lower()
+    or "Updates to this proposal" in round_edit
+), round_edit[:400]
 
 print("legacy map…", flush=True)
 mapped = _legacy_map({"phase": "spec_interview"})

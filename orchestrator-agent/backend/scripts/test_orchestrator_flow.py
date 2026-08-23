@@ -23,6 +23,7 @@ from orchestrator_agent.package_parse import extract_http_endpoints, format_agre
 from orchestrator_agent.query_intent import (
     NEXT_PROMPT_HEADER,
     is_advance_request,
+    is_full_phase_request,
     is_revision_request,
     is_step_approval_message,
     wants_endpoint_list,
@@ -106,6 +107,10 @@ assert wants_endpoint_list("Show me all URL enpoints we aggreed on")
 assert not is_revision_request("Show me all URL endpoints we agreed on")
 assert is_revision_request("Add a health check endpoint")
 assert is_revision_request("Why is there no rate limiting?")
+assert is_full_phase_request("Switch the stack to Java.")
+assert is_full_phase_request("Redo the entity relationships from scratch")
+assert not is_full_phase_request("Add a health check endpoint")
+assert not is_full_phase_request("add a bug for login lockout")
 assert not is_revision_request("Approve")
 assert is_step_approval_message("Approve")
 assert is_step_approval_message("Looks good.")
@@ -186,18 +191,54 @@ print("  after identity plan", [x.get("status") for x in s.services], flush=True
 ident = next(x for x in s.services if x["microservice_id"] == identity_id)
 cat = next(x for x in s.services if x["microservice_id"] == catalog_id)
 assert ident.get("status") == "sent"
+assert ident.get("spec_version") == 1
+assert ident.get("update_kind") == "full"
 assert cat.get("status") == "awaiting_relations"
 assert "## Entity relationships" in (ident.get("plan_spec") or "")
 assert "Locked protocol" not in (ident.get("plan_spec") or "")
 assert "## Features / functionality" in (ident.get("plan_spec") or "")
+assert "## Bugs" in (ident.get("plan_spec") or "")
+assert "spec_version: `1`" in (ident.get("plan_spec") or "")
 assert (ident.get("feature_spec") or "").strip()
 assert s.engineer_handoffs[-1]["action"] == "plan"
 assert s.engineer_handoffs[-1]["microservice_id"] == identity_id
 
-print("  revise sent identity…", flush=True)
+print("  incremental spec after first ship…", flush=True)
 s = store.chat(SESSION, "Add a health check endpoint.", service_id=identity_id)
 ident = next(x for x in s.to_public()["services"] if x["microservice_id"] == identity_id)
-assert ident["status"] == "awaiting_relations", ident["status"]
+assert ident["status"] == "awaiting_spec_update", ident["status"]
+assert ident["can_approve"]
+assert "health check" in (ident.get("feature_spec") or "").lower()
+s = store.approve(SESSION, service_id=identity_id)
+ident = next(x for x in s.services if x["microservice_id"] == identity_id)
+assert ident.get("status") == "sent"
+assert ident.get("spec_version") == 2
+assert ident.get("update_kind") == "incremental"
+assert "health check" in (ident.get("plan_spec") or "").lower()
+assert "spec_version: `2`" in (ident.get("plan_spec") or "")
+assert s.engineer_handoffs[-1]["action"] == "plan"
+
+print("  incremental bug update…", flush=True)
+s = store.chat(SESSION, "add a bug for login lockout", service_id=identity_id)
+ident = next(x for x in s.to_public()["services"] if x["microservice_id"] == identity_id)
+assert ident["status"] == "awaiting_spec_update", ident["status"]
+assert "lockout" in (ident.get("bug_spec") or "").lower()
+s = store.approve(SESSION, service_id=identity_id)
+ident = next(x for x in s.services if x["microservice_id"] == identity_id)
+assert ident.get("status") == "sent"
+assert ident.get("spec_version") == 3
+assert "lockout" in (ident.get("plan_spec") or "").lower()
+
+print("  refuse full-phase without new package…", flush=True)
+stack_before = ident.get("tech_stack") or ""
+s = store.chat(SESSION, "Switch the stack to Java.", service_id=identity_id)
+ident = next(x for x in s.to_public()["services"] if x["microservice_id"] == identity_id)
+assert ident["status"] == "sent", ident["status"]
+assert ident["status"] != "awaiting_relations"
+assert ident["status"] != "awaiting_stack"
+assert (ident.get("tech_stack") or "") == stack_before
+assert "design package" in ident["messages"][-1]["content"].lower()
+assert ident.get("spec_version") == 3
 
 hld_v2 = _package(
     version=2,
@@ -226,6 +267,7 @@ assert any(catalog_id == x.get("microservice_id") for x in live), "renamed catal
 names = {(x.get("names") or [""])[-1] for x in live}
 assert "CatalogService" in names
 assert "PlaybackService" in names
+assert all(x.get("status") == "awaiting_relations" for x in live), [x.get("status") for x in live]
 assert any(h["action"] == "suspend" and h["microservice_id"] == identity_id for h in s.engineer_handoffs)
 
 lld = _package(

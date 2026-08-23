@@ -36,6 +36,8 @@ class StubChatModel(BaseChatModel):
 
         if "user turn intent classifier" in lower:
             payload = _stub_turn_intent(blob)
+        elif "design-stage router" in lower:
+            payload = {"stage": _stub_rewind_stage(blob)}
         elif "this is q&a before they approve this workflow step" in lower:
             payload = {"assistant_message": _stub_qa(blob)}
         elif "compress a living business specification" in lower or "spec to compress:" in lower:
@@ -52,11 +54,6 @@ class StubChatModel(BaseChatModel):
             }
         elif "market evaluator" in lower or "market evaluation report" in lower:
             payload = _stub_market_evaluation(blob)
-        elif "update the living business specification" in lower or (
-            "update the business specification" in lower or "from one interview answer" in lower
-        ):
-            # Merge without growing an unbounded interview-notes appendix.
-            payload = {"updated_business_spec": _fold_answer_stub(blob)}
         elif "phase 0 interview conductor" in lower:
             payload = _stub_phase0_interview_turn(blob)
         elif "phase 0 interview question generator" in lower:
@@ -70,7 +67,6 @@ class StubChatModel(BaseChatModel):
                 ),
             }
         elif "phase 0 spec refiner" in lower:
-            feedback = _latest_feedback(blob)
             payload = {
                 **_stub_phase0(blob),
                 "assistant_message": (
@@ -81,6 +77,11 @@ class StubChatModel(BaseChatModel):
             }
         elif "phase 0 classifier" in lower or "classify the design scope" in lower:
             payload = _stub_phase0(blob)
+        elif "update the living business specification" in lower or (
+            "update the business specification" in lower or "from one interview answer" in lower
+        ):
+            # Merge without growing an unbounded interview-notes appendix.
+            payload = {"updated_business_spec": _fold_answer_stub(blob)}
         elif "lld track node" in lower or "current lld step" in lower:
             payload = _stub_lld(blob)
         elif "hld track node" in lower or "current hld step" in lower:
@@ -182,6 +183,40 @@ def _stub_help_answering_questions(text: str) -> bool:
         )
     )
     return asking_for_help and about_replying
+
+
+def _stub_rewind_stage(blob: str) -> str:
+    user = ""
+    for marker in ("User message:", "Latest user message:"):
+        if marker in blob:
+            user = blob.split(marker, 1)[1].strip()
+            break
+    if not user:
+        user = blob
+    compact = re.sub(r"\s+", " ", user).strip().lower()
+    current = blob.lower()
+    if re.search(r"\b(skip|jump)\s+(ahead|to)\b|\bgo\s+straight\s+to\b", compact):
+        return "ahead"
+    if any(
+        token in compact
+        for token in (
+            "gdpr",
+            "residenc",
+            "new requirement",
+            "spec requirement",
+            "eu-only",
+            "eu only",
+            "invariant",
+            "out of scope",
+            "new actor",
+        )
+    ):
+        return "phase0"
+    if "fmea" in compact or "spof" in compact:
+        return "hld5" if "hld" in current else "lld3"
+    if "domain object" in compact or "entities" in compact:
+        return "hld2"
+    return "current"
 
 
 def _stub_turn_intent(blob: str) -> dict[str, str]:
@@ -351,8 +386,8 @@ def _stub_phase0(blob: str) -> dict[str, Any]:
         track = "hld"
     elif any(
         k in lower
-        for k in ("single process", "single os process", "library", "cli", "in-process", "(lld)")
-    ):
+        for k in ("single process", "single os process", "library", "in-process", "(lld)")
+    ) or re.search(r"\bcli\b", lower):
         track = "lld"
     elif "warehouse" in lower or "inventory" in lower or "saas" in lower:
         track = "hld"
@@ -424,12 +459,41 @@ def _stub_phase0_interview_turn(blob: str) -> dict[str, Any]:
     }
 
 
+def _stub_keep_existing(blob: str) -> bool:
+    return "keep existing artifacts. work already completed" in (blob or "").lower()
+
+
+def _stub_keep_payload(track: str, step: int) -> dict[str, Any]:
+    last = 6 if track == "hld" else 3
+    return {
+        "updated_business_spec": "",
+        "tradeoff_ledger": "",
+        "scale_estimates": "",
+        "core_microservices": "",
+        "api_contracts": "",
+        "communication_schemes": "",
+        "fmea_notes": "",
+        "design_diagram": "",
+        "design_diagram_lines": [],
+        "design_justification": "",
+        "ready_to_advance": True,
+        "design_ready_to_approve": step >= last,
+        "assistant_message": (
+            f"Kept the existing {track.upper()} step {step} artifact and applied only "
+            "patches required by the carry-forward change, if that step is affected. "
+            "If this looks right, confirm, approve, or agree to continue."
+        ),
+    }
+
+
 def _stub_lld(blob: str) -> dict[str, Any]:
     step = 1
     if "current lld step: 2" in blob.lower():
         step = 2
     elif "current lld step: 3" in blob.lower():
         step = 3
+    if _stub_keep_existing(blob):
+        return _stub_keep_payload("lld", step)
     feedback = _latest_feedback(blob)
     design = _stub_design_proposal(blob, feedback)
     ledger = (
@@ -507,6 +571,8 @@ def _stub_hld(blob: str) -> dict[str, Any]:
         if f"current hld step: {n}" in blob.lower():
             step = n
             break
+    if _stub_keep_existing(blob):
+        return _stub_keep_payload("hld", step)
     feedback = _latest_feedback(blob)
     design = _stub_design_proposal(blob, feedback)
     diagram = _stub_hld_architecture_diagram(feedback) if step >= 4 else ""

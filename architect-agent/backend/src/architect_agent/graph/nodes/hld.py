@@ -21,6 +21,13 @@ from architect_agent.graph.nodes.common import (
     invoke_json,
     is_design_approve_step,
 )
+from architect_agent.design_progress import (
+    KEEP_AND_PATCH_RULES,
+    keep_or_patch,
+    rewind_or_block_skip,
+    should_keep_and_patch,
+    with_rewind_notice,
+)
 from architect_agent.graph.state import DesignGraphState
 from architect_agent.json_util import coerce_diagram_text
 from architect_agent.mermaid_sanitize import sanitize_mermaid
@@ -464,6 +471,9 @@ def hld_step_node(state: DesignGraphState) -> dict[str, Any]:
     prior = [m for m in (state.get("messages") or []) if m.get("node") == "hld"]
     history_tail = format_history_tail(prior)
     step_rules = _step_artifact_rules(step)
+    keep_mode = should_keep_and_patch(state, step)
+    carry = str(state.get("carry_change") or "").strip()
+    keep_block = KEEP_AND_PATCH_RULES if keep_mode else ""
 
     result = invoke_json(
         system=(
@@ -473,6 +483,7 @@ def hld_step_node(state: DesignGraphState) -> dict[str, Any]:
             f"{JSON_OUTPUT_DIGEST}\n\n"
             f"Current HLD step: {step} — {_STEP_TITLES.get(step, '')}.\n"
             f"{USER_MESSAGE_FIRST_RULES if pending else ''}"
+            f"{keep_block}"
             "Fill this step's primary artifact completely on this turn using labeled "
             "assumptions. Ask them to confirm, approve, or agree — never tell them to click a button.\n"
             "If the user just commented, address that comment before restating the step.\n"
@@ -494,7 +505,8 @@ def hld_step_node(state: DesignGraphState) -> dict[str, Any]:
             '  "assistant_message": string\n'
             "}\n"
             "If you rewrite the primary field, it must meet the depth bar so "
-            "ready_to_advance can be true. Empty primary field is a failure.\n"
+            "ready_to_advance can be true. Empty primary field is a failure "
+            "unless a keep-existing-artifacts instruction is in force.\n"
             "assistant_message MUST brief what this step completed: name the numbers, "
             "objects, services, protocols, or failure modes you wrote, why, what you "
             "rejected, and what it costs. Never write a status line such as "
@@ -512,8 +524,9 @@ def hld_step_node(state: DesignGraphState) -> dict[str, Any]:
             f"Current justification:\n{state.get('design_justification') or '(none)'}\n\n"
             f"Recent HLD turns:\n{history_tail}\n\n"
             f"Latest user message:\n{pending or '(none — produce the step artifact from the spec using labeled assumptions)'}\n"
+            f"Carry-forward change to apply if this step is affected:\n{carry or '(none)'}\n"
             f"Reminder: primary field this turn is {_HLD_PRIMARY_FIELD.get(step)}. "
-            "Do not leave it empty."
+            "Do not leave it empty unless a keep-existing-artifacts instruction is in force."
         ),
     )
 
@@ -524,21 +537,35 @@ def hld_step_node(state: DesignGraphState) -> dict[str, Any]:
     prior_ledger = str(state.get("tradeoff_ledger") or "")
     prior_diagram = str(state.get("design_diagram") or "")
 
-    scale = _prefer_richer_text(str(result.get("scale_estimates") or ""), prior_scale)
-    apis = _prefer_richer_text(
+    picker = keep_or_patch if keep_mode else _prefer_richer_text
+    scale = picker(str(result.get("scale_estimates") or ""), prior_scale)
+    apis = picker(
         str(result.get("core_microservices") or result.get("api_contracts") or ""),
         prior_apis,
     )
-    comms = _prefer_richer_text(str(result.get("communication_schemes") or ""), prior_comms)
-    fmea = _prefer_richer_text(str(result.get("fmea_notes") or ""), prior_fmea)
-    ledger = _prefer_richer_text(str(result.get("tradeoff_ledger") or ""), prior_ledger)
+    comms = picker(str(result.get("communication_schemes") or ""), prior_comms)
+    fmea = picker(str(result.get("fmea_notes") or ""), prior_fmea)
+    ledger = picker(str(result.get("tradeoff_ledger") or ""), prior_ledger)
 
     new_diagram = sanitize_mermaid(
         coerce_diagram_text(result, fallback="")
     )
-    diagram = sanitize_mermaid(_prefer_diagram(new_diagram, prior_diagram, apis))
+    if keep_mode:
+        diagram = sanitize_mermaid(keep_or_patch(new_diagram, prior_diagram))
+    else:
+        diagram = sanitize_mermaid(_prefer_diagram(new_diagram, prior_diagram, apis))
     justification = maybe_compact_design_justification(
-        str(result.get("design_justification") or state.get("design_justification") or "")
+        keep_or_patch(
+            str(result.get("design_justification") or ""),
+            str(state.get("design_justification") or ""),
+        )
+        if keep_mode
+        else str(result.get("design_justification") or state.get("design_justification") or "")
+    )
+    spec_out = (
+        keep_or_patch(str(result.get("updated_business_spec") or ""), business_spec)
+        if keep_mode
+        else (result.get("updated_business_spec") or business_spec)
     )
 
     ready_advance = bool(result.get("ready_to_advance"))
@@ -557,6 +584,11 @@ def hld_step_node(state: DesignGraphState) -> dict[str, Any]:
         fmea=fmea,
         diagram=diagram,
     )
+    if keep_mode:
+        ready_advance = True
+        if step >= 6:
+            design_ready = True
+            ready_advance = True
 
     primary_field = {
         1: "scale_estimates",
@@ -572,7 +604,7 @@ def hld_step_node(state: DesignGraphState) -> dict[str, Any]:
         step=step,
         title=_STEP_TITLES.get(step, "High-level design"),
         artifacts={
-            "business_spec": str(result.get("updated_business_spec") or business_spec),
+            "business_spec": str(spec_out),
             "tradeoff_ledger": ledger,
             "scale_estimates": scale,
             "api_contracts": apis,
@@ -592,15 +624,16 @@ def hld_step_node(state: DesignGraphState) -> dict[str, Any]:
             or fmea != prior_fmea
             or ledger != prior_ledger
             or diagram != prior_diagram
-            or str(result.get("updated_business_spec") or business_spec) != business_spec
+            or str(spec_out) != business_spec
         )
         assistant = with_resolution_close(str(assistant), changed=changed)
+    assistant = with_rewind_notice(str(assistant), str(state.get("rewind_notice") or ""))
 
     return {
         "phase": "hld",
         "design_track": "hld",
         "design_step": step,
-        "business_spec": result.get("updated_business_spec") or business_spec,
+        "business_spec": spec_out,
         "tradeoff_ledger": ledger,
         "scale_estimates": scale,
         "api_contracts": apis,
@@ -613,6 +646,7 @@ def hld_step_node(state: DesignGraphState) -> dict[str, Any]:
         "ready_for_design": design_ready,
         "pending_user_feedback": "",
         "pending_assistant_message": assistant,
+        "rewind_notice": "",
         "publish_requested": False,
         "stay_on_interrupt": False,
         "messages": [{"role": "assistant", "content": assistant, "node": "hld"}],
@@ -716,6 +750,19 @@ def hld_wait_node(state: DesignGraphState) -> dict[str, Any]:
             "stay_on_interrupt": False,
             "messages": msgs,
         }
+
+    if user_text:
+        rewound = rewind_or_block_skip(
+            state,
+            user_text,
+            node="hld",
+            current_phase="hld",
+            current_track="hld",
+            current_step=step,
+            msgs=msgs,
+        )
+        if rewound is not None:
+            return rewound
 
     if user_text and is_informational_query(user_text):
         return answer_before_approve(

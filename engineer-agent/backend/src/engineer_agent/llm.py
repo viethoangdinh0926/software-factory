@@ -36,6 +36,8 @@ class StubChatModel(BaseChatModel):
         lower = blob.lower()
         if "user turn intent classifier" in lower:
             payload = _stub_turn_intent(blob)
+        elif "blocked issue advisor" in lower:
+            payload = _stub_block_advice(blob)
         elif "answering a question about" in lower:
             payload = {"assistant_message": _stub_qa(blob)}
         elif "engineer execution planner" in lower:
@@ -395,6 +397,33 @@ def _stub_plan_revise(blob: str) -> dict[str, Any]:
     )
     current.setdefault("summary", f"Revised execution plan for {name}.")
     return current
+
+
+def _stub_block_advice(blob: str) -> dict[str, Any]:
+    user = blob.split("User message:", 1)[-1].strip() if "User message:" in blob else blob
+    prior = ""
+    if "Current instructions:" in blob:
+        prior = blob.split("Current instructions:", 1)[-1]
+        prior = prior.split("User message:", 1)[0].strip()
+    compact = re.sub(r"\s+", " ", user).strip().lower()
+    asking = "?" in user or compact.startswith(("why", "what", "which", "how", "show", "explain", "list"))
+    if asking:
+        return {
+            "assistant_message": (
+                "I am paused on this issue. "
+                + _stub_qa(blob)
+                + " Tell me how to resolve it; when you approve to continue I will follow that."
+            ),
+            "instructions": prior,
+        }
+    combined = f"{prior}\n{user.strip()}".strip() if prior else user.strip()
+    return {
+        "assistant_message": (
+            "I recorded your instructions for this issue. When you approve to continue, "
+            "I will follow them and retry the paused item."
+        ),
+        "instructions": combined,
+    }
 
 
 def _stub_implement(blob: str) -> dict[str, Any]:

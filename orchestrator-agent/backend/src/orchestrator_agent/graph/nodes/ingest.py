@@ -182,8 +182,8 @@ def handle_update_node(state: dict[str, Any]) -> dict[str, Any]:
             "role": "system",
             "content": (
                 f"Updated distributed design v{version}. Matching microservices by role "
-                "(name changes are not removals), then re-mapping entity relationships "
-                "for each service."
+                "(name changes are not removals), then walking every planning phase "
+                "again for a full update of each live service."
             ),
             "node": "ingest",
         }
@@ -205,6 +205,7 @@ def reset_planning_fields(svc: dict[str, Any]) -> dict[str, Any]:
     updated["entity_relationships"] = ""
     updated["tech_stack"] = ""
     updated["plan_spec"] = ""
+    updated["spec_changelog"] = ""
     updated["status"] = "planning"
     updated["search_notes"] = ""
     return updated

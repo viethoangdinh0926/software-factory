@@ -119,6 +119,37 @@ _CONCERN_HINTS = (
 _ENDPOINT_ASK_HINTS = ("endpoint", "url", "uri", "route", "path")
 _SHOW_HINTS = ("show", "list", "all", "agreed", "current", "what", "which", "remind", "we agree")
 
+_FULL_PHASE_HINTS = (
+    "entity relationship",
+    "related entit",
+    "remap the",
+    "re-map",
+    "remap entit",
+    "redo the relationship",
+    "rewrite the relationship",
+    "tech stack",
+    "change the stack",
+    "switch the stack",
+    "switch stack",
+    "new stack",
+    "all phases",
+    "all working phases",
+    "full update",
+    "full re-interview",
+    "start over",
+    "from scratch",
+    "re-interview",
+    "walk all phases",
+    "working phases",
+)
+
+FULL_PHASE_REFUSAL = (
+    "A full update of this core microservice — entity relationships, features, and "
+    "stack, walking every planning phase — is only available after the architect "
+    "ships a new design package. You can still add or update features and bugs "
+    "here and ship a new spec version to the engineer now."
+)
+
 UPDATES_HEADER = "**Updates to this proposal**"
 NEXT_PROMPT_HEADER = "**What you can do next**"
 _DONE_MESSAGE_RE = re.compile(
@@ -321,6 +352,21 @@ def is_revision_request(text: str) -> bool:
     if not t:
         return True
     return classify_user_message(t) == ("command", "revise")
+
+
+def is_full_phase_request(text: str) -> bool:
+    """True when the user wants to re-walk relations/features/stack, not a spec delta."""
+    compact = _compact_user_text(text).lower()
+    if not compact:
+        return False
+    if any(hint in compact for hint in _FULL_PHASE_HINTS):
+        return True
+    if re.search(
+        r"\b(switch|change|move)\b.+\b(to )?(java|python|go|golang|rust|kotlin|node|typescript)\b",
+        compact,
+    ) and any(token in compact for token in ("stack", "language", "framework", "runtime")):
+        return True
+    return False
 
 
 def wants_endpoint_list(text: str) -> bool:

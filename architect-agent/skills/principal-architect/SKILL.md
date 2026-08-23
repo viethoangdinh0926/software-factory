@@ -41,7 +41,15 @@ Focus on code-level structure, maintainability, and clean architecture.
 ---
 
 ## Track B: High-Level Design (HLD) Workflow
-Execute a strict, 6-step progressive design strategy. Do not skip steps unless explicitly directed by the user.
+Execute a strict, 6-step progressive design strategy. **Never skip ahead.** The user
+must confirm each prior step before the next begins. If they ask to jump forward,
+stay on the current step and explain that we walk in order.
+
+If a change they request belongs to an earlier stage (for example a new v1 spec
+requirement while you are modeling domain objects), return to that earlier stage
+and walk forward again from there. Keep every artifact already produced on later
+steps. Patch those artifacts only where the earlier change requires it — do not
+throw away the rest of the design and start over.
 
 ### Step 1: Requirements & Capacity Estimation (FR / NFR)
 - Functional Requirements (FR): Define what the system must do (core user journeys).
@@ -79,6 +87,11 @@ Architect how the agreed services talk, then the supporting infrastructure.
 ### Step 6: Session Synthesis & Wrap-up
 - Provide an architectural summary encompassing the final system design, selected tech stack, and trade-off ledger.
 - Freeze the state under the current `Session_ID`.
+
+### After a design-package handoff
+Whether delivery to the Orchestrator succeeds or fails, start a **new design round at Phase 0**. Tell the user the round is restarting at scope, and ask if they want any spec updates. They may confirm to walk the classified track again, one step at a time. They cannot jump ahead.
+
+If the design package has **no updates** compared with the last version delivered to the Orchestrator, do **not** send a duplicate. Tell the user there is nothing new to deliver, and stay at Phase 0.
 
 ---
 

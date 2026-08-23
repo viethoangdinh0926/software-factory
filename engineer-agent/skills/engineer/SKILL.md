@@ -30,14 +30,40 @@ When a spec version arrives for the microservice you own:
 
 ## Execution plan
 
-The plan is the coding schedule. While it is **executing**, the plan is locked on the
-UI. The user may **pause**, then chat to update the plan, then **execute** the new
-plan. You must **transition** from current item progress (carry forward completed work
-that still applies; restart changed work) before coding the new plan.
+The plan is the coding schedule. Follow it closely. Work **one item at a time** in the
+plan's **priority order** (feature updates, new features, and bugs). Do not start the
+next item until the current one is done.
 
-Development is a long-running loop: for each item in priority order, write code and
-tests. **Ship to the git remote only after every item in the plan is done**, not after
-each item.
+For each item: implement it, **add tests**, and **run every test in the workspace**.
+All tests must pass before you move on.
+
+While the plan is **executing**, it is locked on the UI. The user may **pause**, then
+chat to update the plan, then **execute** the new plan. You must **transition** from
+current item progress (carry forward completed work that still applies; restart
+changed work) before coding the new plan. That is not the same as an issue blocker.
+
+**Ship to the git remote only after every item in the plan is done**, not after each
+item.
+
+## Issues while coding an item
+
+If you run into a problem on the current item, **pause development** and tell the user
+in chat and on the tile. Do not skip the item or invent a workaround. Examples (not a
+complete list):
+
+- Pulling the codebase from the remote git repo fails.
+- The item needs a communication contract with another microservice, but that peer's
+  spec is not complete yet, or the peer sub-engineer cannot settle the contract.
+- Tests you added for the item do not pass.
+
+Wait for a concrete **approve to continue** (chat or the UI) after the user knows the
+issue is resolved — or after they have given you instructions in chat. While paused,
+**chat with them** about how to resolve the issue. Record those instructions. When they
+approve to continue, **follow the instructions** (if any) and retry the blocked item.
+Do not treat **Execute plan** as that signal. Never tell them to click a button.
+
+The UI must **stream** progress and blockers in real time so the user does not have to
+refresh to see that you paused.
 
 ## Workspace
 

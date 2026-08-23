@@ -12,6 +12,7 @@ from langgraph.types import Command
 
 from architect_agent.a2a.orchestrator import HandoffResult, retry_design_package, send_design_package
 from architect_agent.config import get_settings
+from architect_agent.design_progress import NO_UPDATES_TO_DELIVER, package_fingerprint
 from architect_agent.graph import build_graph, initial_state
 from architect_agent.graph.nodes.common import approve_label, design_step_title
 from architect_agent.mermaid_sanitize import sanitize_mermaid
@@ -84,6 +85,7 @@ class DesignSession:
     finalized: bool = False
     design_version: int = 0
     last_handoff: dict[str, Any] | None = None
+    last_published_fingerprint: str = ""
     market_evaluation_report: str = ""
     market_evaluation_grade: str = ""
     market_evaluation_done: bool = False
@@ -137,6 +139,7 @@ class DesignSession:
             "updated_at": self.updated_at,
             "design_version": self.design_version,
             "last_handoff": self.last_handoff,
+            "last_published_fingerprint": self.last_published_fingerprint,
             "can_retry_handoff": _handoff_retryable(self.last_handoff) and not self.finalized,
         }
 
@@ -171,6 +174,7 @@ def _session_from_disk(data: dict[str, Any]) -> DesignSession:
         finalized=bool(data.get("finalized")) or mapped["phase"] == "done",
         design_version=int(data.get("design_version") or 0),
         last_handoff=data.get("last_handoff"),
+        last_published_fingerprint=str(data.get("last_published_fingerprint") or ""),
         market_evaluation_report=str(data.get("market_evaluation_report") or ""),
         market_evaluation_grade=str(data.get("market_evaluation_grade") or ""),
         market_evaluation_done=bool(data.get("market_evaluation_done")),
@@ -279,6 +283,8 @@ class SessionStore:
             "fmea_notes": session.fmea_notes,
             "resume_after_market": False,
             "stay_on_interrupt": False,
+            "carry_change": "",
+            "rewalk_until_step": 0,
         }
 
     def _ensure_graph_resumable(self, session: DesignSession) -> None:
@@ -505,7 +511,14 @@ class SessionStore:
 
         return session
 
-    def _publish_design_to_orchestrator(self, session: DesignSession) -> HandoffResult:
+    def _publish_design_to_orchestrator(self, session: DesignSession) -> HandoffResult | None:
+        markdown = self.final_design_markdown(session.session_id)
+        fingerprint = package_fingerprint(markdown)
+        if session.design_version >= 1 and fingerprint == session.last_published_fingerprint:
+            status_line = with_next_prompt(NO_UPDATES_TO_DELIVER, mode="handoff", can_approve=False)
+            session.messages.append({"role": "assistant", "content": status_line, "node": "phase0"})
+            self._persist(session)
+            return None
         session.design_version += 1
         markdown = self.final_design_markdown(session.session_id)
         handoff = send_design_package(
@@ -514,18 +527,17 @@ class SessionStore:
             version=session.design_version,
         )
         session.last_handoff = handoff.to_public()
+        session.last_published_fingerprint = package_fingerprint(markdown)
         session.design_approved = True
         status_line = (
             f"Handoff v{session.design_version} → Orchestrator: {handoff.status}. "
-            f"{handoff.detail}"
+            f"{handoff.detail}\n\n"
+            "A new design round starts at **Phase 0**. Tell me any spec updates, or "
+            "confirm, approve, or agree if you want to walk the classified track again "
+            "from scope."
         )
-        if handoff.status in {"failed", "queued"}:
-            status_line += (
-                " You can retry this same package from the session without another design cycle."
-            )
         status_line = with_next_prompt(status_line, mode="handoff", can_approve=False)
-        node = "hld" if session.design_track == "hld" else "lld"
-        session.messages.append({"role": "assistant", "content": status_line, "node": node})
+        session.messages.append({"role": "assistant", "content": status_line, "node": "phase0"})
         self._persist(session)
         return handoff
 

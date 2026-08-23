@@ -19,7 +19,8 @@ def build_agent_card() -> AgentCard:
         description=(
             "Accept an architect design-package markdown keyed by design_session_id. "
             "Classify stand-alone vs distributed, map per-service entity relationships "
-            "and stacks, then hand plan specs to the Engineer agent."
+            "and stacks, hand plan specs to the Engineer, then allow incremental feature "
+            "and bug spec updates until a new architect package unlocks a full-phase update."
         ),
         tags=["orchestration", "planning", "software-factory"],
         examples=[

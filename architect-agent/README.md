@@ -13,9 +13,10 @@ After `ui` is built, static files land in `backend/src/architect_agent/static/` 
 ## Design flow (Principal Architect)
 
 1. **Phase 0** — classify **LLD** (single-process) vs **HLD** (distributed).
-2. **LLD** steps 1–3 or **HLD** steps 1–6 with a living spec, trade-off ledger, and step artifacts.
-3. **Approve & send design** (design-version approve) → **market evaluation** (fresh report + grade) → continue → handoff to Orchestrator + resume design (HLD defaults to step 4).
-4. Step advances (1–5) do **not** trigger market research.
+2. **LLD** steps 1–3 or **HLD** steps 1–6 with a living spec, trade-off ledger, and step artifacts. Confirm each step before the next; no skipping ahead. If a change belongs to an earlier stage, the session rewinds there and walks forward again, keeping later-step artifacts and patching them only where that change requires it.
+3. **Approve & send design** (design-version approve) → **market evaluation** (fresh report + grade) → continue → handoff to Orchestrator **only if the package changed** since the last delivery.
+4. After every handoff attempt (success or failure), and after a skipped duplicate, a **new round starts at Phase 0**. Ask whether the spec should change, then walk the track again from scope.
+5. Intermediate step advances (1–5) do **not** trigger market research.
 
 ## Deploy (from scratch)
 

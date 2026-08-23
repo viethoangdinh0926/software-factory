@@ -95,4 +95,17 @@ assert updated.design_version == 5, updated.design_version
 assert updated.last_handoff and updated.last_handoff["status"] == "sent"
 assert calls == [5], calls
 assert updated.to_public()["can_retry_handoff"] is False
+
+from architect_agent.design_progress import package_fingerprint
+
+session.business_spec = "# spec"
+session.design_diagram = "flowchart LR\n  A-->B"
+session.design_version = 1
+session.last_published_fingerprint = package_fingerprint(store.final_design_markdown(session_id))
+before = list(calls)
+skipped = store._publish_design_to_orchestrator(session)
+assert skipped is None
+assert session.design_version == 1
+assert calls == before
+assert "no design updates" in session.messages[-1]["content"].lower()
 print("OK")

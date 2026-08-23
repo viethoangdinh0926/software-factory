@@ -107,6 +107,9 @@ Principal Software Architect workflow:
 - HLD (strict order): (1) numeric capacity plan (2) domain model (3) core microservices
   with owned objects/operations (4) communication schemes + infra + concrete Mermaid
   (5) structured FMEA (6) synthesis. Do not ship HTTP API catalogs from HLD.
+- If a later-step change belongs earlier, rewind and walk forward. Keep later artifacts
+  and patch them only where the earlier change requires it. Do not regenerate from scratch.
+- Do not hand off a package that is unchanged vs the last Orchestrator delivery.
 - Primary artifact this turn must be COMPLETE (never empty / never a one-liner).
   Other fields: "" so the server keeps prior values (avoids truncation).
 - HLD Step 4 diagram: 12–25 nodes — clients, LB, API gateway, auth, each named service,

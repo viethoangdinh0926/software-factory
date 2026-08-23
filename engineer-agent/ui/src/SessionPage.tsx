@@ -33,6 +33,7 @@ function sortedItems(plan?: ExecutionPlan): PlanItem[] {
 function composerPlaceholder(sub: SubEngineer): string {
   if (sub.status === "executing") return "Pause to update the plan, or ask a question…";
   if (sub.status === "paused") return "Revise the plan, then execute it…";
+  if (sub.status === "blocked") return "Tell me how to resolve this issue, then approve to continue…";
   if (sub.status === "shipped") return "Ask a follow-up, or wait for the next spec…";
   return "Revise the execution plan, or ask about a feature…";
 }
@@ -123,12 +124,34 @@ function SubTile({
   const initiators = (sub.peer_consults || []).filter((c) => c.we_initiate);
 
   return (
-    <section className={`panel service-tile${sub.status === "suspended" ? " suspended" : ""}`}>
+    <section
+      className={`panel service-tile${sub.status === "suspended" ? " suspended" : ""}${
+        sub.status === "blocked" ? " blocked" : ""
+      }`}
+    >
       <div className="panel-head">
         <h2>{subLabel(sub)}</h2>
         <span className="panel-kicker">{sub.status}</span>
       </div>
       <p className="lede mono">{sub.sub_agent_id}</p>
+      {sub.status === "blocked" && sub.block_issue ? (
+        <div className="error banner block-issue" role="alert">
+          <div>
+            <p>
+              <strong>{sub.block_issue.title}</strong>
+            </p>
+            <p className="lede">{sub.block_issue.detail}</p>
+            {sub.block_issue.item_title ? (
+              <p className="lede">Paused item: {sub.block_issue.item_title}</p>
+            ) : null}
+            {sub.block_issue.instructions ? (
+              <p className="lede">
+                <strong>Your instructions:</strong> {sub.block_issue.instructions}
+              </p>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
       {sub.git_ship_status ? (
         <p className="lede">
           Git ship: <span className="mono">{sub.git_ship_status}</span>
@@ -166,7 +189,7 @@ function SubTile({
         </article>
       ) : null}
       <div className="chat-log">
-        {(sub.messages || []).slice(-8).map((msg, i) => (
+        {(sub.messages || []).slice(-12).map((msg, i) => (
           <div key={`${msg.role}-${i}`} className={`bubble ${msg.role}`}>
             <MarkdownView content={msg.content} />
           </div>
@@ -233,14 +256,19 @@ export function SessionPage() {
     void load();
   }, [load]);
 
-  const executing = Boolean(session?.sub_agents.some((sub) => sub.status === "executing"));
   useEffect(() => {
-    if (!executing) return;
-    const timer = window.setInterval(() => {
-      void load();
-    }, 2000);
-    return () => window.clearInterval(timer);
-  }, [executing, load]);
+    if (!sessionId) return;
+    const source = new EventSource(`/api/sessions/${sessionId}/events`);
+    source.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data) as FleetSession;
+        if (data?.design_session_id) setSession(data);
+      } catch {
+        /* ignore a malformed frame */
+      }
+    };
+    return () => source.close();
+  }, [sessionId]);
 
   if (!session) {
     return (

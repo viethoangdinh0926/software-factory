@@ -225,7 +225,7 @@ export function SessionPage() {
   const chatPlaceholder = chatBusy
     ? "Wait for the architect to finish…"
     : session.phase === "market_research"
-      ? "Optional note before continuing after market evaluation…"
+      ? "Optional note before handoff; a new round then starts at Phase 0…"
       : session.phase === "lld" || session.phase === "hld"
         ? "Ask for design changes or answer the current step…"
         : "Answer the architect…";

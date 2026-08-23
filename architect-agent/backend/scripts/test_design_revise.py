@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Smoke: revise diagram via chat on HLD step 4 after market handoff."""
+"""Smoke: revise diagram via chat on HLD step 4 during the design round."""
 from __future__ import annotations
 
 import os
@@ -31,11 +31,9 @@ assert s.phase == "phase0"
 s = store.approve(s.session_id)
 assert s.design_track == "hld"
 
-# Advance through HLD 1..6 → market → continue → step 4
-for _ in range(6):
+# Phase 0 → HLD 1, then walk to step 4 (communication & diagram).
+for _ in range(3):
     s = store.approve(s.session_id)
-assert s.phase == "market_research"
-s = store.approve(s.session_id)
 assert s.phase == "hld" and s.design_step == 4
 print("d1", repr(s.design_diagram[:100]), flush=True)
 d1 = s.design_diagram

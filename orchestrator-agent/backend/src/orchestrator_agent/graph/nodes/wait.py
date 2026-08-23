@@ -10,6 +10,7 @@ from orchestrator_agent.graph.nodes.common import (
     close_user_message,
     decorate_service,
     replace_service,
+    spec_delta_is_ready,
 )
 from orchestrator_agent.query_intent import promote_chat_to_approve
 
@@ -136,8 +137,10 @@ def wait_node(state: dict[str, Any]) -> dict[str, Any]:
                 "discussing_features": "feature_discuss",
                 "awaiting_features": "feature_discuss",
                 "awaiting_stack": "stack_research",
-                "sent": "relations",
-                "approved": "relations",
+                "sent": "spec_update",
+                "approved": "spec_update",
+                "discussing_spec_update": "spec_update",
+                "awaiting_spec_update": "spec_update",
             }.get(status, "wait")
             return {
                 "services": services,
@@ -181,9 +184,33 @@ def wait_node(state: dict[str, Any]) -> dict[str, Any]:
                     "wait_kind": "distributed",
                     "messages": msgs,
                 }
+            if status == "awaiting_spec_update":
+                if not spec_delta_is_ready(svc):
+                    note = close_user_message(
+                        "There is no spec update to ship yet. Describe new or updated "
+                        "features and bugs first. A full-phase re-walk waits for a new "
+                        "architect design package.",
+                        svc=svc,
+                    )
+                    return {
+                        "services": services,
+                        "active_service_id": service_id,
+                        "route": "wait",
+                        "wait_kind": "distributed",
+                        "messages": msgs
+                        + [{"role": "assistant", "content": note, "node": "distributed"}],
+                    }
+                return {
+                    "services": services,
+                    "active_service_id": service_id,
+                    "route": "emit_plan",
+                    "wait_kind": "distributed",
+                    "messages": msgs,
+                }
             note = close_user_message(
-                "Chat on this tile to revise entity relationships, then approve through "
-                "a new engineer handoff.",
+                "Chat on this tile to add or update features and bugs, then confirm so "
+                "I can ship a new spec version. A full update that re-walks every "
+                "planning phase waits for a new architect design package.",
                 mode="handoff",
                 can_approve=False,
             )

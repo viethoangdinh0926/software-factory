@@ -31,6 +31,7 @@ class ParsedHandoff:
     microservice_name: str
     entity_relationships: str
     feature_spec: str
+    bug_spec: str
     tech_stack: str
     markdown: str
     related_entities: list[RelatedEntity] = field(default_factory=list)
@@ -119,6 +120,7 @@ def parse_handoff(markdown: str) -> ParsedHandoff:
         version = 1
     relations = _section(text, "Entity relationships")
     features = _section(text, "Features / functionality") or _section(text, "Features")
+    bugs = _section(text, "Bugs")
     stack = _section(text, "Tech stack")
     return ParsedHandoff(
         action=action,
@@ -128,6 +130,7 @@ def parse_handoff(markdown: str) -> ParsedHandoff:
         microservice_name=fields.get("microservice_name") or ("app" if not fields.get("microservice_id") else "Service"),
         entity_relationships=relations,
         feature_spec=features,
+        bug_spec=bugs,
         tech_stack=stack,
         markdown=text,
         related_entities=parse_related_entities(relations),

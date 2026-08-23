@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
+import queue
 
 from fastapi import APIRouter, Form, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from engineer_agent.config import get_settings
@@ -81,6 +85,41 @@ async def get_session(session_id: str) -> dict:
         return get_store().get(session_id).to_public()
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Unknown design session") from exc
+
+
+@router.get("/api/sessions/{session_id}/events")
+async def session_events(session_id: str) -> StreamingResponse:
+    store = get_store()
+    try:
+        store.get(session_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Unknown design session") from exc
+
+    async def stream():
+        watcher = store.watch(session_id)
+        try:
+            yield f"data: {json.dumps(store.get(session_id).to_public())}\n\n"
+            while True:
+                try:
+                    payload = await asyncio.to_thread(watcher.get, True, 15.0)
+                except queue.Empty:
+                    yield ": ping\n\n"
+                    continue
+                if payload is None:
+                    break
+                yield f"data: {json.dumps(payload)}\n\n"
+        finally:
+            store.unwatch(session_id, watcher)
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.post("/api/sessions/{session_id}/chat")

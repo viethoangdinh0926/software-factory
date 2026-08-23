@@ -16,7 +16,10 @@ export default defineConfig({
     port: 5175,
     proxy: {
       "/ingest": "http://127.0.0.1:8091",
-      "/api": "http://127.0.0.1:8091",
+      "/api": {
+        target: "http://127.0.0.1:8091",
+        timeout: 0,
+      },
       "/healthz": "http://127.0.0.1:8091",
     },
   },

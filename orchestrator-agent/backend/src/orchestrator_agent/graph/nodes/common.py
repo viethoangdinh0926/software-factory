@@ -65,6 +65,7 @@ APPROVE_LABELS = {
     "decide_api_type": "Approve relationships",
     "approve_api_design": "Approve relationships",
     "approve_plan": "Approve plan",
+    "approve_spec_update": "Ship spec update",
 }
 
 STATUS_APPROVE_KIND = {
@@ -74,6 +75,7 @@ STATUS_APPROVE_KIND = {
     "awaiting_api_design": "approve_relations",
     "awaiting_features": "approve_features",
     "awaiting_stack": "approve_plan",
+    "awaiting_spec_update": "approve_spec_update",
 }
 
 
@@ -85,6 +87,39 @@ def features_are_concrete(text: str) -> bool:
     bullets = len(re.findall(r"(?m)^\s*[-*]", body))
     numbered = len(re.findall(r"(?m)^\s*\d+\.", body))
     return (bullets + numbered) >= 4
+
+
+def bugs_are_concrete(text: str) -> bool:
+    """A usable bug list: at least one real item, not a placeholder."""
+    body = (text or "").strip()
+    if len(body) < 40:
+        return False
+    lower = body.lower()
+    if lower in {"(none)", "none", "n/a", "- none"}:
+        return False
+    bullets = len(re.findall(r"(?m)^\s*[-*]", body))
+    numbered = len(re.findall(r"(?m)^\s*\d+\.", body))
+    headings = len(re.findall(r"(?m)^#{2,3}\s+", body))
+    return (bullets + numbered + headings) >= 1
+
+
+def spec_delta_is_ready(svc: dict[str, Any] | None) -> bool:
+    """True when features or bugs changed since the last engineer ship."""
+    if not svc:
+        return False
+    features = str(svc.get("feature_spec") or "").strip()
+    bugs = str(svc.get("bug_spec") or "").strip()
+    shipped_features = str(svc.get("shipped_feature_spec") or "").strip()
+    shipped_bugs = str(svc.get("shipped_bug_spec") or "").strip()
+    features_changed = features != shipped_features
+    bugs_changed = bugs != shipped_bugs
+    if not features_changed and not bugs_changed:
+        return False
+    if features_changed and features and not features_are_concrete(features):
+        return False
+    if bugs_changed and bugs and not bugs_are_concrete(bugs) and not features_are_concrete(features):
+        return False
+    return bool(features_are_concrete(features) or bugs_are_concrete(bugs))
 
 
 def relation_artifact(svc: dict[str, Any] | None) -> str:
@@ -145,6 +180,8 @@ def decorate_service(svc: dict[str, Any], *, finalized: bool = False) -> dict[st
     out = dict(svc)
     out["can_approve"] = bool(kind) and open_disc
     if status == "awaiting_features" and not features_are_concrete(out.get("feature_spec") or ""):
+        out["can_approve"] = False
+    if status == "awaiting_spec_update" and not spec_delta_is_ready(out):
         out["can_approve"] = False
     if status in {
         "awaiting_relations",
@@ -270,6 +307,12 @@ def empty_service(
         "role_key": role_key,
         "architect_api_contract": contract,
         "feature_spec": "",
+        "bug_spec": "",
+        "spec_version": 0,
+        "spec_changelog": "",
+        "shipped_feature_spec": "",
+        "shipped_bug_spec": "",
+        "update_kind": "",
         "entity_relationships": "",
         "api_type": "",
         "api_type_recommendation": "",
@@ -378,7 +421,7 @@ def skill_digest() -> str:
 
     path = get_settings().skill_path
     try:
-        text = path.read_text(encoding="utf-8")[:4000]
+        text = path.read_text(encoding="utf-8")[:6000]
     except OSError:
         text = "You are the Software Factory Orchestrator."
     return f"{text}\n\n{EXPLANATION_DEPTH_DIGEST}"
@@ -441,6 +484,7 @@ def service_focus_user_block(
         f"Architect communication schemes (context only — do not lock protocols):\n{comms or '(none)'}",
         f"Agreed entity relationships:\n{relation_artifact(svc) or spec or '(not yet agreed)'}",
         f"Agreed features / functionality:\n{features or '(not yet agreed)'}",
+        f"Current bugs:\n{str(svc.get('bug_spec') or '').strip() or '(none)'}",
         "Recent tile conversation:\n" + ("\n".join(history_lines) if history_lines else "(none)"),
         f"Latest user message:\n{pending or '(none)'}",
     ]
