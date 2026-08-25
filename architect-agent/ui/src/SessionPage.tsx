@@ -11,7 +11,9 @@ import {
   marketEvaluationDownloadUrl,
   retryHandoff,
   specDownloadUrl,
-  trackStepLabel,
+  formatMessageNode,
+  sessionHeaderChips,
+  shouldShowMessageNode,
   type DesignSession,
 } from "./api";
 import {
@@ -58,7 +60,15 @@ mermaid.initialize({
     titleColor: "#000000",
     edgeLabelBackground: "#e8eef6",
     fontFamily: "IBM Plex Sans, sans-serif",
+    fontSize: "16px",
     fontWeight: "700",
+  },
+  flowchart: {
+    htmlLabels: true,
+    wrappingWidth: 200,
+    padding: 12,
+    nodeSpacing: 48,
+    rankSpacing: 56,
   },
 });
 void warmupMermaid();
@@ -121,7 +131,7 @@ export function SessionPage() {
     session?.design_justification?.trim() &&
       !(showComponents && catalogCoversDiagram(session.design_justification, diagramSource)),
   );
-  const trackChip = session ? trackStepLabel(session) : null;
+  const headerChips = session ? sessionHeaderChips(session) : [];
 
   const nodeTitle = useMemo(() => {
     if (!session) return "Loading…";
@@ -283,8 +293,11 @@ export function SessionPage() {
           <p className="brand">Architect Agent</p>
           <h1>Design atelier</h1>
           <div className="meta-row">
-            {trackChip ? <span className="chip">{trackChip}</span> : null}
-            <span className="chip">{session.phase.replaceAll("_", " ")}</span>
+            {headerChips.map((label) => (
+              <span key={label} className="chip">
+                {label}
+              </span>
+            ))}
             {session.market_evaluation_grade ? (
               <span className="chip accent">Grade {session.market_evaluation_grade}</span>
             ) : null}
@@ -400,7 +413,9 @@ export function SessionPage() {
               <div key={`${m.role}-${i}-${m.content.slice(0, 24)}`} className={`bubble ${m.role}`}>
                 <span className="who">
                   {m.role === "assistant" ? "Architect" : "You"}
-                  {m.node ? ` · ${m.node.replaceAll("_", " ")}` : ""}
+                  {shouldShowMessageNode(m.node, session.phase)
+                    ? ` · ${formatMessageNode(m.node)}`
+                    : ""}
                 </span>
                 <MarkdownView content={m.content} className="bubble-md" />
               </div>

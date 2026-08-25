@@ -325,6 +325,10 @@ echoed = without_user_echo(
 )
 assert "We should add rate limiting" not in echoed
 assert "HLD step 1 is ready." in echoed
+assert "video sharing platform" in without_user_echo(
+    "- The **video sharing platform** stores uploads.\n- CDN delivers playback.",
+    "video sharing platform",
+)
 assert "I heard you:" not in without_user_echo("I heard you: GDPR please.\nNext question?", "GDPR please")
 assert NEXT_PROMPT_HEADER not in with_next_prompt("Here is the proposal.")
 assert "click" not in without_user_echo(

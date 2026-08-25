@@ -45,7 +45,15 @@ mermaid.initialize({
     lineColor: "#4a5a70",
     textColor: "#000000",
     fontFamily: "IBM Plex Sans, sans-serif",
+    fontSize: "16px",
     fontWeight: "700",
+  },
+  flowchart: {
+    htmlLabels: true,
+    wrappingWidth: 200,
+    padding: 12,
+    nodeSpacing: 48,
+    rankSpacing: 56,
   },
 });
 

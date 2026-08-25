@@ -114,6 +114,22 @@ export function finalDownloadUrl(sessionId: string): string {
   return `/api/sessions/${sessionId}/download/final`;
 }
 
+export function formatPhaseLabel(phase: string | undefined): string | null {
+  const raw = (phase || "").trim().toLowerCase().replaceAll("_", " ");
+  if (!raw) return null;
+  if (raw === "phase0" || raw === "phase 0") return "Phase 0";
+  if (raw === "market research") return "Market evaluation";
+  if (raw === "lld") return "LLD";
+  if (raw === "hld") return "HLD";
+  if (raw === "done") return "Done";
+  return raw;
+}
+
+export function formatMessageNode(node?: string): string {
+  if (!node) return "";
+  return formatPhaseLabel(node) || node.replaceAll("_", " ");
+}
+
 export function trackStepLabel(session: DesignSession): string | null {
   const track = (session.design_track || "").toUpperCase();
   if (!track || track === "UNSET") {
@@ -127,4 +143,29 @@ export function trackStepLabel(session: DesignSession): string | null {
   if (step <= 0) return track;
   const title = (session.design_step_title || "").trim();
   return title ? `${track} · ${step}/${max} ${title}` : `${track} · Step ${step}/${max}`;
+}
+
+/** Header chips without repeating the same phase/track label twice. */
+export function sessionHeaderChips(session: DesignSession): string[] {
+  const track = trackStepLabel(session);
+  const phase = formatPhaseLabel(session.phase);
+  const chips: string[] = [];
+  if (track) chips.push(track);
+  if (phase && !chipIsRedundant(track, phase)) chips.push(phase);
+  return chips;
+}
+
+function chipIsRedundant(track: string | null, phase: string): boolean {
+  if (!track) return false;
+  const t = track.toLowerCase();
+  const p = phase.toLowerCase();
+  return t === p || t.includes(p);
+}
+
+export function shouldShowMessageNode(node: string | undefined, phase: string): boolean {
+  const label = formatMessageNode(node);
+  const current = formatPhaseLabel(phase);
+  if (!label) return false;
+  if (!current) return true;
+  return label.toLowerCase() !== current.toLowerCase();
 }

@@ -2,21 +2,70 @@ import { useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { startDesign } from "./api";
 
-const FLOW_STEPS = [
+const ROUND_STEPS = [
   {
     n: "0",
     title: "Phase 0 — Scope & spec",
-    body: "Clarify the product, actors, v1 scope, and invariants. Classify LLD (one process, including a local stand-alone app) vs HLD (distributed). Product analogies like YouTube do not override an explicit stand-alone request.",
+    body: "Clarify the product, actors, v1 scope, and invariants. Classify LLD (one OS process, including a local stand-alone app) vs HLD (distributed). Product analogies like YouTube do not override an explicit stand-alone request. You confirm the classified track before design starts.",
+  },
+];
+
+const LLD_STEPS = [
+  {
+    n: "1",
+    title: "Information gathering",
+    body: "Lock the in-process rules: business invariants, concurrency, and data lifecycle inside one process. This is the contract the class design must obey.",
   },
   {
-    n: "1–N",
-    title: "Design track, in order",
-    body: "LLD has 3 steps (rules, blueprint, verify). HLD has 6 (capacity, domain objects, services, communication & diagram, FMEA, synthesis). Confirm each step before the next.",
+    n: "2",
+    title: "Architectural blueprint",
+    body: "Draw the class/structure diagram: objects, interfaces, patterns (Strategy, Factory, Observer, …), and how the design meets SOLID. Each box is a type in the single process, not a network service.",
   },
+  {
+    n: "3",
+    title: "Verification",
+    body: "Walk the blueprint against the spec invariants. Iterate until the structure is complete enough to approve as a design version.",
+  },
+];
+
+const HLD_STEPS = [
+  {
+    n: "1",
+    title: "Requirements & capacity estimation",
+    body: "Functional journeys plus NFRs (availability, latency, durability, security). Propose scale numbers (DAU, peak concurrency, ingest, storage growth) and have you confirm or correct them.",
+  },
+  {
+    n: "2",
+    title: "Domain object modeling",
+    body: "Name the core entities, attributes, and relationships (1:1, 1:N, N:M), and who owns each object. This catalog is the input to service splits — not a class diagram.",
+  },
+  {
+    n: "3",
+    title: "Core microservices",
+    body: "Split owned objects into bounded-context services. Each service lists owned objects, operations, and collaborators. No HTTP METHOD/path catalogs — protocols come next.",
+  },
+  {
+    n: "4",
+    title: "Communication, infrastructure & system diagram",
+    body: "Name how clients, services, and infra talk (REST, gRPC, WebSocket, Kafka, …), pick gateways, stores, caches, brokers, and CAP/PACELC trade-offs, then draw the system diagram (clients → gateway → services → stores/CDN).",
+  },
+  {
+    n: "5",
+    title: "Vulnerability & edge-case analysis (FMEA)",
+    body: "Structured failure modes: SPOFs, bottlenecks, races, split-brain. Each row has impact and mitigation, checked against the NFRs and CAP choices.",
+  },
+  {
+    n: "6",
+    title: "Session synthesis & wrap-up",
+    body: "Architectural summary: stack, residual risks, and a walkthrough of every diagram box. Confirm this version to run market evaluation.",
+  },
+];
+
+const AFTER_TRACK = [
   {
     n: "M",
     title: "Market evaluation",
-    body: "After you approve a full design version, the architect grades the idea against alternatives.",
+    body: "After you approve a full design version, the architect grades the idea against alternatives and writes a market report.",
   },
   {
     n: "H",
@@ -70,7 +119,58 @@ export function HomePage() {
           <span className="panel-kicker">In order</span>
         </div>
         <ol className="flow-steps">
-          {FLOW_STEPS.map((step) => (
+          {ROUND_STEPS.map((step) => (
+            <li key={step.n}>
+              <span className="flow-index">{step.n}</span>
+              <div>
+                <strong>{step.title}</strong>
+                <p>{step.body}</p>
+              </div>
+            </li>
+          ))}
+        </ol>
+
+        <div className="track-grid">
+          <article className="track-card" aria-labelledby="lld-heading">
+            <h3 id="lld-heading">LLD — one process</h3>
+            <p className="track-lede">
+              Chosen when the system is a local, self-contained, desktop, CLI, or
+              single-host monolith. Three steps; each must be confirmed before the next.
+            </p>
+            <ol className="track-steps">
+              {LLD_STEPS.map((step) => (
+                <li key={step.n}>
+                  <span className="flow-index">{step.n}</span>
+                  <div>
+                    <strong>{step.title}</strong>
+                    <p>{step.body}</p>
+                  </div>
+                </li>
+              ))}
+            </ol>
+          </article>
+          <article className="track-card" aria-labelledby="hld-heading">
+            <h3 id="hld-heading">HLD — distributed</h3>
+            <p className="track-lede">
+              Chosen when you want microservices, multi-node storage, a gateway, CDN,
+              or other network topology. Six steps; LLD does not precede this track.
+            </p>
+            <ol className="track-steps">
+              {HLD_STEPS.map((step) => (
+                <li key={step.n}>
+                  <span className="flow-index">{step.n}</span>
+                  <div>
+                    <strong>{step.title}</strong>
+                    <p>{step.body}</p>
+                  </div>
+                </li>
+              ))}
+            </ol>
+          </article>
+        </div>
+
+        <ol className="flow-steps">
+          {AFTER_TRACK.map((step) => (
             <li key={step.n}>
               <span className="flow-index">{step.n}</span>
               <div>
@@ -82,8 +182,8 @@ export function HomePage() {
         </ol>
         <ul className="flow-rules">
           <li>
-            You cannot jump ahead. Each phase must be confirmed before the next
-            begins.
+            You cannot jump ahead. Each phase and track step must be confirmed
+            before the next begins.
           </li>
           <li>
             If a change belongs to an earlier phase — for example a new spec

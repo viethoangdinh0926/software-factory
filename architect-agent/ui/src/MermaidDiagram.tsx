@@ -129,6 +129,7 @@ export function MermaidDiagram({ source }: Props) {
         sceneRef.current = scene;
         viewRef.current = { x: 0, y: 0, scale: 1 };
         applyView();
+        unclipDiagramLabels(svgEl);
 
         const nodes = new Map<string, SVGGElement>();
         scene.querySelectorAll<SVGGElement>("g.node, g.cluster").forEach((el) => {
@@ -759,6 +760,35 @@ function parseEdgeEndpoints(
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+/** Let node/edge labels paint in full — Mermaid sizes boxes before bold CSS applies. */
+function unclipDiagramLabels(svgEl: SVGSVGElement) {
+  svgEl.querySelectorAll("foreignObject").forEach((fo) => {
+    fo.setAttribute("overflow", "visible");
+    const inner = fo.querySelector("div, span, p") as HTMLElement | null;
+    if (inner) {
+      inner.style.overflow = "visible";
+      inner.style.whiteSpace = "pre-wrap";
+      inner.style.wordBreak = "break-word";
+      inner.style.textOverflow = "unset";
+      const extra = 8;
+      const width = Math.max(
+        Number(fo.getAttribute("width")) || 0,
+        Math.ceil(inner.scrollWidth) + extra,
+      );
+      const height = Math.max(
+        Number(fo.getAttribute("height")) || 0,
+        Math.ceil(inner.scrollHeight) + extra,
+      );
+      fo.setAttribute("width", String(width));
+      fo.setAttribute("height", String(height));
+    }
+  });
+  svgEl.querySelectorAll("text").forEach((el) => {
+    el.removeAttribute("textLength");
+    el.removeAttribute("lengthAdjust");
+  });
 }
 
 function readTranslate(el: SVGGElement): Point {

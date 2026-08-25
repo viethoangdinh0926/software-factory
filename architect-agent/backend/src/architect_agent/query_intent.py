@@ -511,21 +511,12 @@ def without_click_instruction(message: str) -> str:
 
 
 def without_user_echo(message: str, user_text: str = "") -> str:
-    """Drop verbatim restatements of the user's last message from an assistant reply."""
+    """Drop a leading 'I heard you: …' restatement — never punch holes in the reply."""
+    del user_text
     body = (message or "").strip()
     if not body:
         return body
-    cleaned = without_click_instruction(_ECHO_PREFIX_RE.sub("", body).strip())
-    cleaned = without_click_instruction(cleaned)
-    quoted = re.sub(r"\s+", " ", (user_text or "").strip())
-    if quoted and len(quoted) >= 8:
-        for wrap in (f"({quoted})", f'"{quoted}"', f"'{quoted}'"):
-            cleaned = cleaned.replace(wrap, "")
-        if quoted in cleaned:
-            cleaned = cleaned.replace(quoted, "")
-        cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
-        cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
-    return cleaned or body
+    return without_click_instruction(_ECHO_PREFIX_RE.sub("", body).strip())
 
 
 def with_next_prompt(

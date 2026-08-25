@@ -38,10 +38,26 @@ function decodeLatexSpan(inner: string): string {
     .replace(/\\([A-Za-z]+)\s*/g, "$1 ");
 }
 
+/** Keep `<User Service>`-style labels; only real HTML tags stay tags. */
+const KNOWN_HTML_TAG = /^(?:\/)?(?:a|abbr|b|blockquote|br|code|div|em|h[1-6]|hr|i|img|li|ol|p|pre|span|strong|table|tbody|td|th|thead|tr|ul)(?:\s|\/|$)/i;
+
+export function preserveAngleBrackets(content: string): string {
+  if (!content.includes("<")) return content;
+  return content.replace(/<([^>\n]{1,120})>/g, (full, inner: string) => {
+    const body = inner.trim();
+    if (!body || body.startsWith("!--") || body.startsWith("?") || KNOWN_HTML_TAG.test(body)) {
+      return full;
+    }
+    return `&lt;${inner}&gt;`;
+  });
+}
+
 export function MarkdownView({ content, className }: Props) {
   return (
     <div className={className ? `md ${className}` : "md"}>
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{softenLatex(content)}</ReactMarkdown>
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+        {preserveAngleBrackets(softenLatex(content))}
+      </ReactMarkdown>
     </div>
   );
 }

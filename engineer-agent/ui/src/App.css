@@ -423,7 +423,7 @@ button.approve-btn:disabled {
 .session-grid .chat-panel .messages {
   flex: 1 1 auto;
   min-height: 0;
-  overflow-x: hidden;
+  overflow-x: auto;
   overflow-y: auto;
 }
 
@@ -559,6 +559,8 @@ button.approve-btn:disabled {
   line-height: 1.5;
   border: 1px solid var(--line);
   animation: bubble-in 0.28s ease-out both;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .bubble.assistant {
@@ -722,12 +724,11 @@ textarea::placeholder {
   border: 1px solid var(--line);
   border-radius: 0.8rem;
   padding: 0.95rem 1rem;
-  overflow: auto;
-  max-height: 38vh;
+  overflow: visible;
 }
 
 .doc-tall {
-  max-height: 55vh;
+  max-height: none;
 }
 
 .diagram {
@@ -868,7 +869,7 @@ textarea::placeholder {
   }
 }
 
-/* Black, bold labels on all diagram components */
+/* Black, bold labels on all diagram components — do not clip overflow */
 .diagram .nodeLabel,
 .diagram .edgeLabel,
 .diagram .cluster-label,
@@ -877,16 +878,28 @@ textarea::placeholder {
   fill: #000 !important;
   color: #000 !important;
   font-weight: 700 !important;
+  overflow: visible !important;
+}
+
+.diagram foreignObject {
+  overflow: visible !important;
 }
 
 .diagram .nodeLabel foreignObject div,
 .diagram .edgeLabel foreignObject div,
 .diagram .label foreignObject div,
 .diagram foreignObject div,
-.diagram foreignObject span {
+.diagram foreignObject span,
+.diagram .nodeLabel p,
+.diagram .nodeLabel span {
   color: #000 !important;
   font-weight: 700 !important;
   background: transparent !important;
+  overflow: visible !important;
+  text-overflow: unset !important;
+  white-space: pre-wrap !important;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .diagram .edgePath .path,
@@ -897,6 +910,8 @@ textarea::placeholder {
 /* Markdown rendering */
 .md {
   min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .md > *:first-child {
@@ -991,6 +1006,8 @@ textarea::placeholder {
   width: 100%;
   border-collapse: collapse;
   font-size: 0.88rem;
+  display: block;
+  overflow-x: auto;
 }
 
 .md th,
@@ -1006,10 +1023,18 @@ textarea::placeholder {
 
 .bubble-md {
   font-size: 0.95rem;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .bubble-md p {
   margin: 0.4rem 0;
+}
+
+.bubble-md p,
+.bubble-md li {
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .error {
@@ -1202,7 +1227,7 @@ textarea::placeholder {
 .service-tile .tile-body {
   flex: 1 1 auto;
   min-height: 0;
-  overflow-x: hidden;
+  overflow-x: auto;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -1252,7 +1277,8 @@ textarea::placeholder {
 
 .workflow-banner {
   margin: 0 0 1rem;
-  max-height: 8rem;
+  max-height: none;
+  overflow: visible;
 }
 
 .lock-note {
