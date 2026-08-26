@@ -9,6 +9,7 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from orchestrator_agent.ascii_text import fold_to_ascii, fold_json_strings, with_ascii_instruction
 from orchestrator_agent.discussion_memory import (
     DISCUSSION_MEMORY_RULES,
     consult_user_turn,
@@ -32,7 +33,7 @@ _RETRY_HINT = (
     "CRITICAL FORMAT ERROR. Your previous reply was NOT valid JSON.\n"
     "Respond with ONE JSON object. FIRST non-whitespace character must be `{`.\n"
     "Keep assistant_message's full elaborated justification; escape its newlines as \\n. "
-    "Do not use LaTeX ($\\text{...}$ / $\\approx$); write plain text or unicode."
+    "Do not use LaTeX ($\\text{...}$ / $\\approx$); write plain ASCII (approx, x, <=)."
 )
 
 # Appended to skill_digest() so every orchestrator prompt inherits the same depth bar:
@@ -202,6 +203,14 @@ def decorate_service(svc: dict[str, Any], *, finalized: bool = False) -> dict[st
     out["approve_kind"] = kind if out["can_approve"] else ""
     out["approve_label"] = approve_label(kind) if out["can_approve"] else ""
     out["discussion_open"] = open_disc
+    from orchestrator_agent.workflow import service_workflow_tiles
+
+    out["workflow"] = service_workflow_tiles(out)
+    msgs = out.get("messages") or []
+    out["messages"] = [
+        {**m, "content": fold_to_ascii(str(m.get("content") or ""))} if isinstance(m, dict) else m
+        for m in msgs
+    ]
     return out
 
 
@@ -241,10 +250,13 @@ def invoke_json(
     recover_prose: ProseRecover | None = None,
 ) -> dict[str, Any]:
     model = get_chat_model()
+    from orchestrator_agent.workflow import apply_workflow_instruction
+
+    system = with_ascii_instruction(apply_workflow_instruction(system))
     messages = [SystemMessage(content=system), HumanMessage(content=user)]
     content = _invoke_content(model, messages)
     try:
-        return parse_llm_json_object(content)
+        return fold_json_strings(parse_llm_json_object(content))
     except ValueError as first_exc:
         logger.warning("LLM JSON parse failed; retrying once: %s", first_exc)
         retry_messages = [
@@ -255,7 +267,7 @@ def invoke_json(
         ]
         content2 = _invoke_content(model, retry_messages)
         try:
-            return parse_llm_json_object(content2)
+            return fold_json_strings(parse_llm_json_object(content2))
         except ValueError as second_exc:
             for blob in (content2, content):
                 if recover_prose is not None:
@@ -265,7 +277,7 @@ def invoke_json(
                             "LLM JSON parse failed after retry; using prose recovery: %s",
                             second_exc,
                         )
-                        return recovered
+                        return fold_json_strings(recovered)
             raise ValueError(f"LLM JSON parse failed after retry: {second_exc}") from first_exc
 
 

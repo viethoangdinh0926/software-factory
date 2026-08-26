@@ -208,6 +208,7 @@ def _llm_rewind_stage(text: str, context: str) -> str | None:
     try:
         from langchain_core.messages import HumanMessage, SystemMessage
 
+        from architect_agent.ascii_text import with_ascii_instruction
         from architect_agent.json_util import parse_llm_json_object
         from architect_agent.llm import get_chat_model
 
@@ -221,7 +222,7 @@ def _llm_rewind_stage(text: str, context: str) -> str | None:
         model = get_chat_model()
         response = model.invoke(
             [
-                SystemMessage(content=_REWIND_SYSTEM),
+                SystemMessage(content=with_ascii_instruction(_REWIND_SYSTEM)),
                 HumanMessage(
                     content=(
                         "Decide whether this turn stays here, rewinds, or jumps ahead "

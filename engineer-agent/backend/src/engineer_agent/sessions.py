@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from engineer_agent.ascii_text import fold_to_ascii
 from engineer_agent.config import get_settings
 from engineer_agent.discussion_memory import (
     DISCUSSION_MEMORY_RULES,
@@ -235,7 +236,22 @@ def decorate_sub(sub: dict[str, Any]) -> dict[str, Any]:
     out["discussion_open"] = not suspended
     issue = out.get("block_issue") if isinstance(out.get("block_issue"), dict) else {}
     out["block_issue"] = issue if blocked and issue else None
+    from engineer_agent.workflow import sub_workflow_tiles
+
+    out["workflow"] = sub_workflow_tiles(out)
+    msgs = out.get("messages") or []
+    out["messages"] = [
+        {**m, "content": fold_to_ascii(str(m.get("content") or ""))} if isinstance(m, dict) else m
+        for m in msgs
+    ]
     return out
+
+
+def bind_sub_workflow(sub: dict[str, Any]) -> None:
+    from engineer_agent.workflow import set_workflow_position
+
+    wf = decorate_sub(sub).get("workflow") or {}
+    set_workflow_position(str(wf.get("title") or sub.get("status") or "plan"))
 
 
 @dataclass
@@ -303,7 +319,10 @@ class FleetSession:
             "updated_at": self.updated_at,
             "design_version": self.design_version,
             "sub_agents": subs,
-            "messages": self.messages,
+            "messages": [
+                {**m, "content": fold_to_ascii(str(m.get("content") or ""))} if isinstance(m, dict) else m
+                for m in self.messages
+            ],
             "git_repo_url": self.git_repo_url,
             "git_key_configured": bool(self.git_ssh_private_key),
             "git_received_at": self.git_received_at,
@@ -535,6 +554,7 @@ class SessionStore:
             text = (message or "").strip()
             if not text:
                 raise ValueError("message is required")
+            bind_sub_workflow(sub)
             last_asst = ""
             for msg in reversed(sub.get("messages") or []):
                 if isinstance(msg, dict) and msg.get("role") == "assistant":
@@ -545,7 +565,9 @@ class SessionStore:
             decorated = decorate_sub(sub)
             context = format_classify_context(
                 workflow=(
-                    f"Engineer sub-status={status} can_approve={bool(decorated.get('can_approve'))}."
+                    f"Engineer current step: {decorated.get('workflow', {}).get('title') or status}. "
+                    f"sub-status={status} can_approve={bool(decorated.get('can_approve'))}. "
+                    "Stay on this step unless they approved, paused, or asked to execute."
                 ),
                 last_assistant=last_asst,
             )
@@ -719,6 +741,7 @@ class SessionStore:
             sub = session.find(service_id)
             if not sub:
                 raise KeyError(service_id or session_id)
+            bind_sub_workflow(sub)
             return self._approve_locked(session, sub)
 
     def pause(self, session_id: str, *, service_id: str | None = None) -> FleetSession:
@@ -727,6 +750,7 @@ class SessionStore:
             sub = session.find(service_id)
             if not sub:
                 raise KeyError(service_id or session_id)
+            bind_sub_workflow(sub)
             return self._pause_locked(session, sub)
 
     def execute(self, session_id: str, *, service_id: str | None = None) -> FleetSession:
@@ -735,6 +759,7 @@ class SessionStore:
             sub = session.find(service_id)
             if not sub:
                 raise KeyError(service_id or session_id)
+            bind_sub_workflow(sub)
             status = str(sub.get("status") or "")
             if status == "awaiting_plan":
                 return self._approve_locked(session, sub)
@@ -864,6 +889,7 @@ class SessionStore:
         sub["git_ship_error"] = ""
         sub["block_issue"] = {}
         sub["resume_instructions"] = ""
+        bind_sub_workflow(sub)
         self._draft_offered_api(sub)
         self._draft_execution_plan(sub)
         msgs = list(sub.get("messages") or [])
@@ -892,6 +918,7 @@ class SessionStore:
         self._refresh_consults(session)
 
     def _draft_offered_api(self, sub: dict[str, Any]) -> None:
+        bind_sub_workflow(sub)
         name = str(sub.get("microservice_name") or "Service")
         result = invoke_json(
             system=(
@@ -943,6 +970,7 @@ class SessionStore:
         )
 
     def _draft_execution_plan(self, sub: dict[str, Any]) -> None:
+        bind_sub_workflow(sub)
         name = str(sub.get("microservice_name") or "Service")
         prior_plan = sub.get("previous_execution_plan") if isinstance(sub.get("previous_execution_plan"), dict) else {}
         version = int((prior_plan or {}).get("version") or 0) + 1
@@ -1188,6 +1216,7 @@ class SessionStore:
         session.replace(updated)
 
     def _tick_locked(self, session: FleetSession, sub: dict[str, Any]) -> bool:
+        bind_sub_workflow(sub)
         updated = dict(sub)
         plan = updated.get("execution_plan") if isinstance(updated.get("execution_plan"), dict) else {}
         nxt = next_runnable_item(plan)
@@ -1394,6 +1423,7 @@ class SessionStore:
             time.sleep(0.15)
 
     def _answer(self, sub: dict[str, Any], question: str) -> str:
+        bind_sub_workflow(sub)
         last_assistant = ""
         for msg in reversed(sub.get("messages") or []):
             if isinstance(msg, dict) and msg.get("role") == "assistant":

@@ -5,6 +5,7 @@ import {
   chat,
   execute,
   getSession,
+  packageDownloadUrl,
   pause,
   subLabel,
   type ExecutionPlan,
@@ -131,9 +132,53 @@ function SubTile({
     >
       <div className="panel-head">
         <h2>{subLabel(sub)}</h2>
-        <span className="panel-kicker">{sub.status}</span>
+        <span className="panel-kicker">{sub.workflow?.title || sub.status}</span>
       </div>
       <p className="lede mono">{sub.sub_agent_id}</p>
+      {sub.workflow?.tiles?.length ? (
+        <>
+          <nav className="workflow-rail" aria-label="Engineer workflow">
+            {sub.workflow.tiles.map((tile) => (
+              <a key={tile.id} className={`workflow-rail-item ${tile.status}`} href={`#${sub.sub_agent_id}-${tile.id}`}>
+                {tile.title}
+              </a>
+            ))}
+          </nav>
+          {sub.workflow.tiles.map((tile) => (
+            <article
+              key={tile.id}
+              id={`${sub.sub_agent_id}-${tile.id}`}
+              className={`artifact workflow-tile ${tile.status}`}
+            >
+              <div className="panel-head">
+                <h3>{tile.title}</h3>
+                <span className="panel-kicker">{tile.status}</span>
+              </div>
+              {tile.id === "plan" ? (
+                <PlanList plan={sub.execution_plan} locked={Boolean(sub.plan_locked)} />
+              ) : tile.body ? (
+                <div className="doc">
+                  <MarkdownView content={tile.body} />
+                </div>
+              ) : (
+                <p className="lede">This step has not started.</p>
+              )}
+            </article>
+          ))}
+        </>
+      ) : (
+        <>
+          <PlanList plan={sub.execution_plan} locked={Boolean(sub.plan_locked)} />
+          {sub.offered_api ? (
+            <article className="artifact">
+              <h3>Offered API</h3>
+              <div className="doc">
+                <MarkdownView content={sub.offered_api} />
+              </div>
+            </article>
+          ) : null}
+        </>
+      )}
       {sub.status === "blocked" && sub.block_issue ? (
         <div className="error banner block-issue" role="alert">
           <div>
@@ -164,15 +209,6 @@ function SubTile({
       ) : (
         <p className="lede">Does not initiate toward other core microservices.</p>
       )}
-      <PlanList plan={sub.execution_plan} locked={Boolean(sub.plan_locked)} />
-      {sub.offered_api ? (
-        <article className="artifact">
-          <h3>Offered API</h3>
-          <div className="doc">
-            <MarkdownView content={sub.offered_api} />
-          </div>
-        </article>
-      ) : null}
       {initiators.some((c) => c.offered_api) ? (
         <article className="artifact">
           <h3>Consulted peer APIs</h3>
@@ -294,9 +330,14 @@ export function SessionPage() {
             <p className="lede">No git repo yet. Send SSH access from the orchestrator session.</p>
           )}
         </div>
-        <Link className="btn ghost" to="/">
-          All fleets
-        </Link>
+        <div className="actions">
+          <Link className="btn ghost" to="/">
+            All fleets
+          </Link>
+          <a className="btn ghost" href={packageDownloadUrl(session.design_session_id)}>
+            Download package
+          </a>
+        </div>
       </header>
       {error ? (
         <div className="error banner" role="alert">

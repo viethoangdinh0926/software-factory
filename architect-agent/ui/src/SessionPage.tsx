@@ -15,6 +15,7 @@ import {
   sessionHeaderChips,
   shouldShowMessageNode,
   type DesignSession,
+  type WorkflowTile,
 } from "./api";
 import {
   catalogCoversDiagram,
@@ -127,21 +128,20 @@ export function SessionPage() {
     : "";
   const showComponentWalkthrough =
     Boolean(session && showComponents && !chatDescribesComponents(session.messages, diagramSource));
-  const showJustification = Boolean(
-    session?.design_justification?.trim() &&
-      !(showComponents && catalogCoversDiagram(session.design_justification, diagramSource)),
-  );
   const headerChips = session ? sessionHeaderChips(session) : [];
+  const workflow = session?.workflow;
+  const workflowTiles = workflow?.tiles || [];
 
   const nodeTitle = useMemo(() => {
     if (!session) return "Loading…";
     if (session.finalized) return "Design finalized";
+    if (workflow?.title) return workflow.title;
     if (inMarket) return "Market evaluation";
     if (session.phase === "lld") return "Low-level design";
     if (session.phase === "hld") return "High-level design";
     if (session.phase === "phase0") return "Scope classification";
     return "Design session";
-  }, [session, inMarket]);
+  }, [session, inMarket, workflow?.title]);
 
   async function onChat(e: FormEvent) {
     e.preventDefault();
@@ -279,11 +279,6 @@ export function SessionPage() {
         : "Answer the architect…";
 
   const showMarketReport = Boolean(session.market_evaluation_report?.trim());
-  const showLedger = Boolean(session.tradeoff_ledger?.trim());
-  const showScale = Boolean(session.scale_estimates?.trim());
-  const showServices = Boolean(session.api_contracts?.trim());
-  const showComms = Boolean(session.communication_schemes?.trim());
-  const showFmea = Boolean(session.fmea_notes?.trim());
 
   return (
     <div className="app session-app">
@@ -475,98 +470,62 @@ export function SessionPage() {
         </section>
 
         <section className="panel view-panel">
-          {showDiagram ? (
-            <div className="artifact diagram-artifact">
-              <div className="panel-head">
-                <h2>System design diagram</h2>
-                <span className="panel-kicker">Diagram</span>
+          {workflowTiles.length ? (
+            <>
+              <nav className="workflow-rail" aria-label="Design workflow">
+                {workflowTiles.map((tile: WorkflowTile) => (
+                  <a
+                    key={tile.id}
+                    className={`workflow-rail-item ${tile.status}`}
+                    href={`#wf-${tile.id}`}
+                  >
+                    {tile.title}
+                  </a>
+                ))}
+              </nav>
+              {workflowTiles.map((tile: WorkflowTile) => (
+                <article
+                  key={tile.id}
+                  id={`wf-${tile.id}`}
+                  className={`artifact workflow-tile ${tile.status}${
+                    tile.diagram ? " diagram-artifact" : ""
+                  }`}
+                >
+                  <div className="panel-head">
+                    <h2>{tile.title}</h2>
+                    <span className="panel-kicker">{tile.status}</span>
+                  </div>
+                  {tile.diagram ? <MermaidDiagram source={tile.diagram} /> : null}
+                  {tile.body ? (
+                    <MarkdownView content={tile.body} className="doc" />
+                  ) : tile.status === "pending" ? (
+                    <p className="lede">This step has not started.</p>
+                  ) : tile.diagram ? null : (
+                    <p className="lede">Waiting for this step's artifact.</p>
+                  )}
+                </article>
+              ))}
+            </>
+          ) : (
+            <>
+              {showDiagram ? (
+                <div className="artifact diagram-artifact">
+                  <div className="panel-head">
+                    <h2>System design diagram</h2>
+                    <span className="panel-kicker">Diagram</span>
+                  </div>
+                  <MermaidDiagram source={diagramSource} />
+                </div>
+              ) : null}
+              <div className="artifact">
+                <div className="panel-head">
+                  <h2>Living business specification</h2>
+                  <span className="panel-kicker">Spec</span>
+                </div>
+                <MarkdownView content={specForPanel} className="doc" />
               </div>
-              <MermaidDiagram source={diagramSource} />
-            </div>
-          ) : null}
-          {showComponents ? (
-            <div className="artifact">
-              <div className="panel-head">
-                <h2>Diagram components</h2>
-                <span className="panel-kicker">Spec</span>
-              </div>
-              <MarkdownView content={componentCatalog} className="doc" />
-            </div>
-          ) : null}
-          <div className="artifact">
-            <div className="panel-head">
-              <h2>Living business specification</h2>
-              <span className="panel-kicker">Spec</span>
-            </div>
-            <MarkdownView content={specForPanel} className="doc" />
-          </div>
-          {showLedger ? (
-            <div className="artifact">
-              <div className="panel-head">
-                <h2>Trade-off ledger</h2>
-                <span className="panel-kicker">Decisions</span>
-              </div>
-              <MarkdownView content={session.tradeoff_ledger} className="doc" />
-            </div>
-          ) : null}
-          {showScale ? (
-            <div className="artifact">
-              <div className="panel-head">
-                <h2>Scale estimates</h2>
-                <span className="panel-kicker">Capacity</span>
-              </div>
-              <MarkdownView content={session.scale_estimates} className="doc" />
-            </div>
-          ) : null}
-          {showServices ? (
-            <div className="artifact">
-              <div className="panel-head">
-                <h2>Core microservices</h2>
-                <span className="panel-kicker">Ownership</span>
-              </div>
-              <MarkdownView content={session.api_contracts} className="doc" />
-            </div>
-          ) : null}
-          {showComms ? (
-            <div className="artifact">
-              <div className="panel-head">
-                <h2>Communication schemes</h2>
-                <span className="panel-kicker">Protocols</span>
-              </div>
-              <MarkdownView content={session.communication_schemes} className="doc" />
-            </div>
-          ) : null}
-          {showFmea ? (
-            <div className="artifact">
-              <div className="panel-head">
-                <h2>FMEA notes</h2>
-                <span className="panel-kicker">Risks</span>
-              </div>
-              <MarkdownView content={session.fmea_notes} className="doc" />
-            </div>
-          ) : null}
-          {showMarketReport ? (
-            <div className="artifact">
-              <div className="panel-head">
-                <h2>Market evaluation</h2>
-                <span className="panel-kicker">
-                  {session.market_evaluation_grade
-                    ? `Grade ${session.market_evaluation_grade}`
-                    : "Report"}
-                </span>
-              </div>
-              <MarkdownView content={session.market_evaluation_report} className="doc doc-tall" />
-            </div>
-          ) : null}
-          {showJustification ? (
-            <div className="artifact">
-              <div className="panel-head">
-                <h2>Justification</h2>
-                <span className="panel-kicker">Rationale</span>
-              </div>
-              <MarkdownView content={session.design_justification} className="doc" />
-            </div>
-          ) : null}
+            </>
+          )}
         </section>
       </main>
     </div>

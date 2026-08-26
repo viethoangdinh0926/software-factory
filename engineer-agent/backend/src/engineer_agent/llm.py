@@ -14,6 +14,8 @@ from langchain_core.outputs import ChatGeneration, ChatResult
 
 from engineer_agent.config import get_settings
 from engineer_agent.json_util import parse_llm_json_object
+from engineer_agent.ascii_text import fold_json_strings, with_ascii_instruction
+from engineer_agent.workflow import apply_workflow_instruction
 
 logger = logging.getLogger(__name__)
 
@@ -573,13 +575,15 @@ def _stub_implement(blob: str) -> dict[str, Any]:
 
 def invoke_json(system: str, user: str) -> dict[str, Any]:
     model = get_chat_model()
-    response = model.invoke([SystemMessage(content=system), HumanMessage(content=user)])
+    response = model.invoke(
+        [SystemMessage(content=with_ascii_instruction(apply_workflow_instruction(system))), HumanMessage(content=user)]
+    )
     content = response.content
     if isinstance(content, list):
         content = "".join(
             block.get("text", "") if isinstance(block, dict) else str(block) for block in content
         )
-    return parse_llm_json_object(str(content or ""))
+    return fold_json_strings(parse_llm_json_object(str(content or "")))
 
 
 @lru_cache

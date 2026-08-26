@@ -22,6 +22,7 @@ import {
   serviceLabel,
   type MicroservicePlan,
   type WorkflowSession,
+  type WorkflowState,
 } from "./api";
 import { MarkdownView } from "./MarkdownView";
 import { MermaidDiagram } from "./MermaidDiagram";
@@ -62,6 +63,19 @@ function onComposerKey(e: KeyboardEvent<HTMLTextAreaElement>) {
     e.preventDefault();
     e.currentTarget.form?.requestSubmit();
   }
+}
+
+function WorkflowStrip({ workflow }: { workflow?: WorkflowState }) {
+  if (!workflow?.tiles?.length) return null;
+  return (
+    <nav className="workflow-rail" aria-label="Workflow steps">
+      {workflow.tiles.map((tile) => (
+        <span key={tile.id} className={`workflow-rail-item ${tile.status}`}>
+          {tile.title}
+        </span>
+      ))}
+    </nav>
+  );
 }
 
 function SpecIcon() {
@@ -134,6 +148,24 @@ function InterviewResultsModal({
 }
 
 function ServiceInterviewArtifacts({ svc }: { svc: MicroservicePlan }) {
+  if (svc.workflow?.tiles?.length) {
+    return (
+      <>
+        {svc.workflow.tiles.map((tile) => (
+          <article key={tile.id} className={`artifact workflow-tile ${tile.status}`}>
+            <h3>{tile.title}</h3>
+            {tile.body ? (
+              <div className="doc">
+                <MarkdownView content={tile.body} />
+              </div>
+            ) : (
+              <p className="lede">This step has not started.</p>
+            )}
+          </article>
+        ))}
+      </>
+    );
+  }
   const relations = svc.entity_relationships || svc.api_design;
   const hasAny = Boolean(
     svc.feature_spec || relations || svc.tech_stack || svc.plan_spec || svc.bug_spec,
@@ -276,6 +308,21 @@ function ServiceTile({
         </div>
       </div>
       <p className="mono tile-id">{svc.microservice_id}</p>
+      <WorkflowStrip workflow={svc.workflow} />
+      {svc.workflow?.tiles?.length
+        ? svc.workflow.tiles.map((tile) => (
+            <article key={tile.id} className={`artifact workflow-tile ${tile.status}`}>
+              <h3>{tile.title}</h3>
+              {tile.body ? (
+                <div className="doc">
+                  <MarkdownView content={tile.body} />
+                </div>
+              ) : (
+                <p className="lede">This step has not started.</p>
+              )}
+            </article>
+          ))
+        : null}
       <div className="tile-body">
         <div className="messages">
           {(svc.messages || [])
@@ -605,7 +652,7 @@ export function SessionPage() {
             <span className="chip">v{session.design_version}</span>
             <span className="chip">{session.architect_track || "track?"}</span>
             <span className="chip accent">{session.topology || "topology?"}</span>
-            <span className="chip">{session.phase}</span>
+            <span className="chip">{session.workflow?.title || session.phase}</span>
             {locked ? <span className="chip">handed off</span> : null}
             {session.last_handoff ? (
               <span className="chip">
@@ -787,7 +834,22 @@ export function SessionPage() {
                 <h2>Plan artifacts</h2>
                 <span className="panel-kicker">{session.app_status || "draft"}</span>
               </div>
-              {session.feature_spec ? (
+              {session.workflow?.tiles?.length
+                ? session.workflow.tiles.map((tile) => (
+                    <article key={tile.id} className={`artifact workflow-tile ${tile.status}`}>
+                      <h3>{tile.title}</h3>
+                      {tile.diagram ? <MermaidDiagram source={tile.diagram} /> : null}
+                      {tile.body ? (
+                        <div className="doc">
+                          <MarkdownView content={tile.body} />
+                        </div>
+                      ) : (
+                        <p className="lede">This step has not started.</p>
+                      )}
+                    </article>
+                  ))
+                : null}
+              {!session.workflow?.tiles?.length && session.feature_spec ? (
                 <article className="artifact">
                   <h3>Features</h3>
                   <div className="doc">
@@ -795,7 +857,7 @@ export function SessionPage() {
                   </div>
                 </article>
               ) : null}
-              {session.tech_stack ? (
+              {!session.workflow?.tiles?.length && session.tech_stack ? (
                 <article className="artifact">
                   <h3>Tech stack</h3>
                   <div className="doc">
@@ -803,7 +865,7 @@ export function SessionPage() {
                   </div>
                 </article>
               ) : null}
-              {session.plan_spec ? (
+              {!session.workflow?.tiles?.length && session.plan_spec ? (
                 <article className="artifact">
                   <h3>Plan spec</h3>
                   <div className="doc">

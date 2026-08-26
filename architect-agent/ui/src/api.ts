@@ -13,6 +13,24 @@ export type HandoffResult = {
   at: string;
 };
 
+export type WorkflowTile = {
+  id: string;
+  title: string;
+  status: "current" | "done" | "pending" | string;
+  kind: string;
+  body: string;
+  diagram: string;
+};
+
+export type WorkflowState = {
+  id: string;
+  phase: string;
+  track?: string;
+  step?: number;
+  title: string;
+  tiles: WorkflowTile[];
+};
+
 export type DesignSession = {
   design_session_id: string;
   phase: string;
@@ -40,6 +58,7 @@ export type DesignSession = {
   market_evaluation_grade: string;
   market_evaluation_done: boolean;
   messages: ChatMessage[];
+  workflow: WorkflowState;
   ui_path: string;
   updated_at: string;
   design_version: number;
@@ -147,11 +166,13 @@ export function trackStepLabel(session: DesignSession): string | null {
 
 /** Header chips without repeating the same phase/track label twice. */
 export function sessionHeaderChips(session: DesignSession): string[] {
+  const current = session.workflow?.title?.trim();
   const track = trackStepLabel(session);
-  const phase = formatPhaseLabel(session.phase);
   const chips: string[] = [];
-  if (track) chips.push(track);
-  if (phase && !chipIsRedundant(track, phase)) chips.push(phase);
+  if (current) chips.push(current);
+  if (track && !chipIsRedundant(current || null, track) && !chipIsRedundant(track, current || "")) {
+    chips.push(track);
+  }
   return chips;
 }
 

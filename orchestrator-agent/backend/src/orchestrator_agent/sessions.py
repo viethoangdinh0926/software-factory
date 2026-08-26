@@ -11,6 +11,7 @@ from typing import Any
 from langgraph.types import Command
 
 from orchestrator_agent.a2a.engineer import send_git_access, send_plan_spec, send_suspend
+from orchestrator_agent.ascii_text import fold_to_ascii
 from orchestrator_agent.config import get_settings
 from orchestrator_agent.git_access import (
     GitAccessError,
@@ -27,6 +28,7 @@ from orchestrator_agent.query_intent import (
     format_classify_context,
     workflow_action,
 )
+from orchestrator_agent.workflow import session_workflow_tiles, set_workflow_position
 from orchestrator_agent.secrets_store import load_git_secrets, save_git_secrets
 
 logger = logging.getLogger(__name__)
@@ -116,7 +118,11 @@ class WorkflowSession:
             "discussion_digest": self.discussion_digest,
             "services": services,
             "active_service_id": interrupt.get("active_service_id") or self.active_service_id,
-            "messages": self.messages,
+            "messages": [
+                {**m, "content": fold_to_ascii(str(m.get("content") or ""))} if isinstance(m, dict) else m
+                for m in self.messages
+            ],
+            "workflow": session_workflow_tiles(self),
             "engineer_handoffs": self.engineer_handoffs,
             "last_handoff": last,
             "can_approve": can_approve,
@@ -300,6 +306,7 @@ class SessionStore:
             self._persist(session)
             
             try:
+                set_workflow_position(str(session_workflow_tiles(session).get("title") or "Architect package"))
                 result = self._graph.invoke(
                     initial_state(session_id, markdown),
                     config=self._config(session_id),
@@ -347,6 +354,7 @@ class SessionStore:
             self._persist(existing)
 
         try:
+            set_workflow_position(str(session_workflow_tiles(existing).get("title") or "Architect package"))
             result = self._graph.invoke(
                 Command(resume={"action": "ingest", "text": markdown}),
                 config=self._config(session_id),
@@ -382,6 +390,19 @@ class SessionStore:
                 "Stand-alone plan already handed off. Further discussion starts when "
                 "the architect sends an updated design package."
             )
+        title = str(session_workflow_tiles(session).get("title") or session.phase or "plan")
+        if service_id:
+            svc = next(
+                (
+                    item
+                    for item in session.services
+                    if str(item.get("microservice_id") or "") == service_id
+                ),
+                None,
+            )
+            if svc:
+                title = str(decorate_service(svc).get("workflow", {}).get("title") or title)
+        set_workflow_position(title)
         result = self._graph.invoke(
             Command(resume={"action": action, "text": text, "service_id": service_id or ""}),
             config=self._config(session_id),
@@ -415,8 +436,10 @@ class SessionStore:
                 break
         context = format_classify_context(
             workflow=(
-                f"Orchestrator phase={session.phase} wait={session.wait_kind} "
-                f"service={service_id or 'session'} can_approve={can_approve}."
+                f"Orchestrator current step: {session_workflow_tiles(session).get('title')}. "
+                f"phase={session.phase} wait={session.wait_kind} "
+                f"service={service_id or 'session'} can_approve={can_approve}. "
+                "Stay on this step unless they approved advancing."
             ),
             last_assistant=last,
         )

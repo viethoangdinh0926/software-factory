@@ -39,6 +39,8 @@ from architect_agent.query_intent import (
     without_user_echo,
 )
 from architect_agent.json_util import coerce_artifact_markdown, parse_llm_json_object
+from architect_agent.ascii_text import fold_to_ascii, with_ascii_instruction
+from architect_agent.workflow import architect_workflow, package_from_workflow
 from architect_agent.graph.nodes.common import assistant_message_is_thin, ensure_step_briefing
 from architect_agent.graph.nodes import common as architect_common
 from architect_agent.graph.nodes import phase0 as architect_phase0
@@ -702,9 +704,14 @@ assert s.design_diagram.strip()
 assert s.communication_schemes.strip()
 assert s.tradeoff_ledger.strip()
 pkg = store.final_design_markdown(s.session_id)
-assert "## Core Microservices" in pkg
-assert "## Communication Schemes" in pkg
+assert "Core Microservices" in pkg
+assert "Communication Schemes" in pkg
 assert "## API Contracts" not in pkg
+wf_after = architect_workflow(s)
+assert wf_after["id"] == "phase0", wf_after
+hld3 = next(t for t in wf_after["tiles"] if t["id"] == "hld3")
+assert hld3["body"].strip(), hld3
+assert "current" in {t["status"] for t in wf_after["tiles"] if t["id"] == "phase0"}
 
 print("second round with no changes skips handoff…", flush=True)
 v1 = s.design_version
@@ -1039,5 +1046,16 @@ mapped = _legacy_map({"phase": "spec_interview"})
 assert mapped["phase"] == "phase0"
 mapped = _legacy_map({"phase": "system_design"})
 assert mapped["phase"] == "hld" and mapped["design_step"] == 4
+
+print("ASCII fold and workflow tiles…", flush=True)
+assert fold_to_ascii("smart “quotes” and an em—dash → next") == 'smart "quotes" and an em-dash -> next'
+assert "CHARACTER SET" in with_ascii_instruction("You are a test.")
+wf = architect_workflow(s)
+assert wf["id"]
+assert wf["tiles"]
+assert any(t["id"] == "phase0" for t in wf["tiles"])
+pkg2 = package_from_workflow(s)
+assert "Phase 0" in pkg2
+assert all(ord(ch) < 128 or ch in "\n\r\t" for ch in pkg2)
 
 print("OK", flush=True)

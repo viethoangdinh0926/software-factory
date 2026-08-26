@@ -6,11 +6,12 @@ import logging
 import queue
 
 from fastapi import APIRouter, Form, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from engineer_agent.config import get_settings
 from engineer_agent.sessions import get_store
+from engineer_agent.workflow import fleet_package_markdown
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["engineer"])
@@ -85,6 +86,27 @@ async def get_session(session_id: str) -> dict:
         return get_store().get(session_id).to_public()
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Unknown design session") from exc
+
+
+@router.get("/api/sessions/{session_id}/download/package")
+async def download_package(session_id: str) -> PlainTextResponse:
+    try:
+        session = get_store().get(session_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Unknown design session") from exc
+    text = fleet_package_markdown(session)
+    live = [
+        sub
+        for sub in session.sub_agents
+        if str(sub.get("status") or "") != "suspended"
+    ]
+    if not live:
+        raise HTTPException(status_code=400, detail="No engineer package is ready yet.")
+    return PlainTextResponse(
+        text,
+        media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="engineer-package-{session_id}.md"'},
+    )
 
 
 @router.get("/api/sessions/{session_id}/events")

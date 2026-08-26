@@ -17,6 +17,22 @@ export type EngineerHandoff = {
   microservice_id: string | null;
 };
 
+export type WorkflowTile = {
+  id: string;
+  title: string;
+  status: string;
+  kind: string;
+  body: string;
+  diagram: string;
+};
+
+export type WorkflowState = {
+  id: string;
+  phase: string;
+  title: string;
+  tiles: WorkflowTile[];
+};
+
 export type MicroservicePlan = {
   microservice_id: string;
   names: string[];
@@ -41,6 +57,7 @@ export type MicroservicePlan = {
   approve_kind: string;
   approve_label: string;
   discussion_open: boolean;
+  workflow?: WorkflowState;
 };
 
 export type WorkflowSession = {
@@ -65,6 +82,7 @@ export type WorkflowSession = {
   services: MicroservicePlan[];
   active_service_id: string;
   messages: ChatMessage[];
+  workflow?: WorkflowState;
   engineer_handoffs: EngineerHandoff[];
   last_handoff: EngineerHandoff | null;
   can_approve: boolean;

@@ -68,6 +68,12 @@ export type SubEngineer = {
   git_ship_status?: string;
   git_ship_error?: string;
   block_issue?: BlockIssue | null;
+  workflow?: {
+    id: string;
+    phase: string;
+    title: string;
+    tiles: { id: string; title: string; status: string; kind: string; body: string; diagram: string }[];
+  };
 };
 
 export type FleetSession = {
@@ -162,4 +168,8 @@ export async function execute(sessionId: string, serviceId?: string): Promise<Fl
 
 export function subLabel(sub: SubEngineer): string {
   return sub.microservice_name || sub.microservice_id || "service";
+}
+
+export function packageDownloadUrl(sessionId: string): string {
+  return `/api/sessions/${sessionId}/download/package`;
 }

@@ -536,6 +536,43 @@ button.approve-btn:disabled {
   overflow: auto;
 }
 
+.workflow-rail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0 0 0.85rem;
+}
+
+.workflow-rail-item {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  padding: 0.28rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
+.workflow-rail-item.current,
+.workflow-tile.current {
+  border-color: color-mix(in srgb, var(--accent) 70%, var(--line));
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.workflow-tile.pending {
+  opacity: 0.72;
+}
+
+.workflow-tile .lede {
+  margin: 0;
+  color: var(--muted);
+}
+
 .artifact {
   display: flex;
   flex-direction: column;

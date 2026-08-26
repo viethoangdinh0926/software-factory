@@ -308,6 +308,7 @@ def _llm_turn_intent(text: str, context: str) -> tuple[str, str] | None:
     try:
         from langchain_core.messages import HumanMessage, SystemMessage
 
+        from engineer_agent.ascii_text import with_ascii_instruction
         from engineer_agent.json_util import parse_llm_json_object
         from engineer_agent.llm import get_chat_model
 
@@ -315,7 +316,7 @@ def _llm_turn_intent(text: str, context: str) -> tuple[str, str] | None:
         model = get_chat_model()
         response = model.invoke(
             [
-                SystemMessage(content=_TURN_INTENT_SYSTEM),
+                SystemMessage(content=with_ascii_instruction(_TURN_INTENT_SYSTEM)),
                 HumanMessage(
                     content=(
                         "Classify this turn using BOTH messages.\n\n"

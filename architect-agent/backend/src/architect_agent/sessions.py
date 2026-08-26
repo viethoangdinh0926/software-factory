@@ -10,6 +10,7 @@ from typing import Any
 
 from langgraph.types import Command
 
+from architect_agent.ascii_text import fold_to_ascii
 from architect_agent.a2a.orchestrator import HandoffResult, retry_design_package, send_design_package
 from architect_agent.config import get_settings
 from architect_agent.design_diagram import (
@@ -43,6 +44,12 @@ from architect_agent.query_intent import (
     format_classify_context,
     with_next_prompt,
     workflow_action,
+)
+from architect_agent.workflow import (
+    architect_workflow,
+    current_position_label,
+    package_from_workflow,
+    set_workflow_position,
 )
 
 logger = logging.getLogger(__name__)
@@ -162,7 +169,11 @@ class DesignSession:
             "market_evaluation_report": self.market_evaluation_report,
             "market_evaluation_grade": self.market_evaluation_grade,
             "market_evaluation_done": self.market_evaluation_done,
-            "messages": self.messages,
+            "messages": [
+                {**m, "content": fold_to_ascii(str(m.get("content") or ""))} if isinstance(m, dict) else m
+                for m in self.messages
+            ],
+            "workflow": architect_workflow(self),
             "ui_path": f"/sessions/{self.session_id}",
             "updated_at": self.updated_at,
             "design_version": self.design_version,
@@ -352,6 +363,9 @@ class SessionStore:
         seed = self._seed_state(session, last_assistant)
         preserved_messages = list(session.messages)
         try:
+            set_workflow_position(
+                current_position_label(session.phase, session.design_track, session.design_step)
+            )
             self._graph.update_state(config, seed, as_node=as_node)
             result = self._graph.invoke(None, config=config)
             self._apply_graph_result(
@@ -693,6 +707,7 @@ class SessionStore:
 
         logger.info("Invoking graph with initial_state")
         try:
+            set_workflow_position(current_position_label(session.phase, session.design_track, session.design_step))
             result = self._graph.invoke(
                 initial_state(session_id, markdown),
                 config=self._config(session_id),
@@ -715,6 +730,9 @@ class SessionStore:
         # Handoff runs after market continue (not on design-version approve entry).
         handoff_after_market = action == "approve" and session.phase == "market_research"
 
+        set_workflow_position(
+            current_position_label(session.phase, session.design_track, session.design_step)
+        )
         result = self._graph.invoke(
             Command(resume={"action": action, "text": text}),
             config=self._config(session_id),
@@ -796,8 +814,10 @@ class SessionStore:
                 break
         context = format_classify_context(
             workflow=(
-                f"Architect {session.phase} / {session.design_track} step {session.design_step}. "
-                "They can approve this step, ask a question, or request a change."
+                f"Architect current step: {current_position_label(session.phase, session.design_track, session.design_step)}. "
+                f"phase={session.phase} track={session.design_track} step={session.design_step}. "
+                "Bring the user to this same step unless they approved advancing or the "
+                "change belongs on an earlier confirmed step."
             ),
             last_assistant=last,
         )
@@ -822,43 +842,7 @@ class SessionStore:
         return report
 
     def final_design_markdown(self, session_id: str) -> str:
-        session = self.get(session_id)
-        version = max(session.design_version, 1)
-        parts = [
-            "# System Design Package\n",
-            f"Design session: `{session.session_id}`\n",
-            f"Design version: `{version}`\n",
-            f"Track: `{session.design_track}` step `{session.design_step}`\n",
-            f"Generated: {session.updated_at}\n",
-            "\n---\n",
-            "## Business Specification\n\n",
-            session.business_spec.strip(),
-            "\n\n---\n",
-        ]
-        if session.tradeoff_ledger.strip():
-            parts.extend(["## Trade-off Ledger\n\n", session.tradeoff_ledger.strip(), "\n\n---\n"])
-        if session.scale_estimates.strip():
-            parts.extend(["## Scale Estimates\n\n", session.scale_estimates.strip(), "\n\n---\n"])
-        if session.api_contracts.strip():
-            parts.extend(["## Core Microservices\n\n", session.api_contracts.strip(), "\n\n---\n"])
-        if session.communication_schemes.strip():
-            parts.extend(
-                ["## Communication Schemes\n\n", session.communication_schemes.strip(), "\n\n---\n"]
-            )
-        if session.fmea_notes.strip():
-            parts.extend(["## FMEA Notes\n\n", session.fmea_notes.strip(), "\n\n---\n"])
-        parts.extend(
-            [
-                "## Design Diagram\n\n",
-                "```mermaid\n",
-                (session.design_diagram or "").strip(),
-                "\n```\n\n",
-                "## Design Justification\n\n",
-                (session.design_justification or "").strip(),
-                "\n",
-            ]
-        )
-        return "".join(parts)
+        return package_from_workflow(self.get(session_id))
 
 
 _store: SessionStore | None = None

@@ -16,6 +16,7 @@ from architect_agent.context_budget import (
 )
 from architect_agent.design_progress import rewind_or_block_skip, with_rewind_notice
 from architect_agent.graph.nodes.common import answer_before_approve, approve_label, gate_user_chat, invoke_json
+from architect_agent.workflow import workflow_prompt_block
 from architect_agent.graph.state import DesignGraphState
 from architect_agent.interview_progress import (
     append_spec_bullet,
@@ -521,6 +522,7 @@ def _conduct_phase0_turn(
             f"{PRINCIPAL_ARCHITECT_DIGEST}\n\n"
             f"{INTERVIEW_TECHNIQUE_DIGEST}\n\n"
             f"{JSON_OUTPUT_DIGEST}\n\n"
+            f"{workflow_prompt_block('phase0', str(state.get('design_track') or 'unset'), 0)}"
             f"{USER_MESSAGE_FIRST_RULES}\n"
             "The question list is a checklist, not a script. Address the user's "
             "message first. The living spec was already updated from this message — "

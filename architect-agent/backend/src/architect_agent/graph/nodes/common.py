@@ -9,6 +9,7 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from architect_agent.ascii_text import fold_json_strings, with_ascii_instruction
 from architect_agent.context_budget import (
     EXPLANATION_DEPTH_DIGEST,
     TRACK_CLASSIFICATION_RULES,
@@ -65,11 +66,17 @@ def invoke_json(
     retry_hint: str | None = None,
 ) -> dict[str, Any]:
     """Invoke the chat model and parse a JSON object, with retry + prose fallback."""
+    from architect_agent.workflow import apply_workflow_instruction
+
+    system = with_ascii_instruction(apply_workflow_instruction(system))
     model = get_chat_model()
     messages = [SystemMessage(content=system), HumanMessage(content=user)]
+    def _done(payload: dict[str, Any]) -> dict[str, Any]:
+        return fold_json_strings(payload)
+
     content = _invoke_content(model, messages)
     try:
-        return parse_llm_json_object(content)
+        return _done(parse_llm_json_object(content))
     except ValueError as first_exc:
         if prefer_prose and recover_prose is not None:
             recovered_pref = recover_prose(content)
@@ -78,7 +85,7 @@ def invoke_json(
                     "LLM JSON parse failed; using caller prose recovery: %s",
                     first_exc,
                 )
-                return recovered_pref
+                return _done(recovered_pref)
 
         recovered = recover_architecture_payload_from_prose(content)
         if recovered is not None and recovered.get("design_diagram_lines"):
@@ -86,7 +93,7 @@ def invoke_json(
                 "LLM JSON parse failed; recovered Mermaid from prose: %s",
                 first_exc,
             )
-            return recovered
+            return _done(recovered)
 
         logger.warning("LLM JSON parse failed; retrying once: %s", first_exc)
         retry_messages = [
@@ -102,7 +109,7 @@ def invoke_json(
         ]
         content2 = _invoke_content(model, retry_messages)
         try:
-            return parse_llm_json_object(content2)
+            return _done(parse_llm_json_object(content2))
         except ValueError as second_exc:
             for blob in (content2, content):
                 if recover_prose is not None:
@@ -112,16 +119,16 @@ def invoke_json(
                             "LLM JSON parse failed after retry; using caller prose recovery: %s",
                             second_exc,
                         )
-                        return recovered_custom
+                        return _done(recovered_custom)
             recovered2 = recover_architecture_payload_from_prose(content2)
             if recovered2 is not None:
                 logger.warning(
                     "LLM JSON parse failed after retry; using prose recovery: %s",
                     second_exc,
                 )
-                return recovered2
+                return _done(recovered2)
             if recovered is not None:
-                return recovered
+                return _done(recovered)
             raise ValueError(
                 f"LLM JSON parse failed after retry: {second_exc}"
             ) from first_exc

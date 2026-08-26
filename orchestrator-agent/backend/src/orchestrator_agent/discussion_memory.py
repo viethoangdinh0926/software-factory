@@ -199,12 +199,13 @@ def consult_user_turn(
     try:
         from langchain_core.messages import HumanMessage, SystemMessage
 
+        from orchestrator_agent.ascii_text import with_ascii_instruction
         from orchestrator_agent.llm import get_chat_model
 
         model = get_chat_model()
         response = model.invoke(
             [
-                SystemMessage(content=_CONSULT_SYSTEM),
+                SystemMessage(content=with_ascii_instruction(_CONSULT_SYSTEM)),
                 HumanMessage(
                     content=(
                         f"Phase: {phase or '(n/a)'}\n\n"
@@ -335,13 +336,14 @@ def _llm_compact_digest(
 ) -> str:
     from langchain_core.messages import HumanMessage, SystemMessage
 
+    from orchestrator_agent.ascii_text import with_ascii_instruction
     from orchestrator_agent.llm import get_chat_model
 
     model = get_chat_model()
     response = model.invoke(
         [
             SystemMessage(
-                content=(
+                content=with_ascii_instruction(
                     "You compress discussion memory for a long planning conversation.\n"
                     "Keep locked decisions, settled issues, and rejected proposals. "
                     "Never drop a decision the user already closed.\n"

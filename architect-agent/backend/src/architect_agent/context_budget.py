@@ -61,7 +61,7 @@ OUTPUT FORMAT (non-negotiable):
   (one statement per element: "flowchart LR", "  Client --> GW[API Gateway]", ...).
 - Escape newlines in strings as \\n (this includes the markdown inside assistant_message).
 - Do not use LaTeX. Never write $\\text{...}$, $\\approx$, or other $...$ math. Use
-  plain words or unicode (≈, ×, ≤).
+  plain ASCII words (approx, x, <=).
 - assistant_message: an elaborated, knowledgeable justification per CHAT DEPTH below,
   then ask them to confirm, approve, or agree. Never tell them to click a button.
   At most ONE ❓ question, and only if a decision would change architecture.
@@ -408,12 +408,13 @@ def consult_user_turn(
     try:
         from langchain_core.messages import HumanMessage, SystemMessage
 
+        from architect_agent.ascii_text import with_ascii_instruction
         from architect_agent.llm import get_chat_model
 
         model = get_chat_model()
         response = model.invoke(
             [
-                SystemMessage(content=_CONSULT_SYSTEM),
+                SystemMessage(content=with_ascii_instruction(_CONSULT_SYSTEM)),
                 HumanMessage(
                     content=(
                         f"Phase: {phase or '(n/a)'}\n\n"
@@ -609,6 +610,7 @@ def maybe_compact_design_justification(text: str) -> str:
 
 
 def _llm_compact_spec(spec: str, *, target_tokens: int) -> str:
+    from architect_agent.ascii_text import with_ascii_instruction
     from architect_agent.llm import get_chat_model
     from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -617,7 +619,7 @@ def _llm_compact_spec(spec: str, *, target_tokens: int) -> str:
     response = model.invoke(
         [
             SystemMessage(
-                content=(
+                content=with_ascii_instruction(
                     "You compress a living business specification for a long interview session.\n"
                     "Preserve every durable decision, actor, scope item, invariant, metric, and risk.\n"
                     "Remove repetition, interview chatter, and 'notes' appendices.\n"
@@ -640,6 +642,7 @@ def _llm_compact_spec(spec: str, *, target_tokens: int) -> str:
 
 
 def _llm_compact_justification(text: str, *, target_tokens: int) -> str:
+    from architect_agent.ascii_text import with_ascii_instruction
     from architect_agent.llm import get_chat_model
     from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -647,7 +650,7 @@ def _llm_compact_justification(text: str, *, target_tokens: int) -> str:
     response = model.invoke(
         [
             SystemMessage(
-                content=(
+                content=with_ascii_instruction(
                     "You compress a system-design justification markdown.\n"
                     "Keep one short rationale per component; drop duplicates.\n"
                     f"Target length: about {target_tokens} tokens or less.\n"
@@ -676,6 +679,7 @@ def _llm_compact_digest(
     spec: str,
     target_tokens: int,
 ) -> str:
+    from architect_agent.ascii_text import with_ascii_instruction
     from architect_agent.llm import get_chat_model
     from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -683,7 +687,7 @@ def _llm_compact_digest(
     response = model.invoke(
         [
             SystemMessage(
-                content=(
+                content=with_ascii_instruction(
                     "You compress discussion memory for a long architecture interview.\n"
                     "Keep locked topology, settled decisions, resolved issues, and rejected "
                     "proposals. Never drop a locked local/stand-alone vs distributed call.\n"

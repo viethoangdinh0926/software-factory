@@ -53,6 +53,7 @@ from architect_agent.query_intent import (
     with_next_prompt,
     with_resolution_close,
 )
+from architect_agent.workflow import workflow_prompt_block
 
 _STEP_TITLES = HLD_STEP_TITLES
 
@@ -700,6 +701,7 @@ def hld_step_node(state: DesignGraphState) -> dict[str, Any]:
             f"{PRINCIPAL_ARCHITECT_DIGEST}\n\n"
             f"{INTERVIEW_TECHNIQUE_DIGEST}\n\n"
             f"{JSON_OUTPUT_DIGEST}\n\n"
+            f"{workflow_prompt_block('hld', 'hld', step)}"
             f"Current HLD step: {step} — {_STEP_TITLES.get(step, '')}.\n"
             f"{user_message_first_block(pending)}"
             f"{keep_block}"

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from langgraph.types import interrupt
@@ -34,6 +35,7 @@ from architect_agent.design_diagram import (
     diagram_is_concrete,
     ensure_component_catalog,
     ensure_design_diagram,
+    extract_spec_section,
     upsert_spec_section,
     with_component_walkthrough,
 )
@@ -50,6 +52,7 @@ from architect_agent.query_intent import (
     with_next_prompt,
     with_resolution_close,
 )
+from architect_agent.workflow import workflow_prompt_block
 
 _STEP_TITLES = LLD_STEP_TITLES
 
@@ -76,14 +79,16 @@ def lld_step_node(state: DesignGraphState) -> dict[str, Any]:
             f"{PRINCIPAL_ARCHITECT_DIGEST}\n\n"
             f"{INTERVIEW_TECHNIQUE_DIGEST}\n\n"
             f"{JSON_OUTPUT_DIGEST}\n\n"
+            f"{workflow_prompt_block('lld', 'lld', step)}"
             f"Current LLD step: {step} — {_STEP_TITLES.get(step, '')}.\n"
             f"{user_message_first_block(pending)}"
             f"{keep_block}"
             "Fill THIS step's primary artifact in full using recommended defaults. "
             "If the user just commented, address that comment before restating the step.\n"
             "Do not stall on missing details.\n"
-            "Step 1 primary: updated_business_spec — business rules, concurrency, "
-            "lifecycle, invariants. ready_to_advance=true when spec is structured.\n"
+            "Step 1 primary: updated_business_spec with a ## In-process rules section "
+            "covering business rules, concurrency, lifecycle, and invariants. Keep other "
+            "spec sections. ready_to_advance=true when that section is structured.\n"
             "Step 2 primary: design_diagram_lines (class/structure Mermaid, ≥8 nodes) "
             "+ design_justification (patterns, SOLID). ready_to_advance=true when both exist.\n"
             "Step 3 primary: design_justification verification notes; "
@@ -145,6 +150,12 @@ def lld_step_node(state: DesignGraphState) -> dict[str, Any]:
         )
         new_spec = str(result.get("updated_business_spec") or business_spec)
         new_ledger = str(result.get("tradeoff_ledger") or ledger)
+    if step == 1 and not extract_spec_section(new_spec, "In-process rules"):
+        incoming = str(result.get("updated_business_spec") or "").strip()
+        if incoming and not re.search(r"(?im)^##\s+(problem|actors|goals)", incoming):
+            new_spec = upsert_spec_section(business_spec, "In-process rules", incoming)
+        elif incoming:
+            new_spec = upsert_spec_section(new_spec, "In-process rules", incoming)
     ready_advance = bool(result.get("ready_to_advance"))
     if step == 2:
         ready_advance = diagram_is_concrete(new_diagram)

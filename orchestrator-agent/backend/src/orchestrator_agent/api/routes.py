@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from orchestrator_agent.config import get_settings
 from orchestrator_agent.git_access import GitAccessError
 from orchestrator_agent.sessions import get_store
+from orchestrator_agent.workflow import plan_package_markdown
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["orchestrator"])
@@ -137,13 +138,8 @@ async def download_plan(session_id: str) -> PlainTextResponse:
         session = get_store().get(session_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Unknown design session") from exc
-    text = session.plan_spec
-    if not text and session.active_service_id:
-        for svc in session.services:
-            if str(svc.get("microservice_id")) == session.active_service_id:
-                text = str(svc.get("plan_spec") or "")
-                break
-    if not text:
+    text = plan_package_markdown(session)
+    if not (session.package_markdown or session.plan_spec or session.services):
         raise HTTPException(status_code=400, detail="No plan spec has been approved yet.")
     return PlainTextResponse(
         text,

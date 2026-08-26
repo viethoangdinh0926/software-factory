@@ -168,6 +168,14 @@ def extract_spec_section(spec: str, heading: str) -> str:
     return (match.group(1) if match else "").strip()
 
 
+def strip_spec_sections(spec: str, headings: tuple[str, ...]) -> str:
+    text = spec or ""
+    for heading in headings:
+        title = heading if heading.startswith("## ") else f"## {heading}"
+        text = re.sub(rf"(?ms)^{re.escape(title)}\s*\n.*?(?=^## |\Z)", "\n", text)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
 def upsert_spec_section(spec: str, heading: str, body: str) -> str:
     """Replace or append a `## Heading` block in the living spec."""
     title = heading if heading.startswith("## ") else f"## {heading}"

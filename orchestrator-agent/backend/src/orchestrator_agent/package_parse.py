@@ -14,9 +14,9 @@ _TRACK_RE = re.compile(r"Track:\s*`?(lld|hld)`?", re.I)
 _MERMAID_RE = re.compile(r"```(?:mermaid)?\s*\n([\s\S]*?)```", re.I)
 _SERVICE_NAME_RE = re.compile(r"\b([A-Z][A-Za-z0-9]+Service)\b")
 _SERVICE_HEADING_RE = re.compile(r"(?m)^#{2,3}\s+([A-Z][A-Za-z0-9]+Service)\s*$")
-_CORE_SECTION_RE = re.compile(r"(?ims)^##\s*Core Microservices\s*\n(.*?)(?=^##\s|\Z)")
-_API_SECTION_RE = re.compile(r"(?ims)^##\s*API Contracts\s*\n(.*?)(?=^##\s|\Z)")
-_COMMS_SECTION_RE = re.compile(r"(?ims)^##\s*Communication Schemes?\s*\n(.*?)(?=^##\s|\Z)")
+_CORE_SECTION_RE = re.compile(r"(?ims)^##\s*(?:.*?\b)?Core Microservices\s*\n(.*?)(?=^##\s|\Z)")
+_API_SECTION_RE = re.compile(r"(?ims)^##\s*(?:.*?\b)?API Contracts\s*\n(.*?)(?=^##\s|\Z)")
+_COMMS_SECTION_RE = re.compile(r"(?ims)^##\s*(?:.*?\b)?Communication Schemes?\s*\n(.*?)(?=^##\s|\Z)")
 
 
 @dataclass
