@@ -196,7 +196,7 @@ export function HomePage() {
             since the last delivery. Unchanged rounds stay at Phase 0.
           </li>
           <li>
-            Confirm, approve, or agree in chat, or use the UI action. Either
+            Please approve in chat if you have no other concerns, or use the UI action. Either
             works.
           </li>
         </ul>

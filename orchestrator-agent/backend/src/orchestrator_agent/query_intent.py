@@ -194,18 +194,18 @@ FEEDBACK_RESOLUTION_RULES = (
     "The user commented after you last asked them to Approve. You MUST follow "
     "USER MESSAGE FIRST.\n"
     f"{USER_MESSAGE_FIRST_RULES}\n"
-    "Then ask them to confirm, approve, or agree for THIS updated version, not the "
+    "Then ask them to approve this updated version if they have no other concerns, not the "
     "previous one. Never tell them to click a button."
 )
 
 ASK_TO_CONFIRM_RULES = (
-    "When the step is ready, ask them to confirm, approve, or agree so you can "
+    "When the step is ready, ask them to approve if they have no other concerns so you can "
     "continue. Never tell them to click a button or name a UI control. They may "
-    "confirm in chat or use the UI — their choice."
+    "approve in chat or use the UI — their choice."
 )
 
 ASK_TO_CONFIRM_LINE = (
-    "If this looks right, confirm, approve, or agree so we can continue."
+    "If you have no other concerns, please approve."
 )
 
 _CLICK_UI_RE = re.compile(
@@ -220,11 +220,11 @@ _CLICK_UI_RE = re.compile(
 
 
 def without_click_instruction(message: str) -> str:
-    """Chat must ask to confirm/approve/agree, never to click a UI control."""
+    """Chat must ask them to approve if they have no other concerns, never to click a UI control."""
     body = (message or "").strip()
     if not body:
         return body
-    cleaned = _CLICK_UI_RE.sub("confirm, approve, or agree", body)
+    cleaned = _CLICK_UI_RE.sub("please approve", body)
     cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
     return cleaned.strip()
 
@@ -592,7 +592,7 @@ def format_next_prompt(
     elif can_approve:
         lines.extend(
             [
-                "- Confirm, approve, or agree (in chat or the UI) to continue this process.",
+                "- If you have no other concerns, please approve.",
                 "- Ask a question about this step.",
                 "- Tell me what to change before we move on.",
             ]

@@ -19,8 +19,8 @@ logger = logging.getLogger(__name__)
 
 NEW_ROUND_AFTER_HANDOFF = (
     "A new design round starts at **Phase 0**. Tell me any spec or scope updates, "
-    "or confirm, approve, or agree if you want to walk the classified track again "
-    "from scope. We still go one confirmed step at a time — no jumping ahead."
+    "or please approve if you have no other concerns so we can walk the classified "
+    "track again from scope. We still go one confirmed step at a time — no jumping ahead."
 )
 
 SKIP_AHEAD_REPLY = (
@@ -31,8 +31,8 @@ SKIP_AHEAD_REPLY = (
 NO_UPDATES_TO_DELIVER = (
     "There are no design updates since the last package delivered to the Orchestrator, "
     "so I am not sending a duplicate. A new round starts at **Phase 0**. "
-    "Tell me any spec or design changes, or confirm, approve, or agree to walk the "
-    "track again."
+    "Tell me any spec or design changes, or please approve if you have no other "
+    "concerns to walk the track again."
 )
 
 KEEP_AND_PATCH_RULES = (

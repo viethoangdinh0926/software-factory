@@ -46,7 +46,7 @@ _RETRY_HINT = (
     "Mermaid only in design_diagram_lines as short strings.\n"
     "assistant_message: keep the full elaborated justification (what changed, why, "
     "alternatives rejected, trade-offs accepted); escape its newlines as \\n. "
-    "Ask them to confirm, approve, or agree — never tell them to click a button."
+    "Ask them to approve if they have no other concerns. Never tell them to click a button."
 )
 
 _QA_RETRY_HINT = (
@@ -328,7 +328,7 @@ def answer_open_query(state: dict[str, Any], question: str, *, node: str) -> str
     )
     return str(result.get("assistant_message") or "").strip() or (
         "I can answer from the current artifacts on this step. "
-        "Ask about a specific section, or confirm, approve, or agree when you are ready to continue."
+        "Ask about a specific section, or please approve if you have no other concerns."
     )
 
 
@@ -438,13 +438,13 @@ _THIN_STATUS_RE = re.compile(
 _NEXT_STEP_HINT = {
     ("lld", 1): "Next we draw the class/structure blueprint from these rules.",
     ("lld", 2): "Next we verify the blueprint against the spec invariants.",
-    ("lld", 3): "If this looks right, confirm, approve, or agree so we can run market evaluation and hand the package off.",
+    ("lld", 3): "If you have no other concerns, please approve so we can run market evaluation and hand the package off.",
     ("hld", 1): "Next we model the domain objects those numbers imply.",
     ("hld", 2): "Next we split owned objects into core microservices.",
     ("hld", 3): "Next we name communication schemes and draw the system diagram.",
     ("hld", 4): "Next we run FMEA against this topology.",
     ("hld", 5): "Next we synthesize the session and wrap up.",
-    ("hld", 6): "If this looks right, confirm, approve, or agree so we can run market evaluation and hand the package off.",
+    ("hld", 6): "If you have no other concerns, please approve so we can run market evaluation and hand the package off.",
 }
 
 
@@ -565,7 +565,7 @@ def synthesize_step_briefing(
     if track == "hld" and step == 4 and diagram.strip():
         nodes = len(set(re.findall(r"\b([A-Za-z][\w]*)\s*(?:\[|\(|\{)", diagram)))
         extra = f"\n\nThe system diagram now has about **{nodes or 'several'}** named nodes (clients, gateway, services, stores)."
-    nxt = _NEXT_STEP_HINT.get((track, step), "If this looks right, confirm, approve, or agree so we can continue.")
+    nxt = _NEXT_STEP_HINT.get((track, step), "If you have no other concerns, please approve.")
     if not body.strip():
         return (
             f"**{label} step {step} — {title}** is not ready to review yet.\n\n"

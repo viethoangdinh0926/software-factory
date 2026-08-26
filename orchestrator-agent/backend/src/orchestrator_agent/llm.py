@@ -67,7 +67,7 @@ class StubChatModel(BaseChatModel):
             payload = _stub_tech_stack(blob)
         else:
             payload = {
-                "assistant_message": "Stub orchestrator is ready. If this looks right, confirm, approve, or agree so we can continue.",
+                "assistant_message": "Stub orchestrator is ready. If you have no other concerns, please approve.",
                 "ready": True,
             }
         return ChatResult(
@@ -96,7 +96,10 @@ def _stub_user_turn_consult(blob: str) -> dict[str, Any]:
     compact = re.sub(r"\s+", " ", pending).strip().lower().rstrip(".!")
     last_l = last.lower()
     asking_confirm = (
-        "confirm, approve, or agree" in last_l or "if this looks right" in last_l
+        "confirm, approve, or agree" in last_l
+        or "if this looks right" in last_l
+        or "please approve" in last_l
+        or "no other concerns" in last_l
     )
     if re.search(r"\b(weather|asdf|qwerty|lorem ipsum)\b", compact):
         return {
@@ -607,8 +610,8 @@ def _stub_spec_update(blob: str) -> dict[str, Any]:
         "spec_changelog": changelog,
         "assistant_message": (
             f"Drafted an incremental spec update for **{name}**. Features and bugs from "
-            "the last shipped version stay unless this increment changes them. Confirm, "
-            "approve, or agree to send a new spec version to the engineer."
+            "the last shipped version stay unless this increment changes them. If you have no "
+            "other concerns, please approve to send a new spec version to the engineer."
         ),
     }
 

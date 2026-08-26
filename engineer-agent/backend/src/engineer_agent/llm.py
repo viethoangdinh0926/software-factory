@@ -58,7 +58,7 @@ class StubChatModel(BaseChatModel):
             payload = _stub_implement(blob)
         else:
             payload = {
-                "assistant_message": "Stub engineer is ready. If this looks right, confirm, approve, or agree so we can continue.",
+                "assistant_message": "Stub engineer is ready. If you have no other concerns, please approve.",
                 "ready": True,
             }
         return ChatResult(
@@ -87,7 +87,10 @@ def _stub_user_turn_consult(blob: str) -> dict[str, Any]:
     compact = re.sub(r"\s+", " ", pending).strip().lower().rstrip(".!")
     last_l = last.lower()
     asking_confirm = (
-        "confirm, approve, or agree" in last_l or "if this looks right" in last_l
+        "confirm, approve, or agree" in last_l
+        or "if this looks right" in last_l
+        or "please approve" in last_l
+        or "no other concerns" in last_l
     )
     if re.search(r"\b(weather|asdf|qwerty|lorem ipsum)\b", compact):
         return {
@@ -568,7 +571,7 @@ def _stub_implement(blob: str) -> dict[str, Any]:
         "implementation_notes": notes,
         "assistant_message": (
             f"Ready to implement **{name}** against its offered API and consulted peer "
-            "surfaces. If this looks right, confirm, approve, or agree to mark this sub-engineer ready."
+            "surfaces. If you have no other concerns, please approve to mark this sub-engineer ready."
         ),
     }
 

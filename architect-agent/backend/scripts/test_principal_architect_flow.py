@@ -336,7 +336,7 @@ assert NEXT_PROMPT_HEADER not in with_next_prompt("Here is the proposal.")
 assert "click" not in without_user_echo(
     "Scope looks like **HLD**. Click **Approve** to start that track."
 ).lower()
-assert "confirm, approve, or agree" in without_user_echo(
+assert "please approve" in without_user_echo(
     "Scope looks like **HLD**. Click **Approve** to start that track."
 ).lower()
 assert with_next_prompt(
@@ -944,7 +944,7 @@ assert compiled.get("design_track") == "unset", compiled.get("design_track")
 assert compiled.get("ready_to_advance") is True, compiled
 assert "enough to compile" not in compiled_msg.lower(), compiled_msg[:400]
 assert "## Problem" in compiled_msg or "## Actors" in compiled_msg, compiled_msg[:500]
-assert "confirm, approve, or agree" in compiled_msg.lower(), compiled_msg[:400]
+assert "please approve" in compiled_msg.lower(), compiled_msg[:400]
 assert "UNSET" not in compiled_msg
 
 classified = phase0_classify_node(
@@ -969,7 +969,7 @@ classified_msg = str(classified.get("pending_assistant_message") or "")
 assert classified.get("design_track") in {"lld", "hld"}, classified.get("design_track")
 assert classified.get("ready_to_advance") is True, classified
 assert "UNSET" not in classified_msg, classified_msg[:400]
-assert "confirm, approve, or agree" in classified_msg.lower(), classified_msg[:400]
+assert "please approve" in classified_msg.lower(), classified_msg[:400]
 assert classified.get("design_track").upper() in classified_msg, classified_msg[:400]
 
 print("stand-alone routing leaves HLD for LLD…", flush=True)

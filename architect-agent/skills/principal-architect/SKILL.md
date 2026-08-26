@@ -119,7 +119,7 @@ Until the user confirms, approves, or agrees the current step (Phase 0, each HLD
 - Do not skip the question, leave chat empty, or reply with a recap that only asks them to confirm.
 - If they raised a concern or asked to change something, update this step's artifact first.
 - Confirmation applies to the current artifact version, not the one from the previous ask.
-- Ask them to confirm, approve, or agree when ready. Never tell them to click a button or name a UI control.
+- Ask them to approve if they have no other concerns. Never tell them to click a button or name a UI control.
 - Do not add an **Updates to this proposal** section.
 - Do not add a **What you can do next** section.
 

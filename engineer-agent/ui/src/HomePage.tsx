@@ -99,7 +99,7 @@ export function HomePage() {
             The fleet page streams status as it happens. You do not need to refresh to see a
             blocker.
           </li>
-          <li>Confirm, approve, or agree in chat, or use the UI action. Either works.</li>
+          <li>Please approve in chat if you have no other concerns, or use the UI action. Either works.</li>
         </ul>
       </section>
 

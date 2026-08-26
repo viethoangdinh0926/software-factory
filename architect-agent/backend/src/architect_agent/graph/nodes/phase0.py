@@ -164,11 +164,11 @@ def _lock_track(
 
 
 _SPEC_APPROVE_TAIL = (
-    "If this specification looks right, confirm, approve, or agree so I can classify "
+    "If you have no other concerns, please approve so I can classify "
     "LLD vs HLD. Otherwise tell me what to add or change."
 )
 _TRACK_APPROVE_TAIL = (
-    "If this looks right, confirm, approve, or agree so we can begin the track. "
+    "If you have no other concerns, please approve so we can begin the track. "
     "Otherwise tell me what to change."
 )
 
@@ -189,7 +189,7 @@ def _present_compiled_spec(compiled_spec: str, llm_message: str) -> str:
     if spec and not _message_includes_spec(body, spec):
         intro = body or "Here is the compiled project specification."
         body = f"{intro}\n\n{spec}"
-    if "confirm, approve, or agree" not in body.lower():
+    if "please approve" not in body.lower() and "confirm, approve, or agree" not in body.lower():
         body = f"{body}\n\n{_SPEC_APPROVE_TAIL}".strip()
     return body
 
@@ -202,7 +202,7 @@ def _present_classification(assistant: str, track: str) -> str:
     if f"**{chosen.upper()}**" not in body and chosen.upper() not in body:
         prefix = f"Scope classified as **{chosen.upper()}**."
         body = f"{prefix}\n\n{body}".strip() if body else prefix
-    if "confirm, approve, or agree" not in body.lower():
+    if "please approve" not in body.lower() and "confirm, approve, or agree" not in body.lower():
         body = f"{body}\n\n{_TRACK_APPROVE_TAIL}".strip()
     return body
 
@@ -343,7 +343,7 @@ def _compile_phase0_spec(
             '  "assistant_message": string\n'
             "}\n"
             "assistant_message MUST include the full compiled spec in markdown and ask "
-            "the user to confirm, approve, or agree — or tell you what to add or change. "
+            "the user to approve if they have no other concerns. "
             "Never tell them you merely have enough to compile without showing the spec. "
             "Never tell them to click a button."
         ),
@@ -781,8 +781,8 @@ def phase0_classify_node(state: DesignGraphState) -> dict[str, Any]:
                     f"{TRACK_CLASSIFICATION_RULES}\n"
                     "Honor DISCUSSION MEMORY: do not re-open settled issues.\n"
                     "Set design_track to lld or hld — never unset — and ready_to_advance=true.\n"
-                    "assistant_message should say the classification and ask them to confirm, "
-                    "approve, or agree to start the track. Never tell them to click a button.\n"
+                    "assistant_message should say the classification and ask them to approve "
+                    "if they have no other concerns so we can start the track. Never tell them to click a button.\n"
                     "Respond ONLY with JSON:\n"
                     "{\n"
                     '  "design_track": "lld" | "hld",\n'
@@ -944,8 +944,8 @@ def phase0_classify_node(state: DesignGraphState) -> dict[str, Any]:
                 "Do NOT ask for DAU/QPS/bitrate here — that is HLD Step 1.\n"
                 "If classification is already clear, set design_track to lld or hld — "
                 "never unset — and ready_to_advance=true. assistant_message should say "
-                "the classification and ask them to confirm, approve, or agree to start "
-                "the track. Never tell them to click a button.\n"
+                "the classification and ask them to approve if they have no other concerns "
+                "to start the track. Never tell them to click a button.\n"
                 "Ask ONE clarifying question ONLY if LLD vs HLD is truly ambiguous; still "
                 "propose a (Recommended) track and still set design_track to that pick.\n"
                 "Respond ONLY with JSON:\n"

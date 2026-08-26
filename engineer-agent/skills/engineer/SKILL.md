@@ -24,7 +24,7 @@ When a spec version arrives for the microservice you own:
 3. Draft a new **execution plan**: features, bugs, and feature updates ordered by
    **priority**, with **dependencies** between items. Items that need other services
    list those peers.
-4. Ask the user to confirm, approve, or agree the plan (in chat or the UI). Never tell
+4. Ask the user to approve the plan if they have no other concerns (in chat or the UI). Never tell
    them to click a button. Do not start coding until the plan is approved (or executed
    after a pause).
 

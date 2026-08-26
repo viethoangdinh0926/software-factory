@@ -766,8 +766,8 @@ class SessionStore:
             f"Handoff v{session.design_version} → Orchestrator: {handoff.status}. "
             f"{handoff.detail}\n\n"
             "A new design round starts at **Phase 0**. Tell me any spec updates, or "
-            "confirm, approve, or agree if you want to walk the classified track again "
-            "from scope."
+            "please approve if you have no other concerns so we can walk the classified "
+            "track again from scope."
         )
         status_line = with_next_prompt(status_line, mode="handoff", can_approve=False)
         session.messages.append({"role": "assistant", "content": status_line, "node": "phase0"})

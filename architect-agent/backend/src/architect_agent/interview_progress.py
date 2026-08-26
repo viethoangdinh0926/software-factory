@@ -681,7 +681,7 @@ def message_for_user_stop(spec: str, *, approve_anyway: bool = False) -> tuple[s
         return (
             "Understood — I'll stop asking interview questions.\n\n"
             "The living spec looks sufficient to sketch a system design. "
-            "If this looks right, confirm, approve, or agree so we can continue "
+            "If you have no other concerns, please approve so we can continue "
             "(market evaluation, then system design).",
             True,
         )
@@ -694,7 +694,7 @@ def message_for_user_stop(spec: str, *, approve_anyway: bool = False) -> tuple[s
             "Missing or under-specified:\n"
             f"{gaps}\n\n"
             "I can still continue, but the first design will be **speculative** and may "
-            "need heavy revision. Confirm, approve, or agree if you want to continue anyway.",
+            "need heavy revision. Please approve if you have no other concerns and want to continue anyway.",
             True,
         )
 

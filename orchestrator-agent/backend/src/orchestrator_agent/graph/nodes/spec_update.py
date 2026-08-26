@@ -116,7 +116,7 @@ def discuss_spec_update_for(
         result,
         fallback=(
             f"Drafted an incremental spec update for **{name}** (features and bugs). "
-            "Confirm, approve, or agree when this increment should go to the engineer, "
+            "If you have no other concerns, please approve when this increment should go to the engineer, "
             "or tell me what else to change."
         ),
         artifact_keys=("feature_spec", "bug_spec", "spec_changelog"),

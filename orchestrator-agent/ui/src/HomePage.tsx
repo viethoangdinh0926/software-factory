@@ -104,7 +104,7 @@ export function HomePage() {
             an updated package.
           </li>
           <li>
-            Confirm, approve, or agree in chat, or use the UI action. Either works.
+            Please approve in chat if you have no other concerns, or use the UI action. Either works.
           </li>
         </ul>
       </section>

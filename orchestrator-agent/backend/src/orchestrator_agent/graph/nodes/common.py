@@ -60,7 +60,7 @@ CHAT DEPTH (assistant_message) — write like a Staff Engineer briefing the team
   clause what it buys here. Prefer concrete versions/numbers over vague adjectives.
 - Use tight markdown structure (bold lead-ins, short bullets) so it stays scannable.
   Depth means information density, NOT padding — no filler, no restating the question.
-- Still ask them to confirm, approve, or agree once the artifact is ready. Never tell
+- Still ask them to approve if they have no other concerns once the artifact is ready. Never tell
   them to click a button. Elaboration replaces terseness; it does not replace the
   approve flow. If you ask a question, name a concrete choice (who initiates, which
   capability, which store) plus a recommended default — never "tell me more" or
@@ -475,7 +475,7 @@ def service_focus_system(name: str) -> str:
         "If the user asked a question, answer it in assistant_message with concrete facts "
         "(entity names, who initiates, what data/events flow). Do not reply with a status recap.\n"
         "If they raised a concern or asked to change something, update this service's artifact, "
-        "then ask them to confirm, approve, or agree for that version. Never tell them "
+        "then ask them to approve that version if they have no other concerns. Never tell them "
         "to click a button. Do not add an **Updates to this proposal** section."
     )
 

@@ -56,8 +56,8 @@ def market_research_node(state: DesignGraphState) -> dict[str, Any]:
     assistant_message = (
         f"Market evaluation for {version_hint} complete — idea grade **{grade}**.\n\n"
         f"{summary}\n\n"
-        "Review the **Market evaluation** report. If this looks right, confirm, "
-        "approve, or agree so we can hand off the design package. After that "
+        "Review the **Market evaluation** report. If you have no other concerns, please "
+        "approve so we can hand off the design package. After that "
         "attempt, a new design round starts at Phase 0."
     )
     digest = refresh_discussion_digest(

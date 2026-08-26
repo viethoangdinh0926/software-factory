@@ -74,8 +74,8 @@ class StubChatModel(BaseChatModel):
                 "assistant_message": (
                     "Here is the compiled project specification.\n\n"
                     f"{compiled}\n\n"
-                    "If this specification looks right, confirm, approve, or agree so I can "
-                    "classify LLD vs HLD. Otherwise tell me what to add or change."
+                    "If you have no other concerns, please approve so I can "
+                    "classify LLD vs HLD."
                 ),
             }
         elif "phase 0 spec refiner" in lower:
@@ -83,7 +83,7 @@ class StubChatModel(BaseChatModel):
                 **_stub_phase0(blob),
                 "assistant_message": (
                     "The spec is updated from your comments. "
-                    "If this looks right, confirm, approve, or agree to start the classified "
+                    "If you have no other concerns, please approve to start the classified "
                     "track, or keep editing."
                 ),
             }
@@ -456,7 +456,7 @@ def _stub_phase0(blob: str) -> dict[str, Any]:
         "tradeoff_ledger": "- Scope classification pending user confirm.\n",
         "assistant_message": (
             f"Scope looks like **{track.upper()}**.{addressed} "
-            "If this looks right, confirm, approve, or agree to start that track, "
+            "If you have no other concerns, please approve to start that track, "
             "or tell me if this should be the other track."
         ),
     }
@@ -483,7 +483,10 @@ def _stub_user_turn_consult(blob: str) -> dict[str, Any]:
     compact = re.sub(r"\s+", " ", pending).strip().lower().rstrip(".!")
     last_l = last.lower()
     asking_confirm = (
-        "confirm, approve, or agree" in last_l or "if this looks right" in last_l
+        "confirm, approve, or agree" in last_l
+        or "if this looks right" in last_l
+        or "please approve" in last_l
+        or "no other concerns" in last_l
     )
     if re.search(r"\b(weather|asdf|qwerty|lorem ipsum)\b", compact):
         return {
@@ -642,7 +645,7 @@ def _stub_keep_payload(track: str, step: int) -> dict[str, Any]:
         "assistant_message": (
             f"Kept the existing {track.upper()} step {step} artifact and applied only "
             "patches required by the carry-forward change, if that step is affected. "
-            "If this looks right, confirm, approve, or agree to continue."
+            "If you have no other concerns, please approve."
         ),
     }
 
@@ -673,9 +676,9 @@ def _stub_lld(blob: str) -> dict[str, Any]:
             ("I applied your comments to this step. " if feedback else "")
             + f"LLD step {step} draft ready. "
             + (
-                "If this looks right, confirm, approve, or agree so we can run market evaluation and hand off."
+                "If you have no other concerns, please approve so we can run market evaluation and hand off."
                 if step >= 3
-                else "If this looks right, confirm, approve, or agree to advance, or tell me what to change."
+                else "If you have no other concerns, please approve."
             )
         ),
     }
@@ -833,9 +836,9 @@ def _stub_hld(blob: str) -> dict[str, Any]:
             )
             + f"HLD step {step} draft ready. "
             + (
-                "If this looks right, confirm, approve, or agree so we can run market evaluation and hand off."
+                "If you have no other concerns, please approve so we can run market evaluation and hand off."
                 if step >= 6
-                else "If this looks right, confirm, approve, or agree to advance, or tell me what to change."
+                else "If you have no other concerns, please approve."
             )
         ),
     }
