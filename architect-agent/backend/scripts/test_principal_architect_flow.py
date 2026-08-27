@@ -45,14 +45,19 @@ from architect_agent.graph.nodes.common import assistant_message_is_thin, ensure
 from architect_agent.graph.nodes import common as architect_common
 from architect_agent.graph.nodes import phase0 as architect_phase0
 from architect_agent.design_diagram import (
+    apply_diagram_catalogs,
     catalog_covers_diagram,
     diagram_is_due,
     diagram_node_count,
     ensure_component_catalog,
     ensure_design_diagram,
+    extract_diagram_edges,
     extract_spec_section,
+    fallback_relationship_catalog,
+    relationships_cover_diagram,
     upsert_spec_section,
     with_component_walkthrough,
+    with_relationship_walkthrough,
 )
 from architect_agent.graph.state import _keep_nonempty_str, _merge_spec
 from architect_agent.design_progress import classify_rewind_stage, design_position, package_fingerprint
@@ -1040,6 +1045,26 @@ assert spec_with.count("## Diagram components") == 1
 walked = with_component_walkthrough("LLD step 2 is ready.", catalog)
 assert "Desktop UI" in walked and "Diagram components" in walked
 assert with_component_walkthrough(walked, catalog) == walked
+
+labeled = (
+    "flowchart LR\n"
+    "  UI[Desktop UI] -->|compose| App[Application Shell]\n"
+    "  App -->|HTTPS| Remote[Remote API]\n"
+)
+edges = extract_diagram_edges(labeled)
+assert ("UI", "App", "compose") in edges, edges
+assert ("App", "Remote", "HTTPS") in edges, edges
+rel = fallback_relationship_catalog(labeled, "Local desktop client.", "")
+assert "## Diagram relationships" in rel
+assert "### UI → App" in rel
+assert "### App → Remote" in rel
+assert relationships_cover_diagram(rel, labeled)
+rel_walk = with_relationship_walkthrough("Blueprint is ready.", rel)
+assert "connecting line" in rel_walk.lower() and "UI → App" in rel_walk
+assert with_relationship_walkthrough(rel_walk, rel) == rel_walk
+spec_rel, _comps, rels_out = apply_diagram_catalogs(labeled, "# Spec\n\n## Goals\n- ship\n", allow_llm=False)
+assert extract_spec_section(spec_rel, "Diagram relationships")
+assert "### UI → App" in rels_out
 
 print("legacy map…", flush=True)
 mapped = _legacy_map({"phase": "spec_interview"})

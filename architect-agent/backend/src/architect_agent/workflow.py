@@ -35,7 +35,7 @@ def apply_workflow_instruction(system: str) -> str:
         f"{body}"
     )
 
-_SCOPED_HEADINGS = ("In-process rules", "Domain model", "Diagram components")
+_SCOPED_HEADINGS = ("In-process rules", "Domain model", "Diagram components", "Diagram relationships")
 
 
 def workflow_prompt_block(phase: str, track: str, step: int) -> str:
@@ -136,6 +136,7 @@ def architect_workflow(session: Any) -> dict[str, Any]:
         rules = extract_spec_section(spec, "In-process rules")
         diagram = str(getattr(session, "design_diagram", "") or "")
         justification = str(getattr(session, "design_justification", "") or "")
+        relationships = extract_spec_section(spec, "Diagram relationships")
         tiles.append(
             _tile(
                 tile_id="lld1",
@@ -149,6 +150,7 @@ def architect_workflow(session: Any) -> dict[str, Any]:
                 tile_id="lld2",
                 title="LLD 2 - Architectural blueprint",
                 status=_status("lld2", current_id, lld_passed(2) or bool(diagram)),
+                body=relationships,
                 diagram=diagram if lld_passed(2) or diagram else "",
             )
         )
@@ -172,6 +174,8 @@ def architect_workflow(session: Any) -> dict[str, Any]:
         apis = str(getattr(session, "api_contracts", "") or "")
         comms = str(getattr(session, "communication_schemes", "") or "")
         diagram = str(getattr(session, "design_diagram", "") or "")
+        relationships = extract_spec_section(spec, "Diagram relationships")
+        hld4_body = "\n\n".join(part for part in (comms, relationships) if (part or "").strip())
         fmea = str(getattr(session, "fmea_notes", "") or "")
         synthesis = str(getattr(session, "design_justification", "") or "")
         tiles.append(
@@ -203,7 +207,7 @@ def architect_workflow(session: Any) -> dict[str, Any]:
                 tile_id="hld4",
                 title="HLD 4 - Communication Schemes, infrastructure and system diagram",
                 status=_status("hld4", current_id, hld_passed(4) or bool(comms or diagram)),
-                body=comms,
+                body=hld4_body,
                 diagram=diagram,
             )
         )

@@ -31,13 +31,13 @@ from architect_agent.design_progress import (
     with_rewind_notice,
 )
 from architect_agent.design_diagram import (
+    apply_diagram_catalogs,
     catalog_covers_diagram,
     diagram_is_concrete,
-    ensure_component_catalog,
     ensure_design_diagram,
     extract_spec_section,
     upsert_spec_section,
-    with_component_walkthrough,
+    with_diagram_walkthrough,
 )
 from architect_agent.interview_progress import scrub_control_phrases_from_spec
 from architect_agent.graph.state import DesignGraphState
@@ -525,7 +525,12 @@ def _step_artifact_rules(step: int) -> str:
             "Diagram: 12–25 nodes, not a concept pipeline. Required kinds: Client, "
             "LoadBalancer, APIGateway, Auth/IdentityService, each named *Service from "
             "api_contracts, Redis, Kafka, Elasticsearch, CDN, Postgres, ObjectStorage/S3. "
-            "Edges for sync vs async. Use design_diagram_lines only; set design_diagram to \"\".\n"
+            "Edges for sync vs async. Keep arrow labels SHORT (HTTPS, gRPC, Kafka). "
+            "For EVERY arrow, write a ## Diagram relationships section in "
+            "updated_business_spec with one ### StartId → EndId heading and 2-4 sentences: "
+            "what flows, protocol, why that coupling, what fails if the hop is down. "
+            "Those sentences are the hover popup on that line in the UI. "
+            "Use design_diagram_lines only; set design_diagram to \"\".\n"
             "Example comms snippet:\n"
             "### User ↔ system\\nHTTPS request/response via API Gateway; playback via CDN HLS stream.\\n"
             "### Service ↔ service\\nSync gRPC for authz; Kafka pub/sub for VideoPublished.\\n"
@@ -805,16 +810,17 @@ def hld_step_node(state: DesignGraphState) -> dict[str, Any]:
     if step == 2:
         spec_out = ensure_domain_model(spec_out, scale, ledger)
     catalog = ""
+    relationships = ""
     if step >= 4 and diagram_is_concrete(diagram, minimum=6):
-        catalog = ensure_component_catalog(
+        spec_out, catalog, relationships = apply_diagram_catalogs(
             diagram,
             str(spec_out),
-            justification,
+            justification=justification,
+            comms=comms,
             allow_llm=True,
         )
         if not catalog_covers_diagram(justification, diagram):
             justification = catalog
-        spec_out = upsert_spec_section(str(spec_out), "Diagram components", catalog)
 
     ready_advance = bool(result.get("ready_to_advance"))
     design_ready = bool(result.get("design_ready_to_approve"))
@@ -866,7 +872,7 @@ def hld_step_node(state: DesignGraphState) -> dict[str, Any]:
         pending=pending,
     )
     if catalog and step == 4:
-        assistant = with_component_walkthrough(assistant, catalog)
+        assistant = with_diagram_walkthrough(assistant, catalog, relationships)
     if pending:
         changed = (
             scale != prior_scale

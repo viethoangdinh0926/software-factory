@@ -14,13 +14,15 @@ from architect_agent.ascii_text import fold_to_ascii
 from architect_agent.a2a.orchestrator import HandoffResult, retry_design_package, send_design_package
 from architect_agent.config import get_settings
 from architect_agent.design_diagram import (
+    apply_diagram_catalogs,
     catalog_covers_diagram,
     chat_describes_components,
+    chat_describes_relationships,
+    diagram_edge_notes,
     diagram_is_due,
-    ensure_component_catalog,
+    extract_spec_section,
     ensure_design_diagram,
-    upsert_spec_section,
-    with_component_walkthrough,
+    with_diagram_walkthrough,
 )
 from architect_agent.design_progress import NO_UPDATES_TO_DELIVER, package_fingerprint
 from architect_agent.graph import build_graph, initial_state
@@ -159,7 +161,12 @@ class DesignSession:
             "approve_label": label,
             "approve_kind": interrupt.get("approve_kind") or "",
             "business_spec": self.business_spec,
-            "design_diagram": self.design_diagram,
+            "diagram_edges": diagram_edge_notes(
+                self.design_diagram,
+                extract_spec_section(self.business_spec, "Diagram relationships"),
+                spec=self.business_spec,
+                comms=self.communication_schemes,
+            ),
             "design_justification": self.design_justification,
             "tradeoff_ledger": self.tradeoff_ledger,
             "scale_estimates": coerce_artifact_markdown(self.scale_estimates),
@@ -603,34 +610,32 @@ class SessionStore:
             if changed:
                 self._persist(session)
             return
-        catalog = ensure_component_catalog(
+        catalog = ""
+        relationships = ""
+        next_spec, catalog, relationships = apply_diagram_catalogs(
             diagram,
             session.business_spec,
-            session.design_justification,
+            justification=session.design_justification,
+            comms=session.communication_schemes,
             allow_llm=False,
         )
         if catalog and not catalog_covers_diagram(session.design_justification, diagram):
             session.design_justification = catalog
             changed = True
-        if catalog:
-            next_spec = upsert_spec_section(
-                session.business_spec, "Diagram components", catalog
-            )
-            if next_spec != session.business_spec:
-                session.business_spec = next_spec
-                changed = True
+        if next_spec != session.business_spec:
+            session.business_spec = next_spec
+            changed = True
         on_diagram_step = (track == "hld" and int(session.design_step or 0) == 4) or (
             track == "lld" and int(session.design_step or 0) == 2
         )
-        if (
-            on_diagram_step
-            and catalog
-            and not chat_describes_components(session.messages, diagram)
-        ):
+        missing_walkthrough = not chat_describes_components(session.messages, diagram) or (
+            relationships and not chat_describes_relationships(session.messages, diagram)
+        )
+        if on_diagram_step and catalog and missing_walkthrough:
             session.messages.append(
                 {
                     "role": "assistant",
-                    "content": with_component_walkthrough("", catalog),
+                    "content": with_diagram_walkthrough("", catalog, relationships),
                     "node": session.phase if session.phase in {"lld", "hld", "market_research"} else "lld",
                 }
             )

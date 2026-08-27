@@ -31,13 +31,12 @@ from architect_agent.design_progress import (
     with_rewind_notice,
 )
 from architect_agent.design_diagram import (
-    catalog_covers_diagram,
+    apply_diagram_catalogs,
     diagram_is_concrete,
-    ensure_component_catalog,
     ensure_design_diagram,
     extract_spec_section,
     upsert_spec_section,
-    with_component_walkthrough,
+    with_diagram_walkthrough,
 )
 from architect_agent.graph.state import DesignGraphState
 from architect_agent.json_util import coerce_diagram_text
@@ -90,7 +89,11 @@ def lld_step_node(state: DesignGraphState) -> dict[str, Any]:
             "covering business rules, concurrency, lifecycle, and invariants. Keep other "
             "spec sections. ready_to_advance=true when that section is structured.\n"
             "Step 2 primary: design_diagram_lines (class/structure Mermaid, ≥8 nodes) "
-            "+ design_justification (patterns, SOLID). ready_to_advance=true when both exist.\n"
+            "+ design_justification (patterns, SOLID) + a ## Diagram relationships section "
+            "in updated_business_spec. Keep arrow labels SHORT. For EVERY arrow write "
+            "### StartId → EndId with 2-4 sentences on what that call/composition is, "
+            "why it exists, and what breaks if it fails. Those sentences are the hover "
+            "popup on that line. ready_to_advance=true when the diagram and relationships exist.\n"
             "Step 3 primary: design_justification verification notes; "
             "design_ready_to_approve=true when blueprint is coherent. Ask them to approve "
             "if they have no other concerns before sending. Never tell them to click a button.\n"
@@ -100,7 +103,7 @@ def lld_step_node(state: DesignGraphState) -> dict[str, Any]:
             "assistant_message MUST brief what this step completed: name the rules, "
             "types, or diagram nodes you wrote, why those defaults, what you rejected, "
             "and what it costs. On step 2, walk through EVERY diagram component by name "
-            "and say what it owns. Never write a status line such as "
+            "AND every connecting line (what flows, why that coupling). Never write a status line such as "
             "\"LLD step 1 update.\" or \"LLD step 2 update.\"\n"
             "Respond ONLY with JSON:\n"
             "{\n"
@@ -173,16 +176,16 @@ def lld_step_node(state: DesignGraphState) -> dict[str, Any]:
         step, "business_spec"
     )
     catalog = ""
+    relationships = ""
     if step >= 2 and diagram_is_concrete(new_diagram):
-        catalog = ensure_component_catalog(
+        new_spec, catalog, relationships = apply_diagram_catalogs(
             new_diagram,
             new_spec,
-            new_just,
+            justification=new_just,
             allow_llm=True,
         )
-        if not catalog_covers_diagram(new_just, new_diagram):
+        if catalog and "diagram components" not in (new_just or "").lower():
             new_just = catalog
-        new_spec = upsert_spec_section(new_spec, "Diagram components", catalog)
     assistant = ensure_step_briefing(
         str(result.get("assistant_message") or ""),
         track="lld",
@@ -198,7 +201,7 @@ def lld_step_node(state: DesignGraphState) -> dict[str, Any]:
         pending=pending,
     )
     if catalog and step == 2:
-        assistant = with_component_walkthrough(assistant, catalog)
+        assistant = with_diagram_walkthrough(assistant, catalog, relationships)
     if pending:
         changed = (
             new_spec != business_spec

@@ -13,38 +13,38 @@ export function fallbackDesignDiagram(spec: string, track: string): string {
   if (track === "hld") {
     return [
       "flowchart LR",
-      "  Client[Web/Mobile Client] --> LB[Load Balancer]",
-      "  LB --> GW[API Gateway]",
-      "  GW --> Auth[Auth IdentityService]",
-      "  GW --> Core[Core Domain Service]",
-      "  Core --> DB[(Postgres)]",
-      "  Core --> Cache[(Redis)]",
-      "  Core --> Bus[(Kafka)]",
-      "  GW --> Search[Search Service]",
-      "  Search --> ES[(Elasticsearch)]",
-      "  Client --> CDN[CDN]",
+      "  Client[Web/Mobile Client] -->|HTTPS| LB[Load Balancer]",
+      "  LB -->|TCP| GW[API Gateway]",
+      "  GW -->|gRPC| Auth[Auth IdentityService]",
+      "  GW -->|HTTPS| Core[Core Domain Service]",
+      "  Core -->|SQL| DB[(Postgres)]",
+      "  Core -->|cache| Cache[(Redis)]",
+      "  Core -->|pub/sub| Bus[(Kafka)]",
+      "  GW -->|HTTPS| Search[Search Service]",
+      "  Search -->|index| ES[(Elasticsearch)]",
+      "  Client -->|HLS| CDN[CDN]",
     ].join("\n");
   }
 
   const lower = (spec || "").toLowerCase();
   const lines = [
     "flowchart LR",
-    "  UI[Desktop UI] --> App[Application Shell]",
-    "  App --> Editor[Request Editor]",
-    "  App --> Collections[Collection Store]",
-    "  App --> History[History Store]",
-    "  App --> Http[HTTP Client]",
-    "  App --> Errors[Error Presenter]",
-    "  Collections --> Sqlite[(SQLite)]",
-    "  History --> Sqlite",
-    "  Editor --> Http",
-    "  Http --> Remote[Remote API]",
+    "  UI[Desktop UI] -->|compose| App[Application Shell]",
+    "  App -->|in-process| Editor[Request Editor]",
+    "  App -->|in-process| Collections[Collection Store]",
+    "  App -->|in-process| History[History Store]",
+    "  App -->|in-process| Http[HTTP Client]",
+    "  App -->|in-process| Errors[Error Presenter]",
+    "  Collections -->|SQL| Sqlite[(SQLite)]",
+    "  History -->|SQL| Sqlite",
+    "  Editor -->|dispatch| Http",
+    "  Http -->|HTTPS| Remote[Remote API]",
   ];
   if (/(auth|token|credential|api key)/.test(lower)) {
-    lines.push("  App --> Creds[Credential Store]", "  Creds --> Sqlite");
+    lines.push("  App -->|in-process| Creds[Credential Store]", "  Creds -->|SQL| Sqlite");
   }
   if (/(queue|offline|sync)/.test(lower)) {
-    lines.push("  App --> Queue[Request Queue]", "  Queue --> Http", "  Queue --> Sqlite");
+    lines.push("  App -->|in-process| Queue[Request Queue]", "  Queue -->|dispatch| Http", "  Queue -->|SQL| Sqlite");
   }
   return lines.join("\n");
 }
@@ -55,7 +55,14 @@ const NODE_LABELS = [
   /\b([A-Za-z][\w-]*)\s*\(\s*"?([^)\n"]+?)"?\s*\)/g,
 ];
 
-const EDGE_RE = /\b([A-Za-z][\w-]*)\s*-+\s*>\s*([A-Za-z][\w-]*)/g;
+const PIPE_EDGE_RE =
+  /^([A-Za-z][\w-]*)(?:\[[^\]]*\]|\([^)]*\)|\{[^}]*\})?\s*(?:--+|==+|\.-+|-+\.)>\s*\|([^|\n]*)\|\s*([A-Za-z][\w-]*)/;
+const TEXT_EDGE_RE =
+  /^([A-Za-z][\w-]*)(?:\[[^\]]*\]|\([^)]*\)|\{[^}]*\})?\s*--\s*([^>\n]+?)\s*-->\s*([A-Za-z][\w-]*)/;
+const BARE_EDGE_RE =
+  /^([A-Za-z][\w-]*)(?:\[[^\]]*\]|\([^)]*\)|\{[^}]*\})?\s*(?:--+|==+|\.-+|-+\.)>\s*([A-Za-z][\w-]*)(?:\[[^\]]*\]|\([^)]*\)|\{[^}]*\})?(?:\s*:\s*(.+))?$/;
+const SKIP_EDGE = /^(style |classdef |class |click |subgraph|direction|%%|linkstyle|flowchart|graph |classdiagram)/i;
+const REL_HEADING_RE = /^###\s+(.+?)\s*(?:→|->|--|>)\s*(.+?)\s*$/;
 
 export function extractDiagramComponents(diagram: string): { id: string; label: string }[] {
   const seen = new Set<string>();
@@ -73,6 +80,155 @@ export function extractDiagramComponents(diagram: string): { id: string; label: 
     }
   }
   return out;
+}
+
+export type DiagramEdge = {
+  from: string;
+  to: string;
+  from_label: string;
+  to_label: string;
+  label: string;
+  explanation: string;
+};
+
+export function extractDiagramEdges(diagram: string): { from: string; to: string; label: string }[] {
+  const seen = new Set<string>();
+  const out: { from: string; to: string; label: string }[] = [];
+  for (const raw of (diagram || "").split("\n")) {
+    const line = raw.trim();
+    if (!line || SKIP_EDGE.test(line)) continue;
+    const parsed = parseEdgeLine(line);
+    if (!parsed) continue;
+    const key = `${parsed.from}\0${parsed.to}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(parsed);
+  }
+  return out;
+}
+
+function parseEdgeLine(line: string): { from: string; to: string; label: string } | null {
+  const pipe = PIPE_EDGE_RE.exec(line);
+  if (pipe) return { from: pipe[1], to: pipe[3], label: (pipe[2] || "").trim() };
+  const text = TEXT_EDGE_RE.exec(line);
+  if (text) return { from: text[1], to: text[3], label: (text[2] || "").trim() };
+  const bare = BARE_EDGE_RE.exec(line);
+  if (bare) return { from: bare[1], to: bare[2], label: (bare[3] || "").trim() };
+  return null;
+}
+
+function normRelToken(value: string): string {
+  return (value || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+export function lookupEdgeNote(
+  notes: {
+    from: string;
+    to: string;
+    from_label?: string;
+    to_label?: string;
+    label?: string;
+    explanation?: string;
+  }[],
+  start: string,
+  end: string,
+): (typeof notes)[number] | undefined {
+  const startKeys = new Set([normRelToken(start)].filter(Boolean));
+  const endKeys = new Set([normRelToken(end)].filter(Boolean));
+  return notes.find((note) => {
+    const left = new Set(
+      [normRelToken(note.from), normRelToken(note.from_label || "")].filter(Boolean),
+    );
+    const right = new Set(
+      [normRelToken(note.to), normRelToken(note.to_label || "")].filter(Boolean),
+    );
+    return [...startKeys].some((k) => left.has(k)) && [...endKeys].some((k) => right.has(k));
+  });
+}
+
+export function parseRelationshipCatalog(catalog: string): { from: string; to: string; explanation: string }[] {
+  const lines = (catalog || "").split("\n");
+  const out: { from: string; to: string; explanation: string }[] = [];
+  let current: { from: string; to: string; parts: string[] } | null = null;
+  const flush = () => {
+    if (!current) return;
+    const explanation = current.parts.join("\n").trim();
+    if (explanation) out.push({ from: current.from, to: current.to, explanation });
+    current = null;
+  };
+  for (const line of lines) {
+    const heading = REL_HEADING_RE.exec(line.trim());
+    if (heading) {
+      flush();
+      current = {
+        from: heading[1].trim().replace(/`/g, ""),
+        to: heading[2].trim().replace(/`/g, ""),
+        parts: [],
+      };
+      continue;
+    }
+    if (current && !line.startsWith("## ")) current.parts.push(line);
+  }
+  flush();
+  return out;
+}
+
+export function fallbackRelationshipNotes(
+  diagram: string,
+  spec = "",
+  comms = "",
+  catalog = "",
+): DiagramEdge[] {
+  const labels = Object.fromEntries(extractDiagramComponents(diagram).map((c) => [c.id, c.label]));
+  const parsed = parseRelationshipCatalog(catalog);
+  return extractDiagramEdges(diagram).map((edge) => {
+    const from_label = labels[edge.from] || edge.from;
+    const to_label = labels[edge.to] || edge.to;
+    const hit = lookupEdgeNote(parsed, edge.from, edge.to);
+    return {
+      from: edge.from,
+      to: edge.to,
+      from_label,
+      to_label,
+      label: edge.label,
+      explanation:
+        hit?.explanation ||
+        relationshipExplanation(edge.from, edge.to, from_label, to_label, edge.label, spec, comms),
+    };
+  });
+}
+
+function relationshipExplanation(
+  startId: string,
+  endId: string,
+  startLabel: string,
+  endLabel: string,
+  edgeLabel: string,
+  spec: string,
+  comms: string,
+): string {
+  const proto = edgeLabel.trim() ? ` over ${edgeLabel.trim()}` : "";
+  const snippet = snippetFromText(comms, startLabel, endLabel, startId, endId)
+    || snippetFromText(spec, startLabel, endLabel, startId, endId);
+  const body = `${startLabel} calls${proto} ${endLabel}. The arrow is a directed dependency: ${startLabel} needs ${endLabel} to complete its work, and the protocol on this hop is what the two sides actually speak.`;
+  if (snippet && !body.toLowerCase().includes(snippet.toLowerCase().slice(0, 40))) {
+    return `${body} ${snippet}`;
+  }
+  return body;
+}
+
+function snippetFromText(text: string, ...needles: string[]): string {
+  const wanted = needles.filter((n) => n && n.trim().length > 1);
+  if (!text.trim() || wanted.length < 2) return "";
+  for (const para of text.split(/\n+/)) {
+    const blob = para.toLowerCase();
+    const hits = wanted.filter((n) => blob.includes(n.toLowerCase())).length;
+    if (hits >= 2) {
+      const clean = para.replace(/\s+/g, " ").replace(/^[-* ]+/, "").trim();
+      if (clean.length >= 40) return clean.slice(0, 600);
+    }
+  }
+  return "";
 }
 
 function sectionBounds(spec: string, heading: string): { start: number; end: number; contentStart: number } | null {
@@ -131,10 +287,9 @@ export function fallbackComponentCatalog(diagram: string, spec = ""): string {
   const labels = Object.fromEntries(components.map((c) => [c.id, c.label]));
   const neighbors = new Map<string, string[]>();
   for (const c of components) neighbors.set(c.id, []);
-  EDGE_RE.lastIndex = 0;
-  let edge: RegExpExecArray | null;
-  while ((edge = EDGE_RE.exec(diagram || ""))) {
-    const [, start, end] = edge;
+  for (const edge of extractDiagramEdges(diagram)) {
+    const start = edge.from;
+    const end = edge.to;
     if (neighbors.has(start) && labels[end] && !neighbors.get(start)!.includes(labels[end])) {
       neighbors.get(start)!.push(labels[end]);
     }

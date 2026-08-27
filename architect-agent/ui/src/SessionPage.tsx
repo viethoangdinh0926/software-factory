@@ -14,6 +14,7 @@ import {
   formatMessageNode,
   sessionHeaderChips,
   shouldShowMessageNode,
+  workflowRailLabel,
   type DesignSession,
   type WorkflowTile,
 } from "./api";
@@ -24,6 +25,7 @@ import {
   extractSpecSection,
   fallbackComponentCatalog,
   fallbackDesignDiagram,
+  fallbackRelationshipNotes,
   stripSpecSection,
 } from "./fallbackDiagram";
 import { MarkdownView } from "./MarkdownView";
@@ -102,7 +104,6 @@ export function SessionPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [session?.messages, pendingUserText, chatBusy]);
 
-  const inMarket = session?.phase === "market_research";
   const diagramSource = session
     ? session.design_diagram?.trim() ||
       (diagramIsDue(session.phase, session.design_track, session.design_step)
@@ -123,25 +124,27 @@ export function SessionPage() {
       })()
     : "";
   const showComponents = Boolean(componentCatalog.trim());
+  const specText = session?.business_spec || "";
+  const commsText = session?.communication_schemes || "";
   const specForPanel = session
-    ? stripSpecSection(session.business_spec, "Diagram components") || session.business_spec
+    ? stripSpecSection(
+        stripSpecSection(specText, "Diagram components"),
+        "Diagram relationships",
+      ) || specText
     : "";
+  const edgesJson = JSON.stringify(session?.diagram_edges || []);
+  const edgeNotes = useMemo(() => {
+    if (!diagramSource) return [];
+    const fromSession = JSON.parse(edgesJson) as { from: string; to: string; explanation: string }[];
+    if (fromSession.length) return fromSession;
+    const fromSpec = extractSpecSection(specText, "Diagram relationships");
+    return fallbackRelationshipNotes(diagramSource, specText, commsText, fromSpec);
+  }, [diagramSource, edgesJson, specText, commsText]);
   const showComponentWalkthrough =
     Boolean(session && showComponents && !chatDescribesComponents(session.messages, diagramSource));
   const headerChips = session ? sessionHeaderChips(session) : [];
   const workflow = session?.workflow;
   const workflowTiles = workflow?.tiles || [];
-
-  const nodeTitle = useMemo(() => {
-    if (!session) return "Loading…";
-    if (session.finalized) return "Design finalized";
-    if (workflow?.title) return workflow.title;
-    if (inMarket) return "Market evaluation";
-    if (session.phase === "lld") return "Low-level design";
-    if (session.phase === "hld") return "High-level design";
-    if (session.phase === "phase0") return "Scope classification";
-    return "Design session";
-  }, [session, inMarket, workflow?.title]);
 
   async function onChat(e: FormEvent) {
     e.preventDefault();
@@ -398,10 +401,7 @@ export function SessionPage() {
       <main className="grid session-grid">
         <section className="panel chat-panel">
           <div className="panel-head">
-            <h2>{nodeTitle}</h2>
-            <span className="panel-kicker">
-              {session.design_step_title?.trim() || "Conversation"}
-            </span>
+            <h2>{session.finalized ? "Design finalized" : "Conversation"}</h2>
           </div>
           <div className="messages" aria-live="polite">
             {session.messages.map((m, i) => (
@@ -478,8 +478,10 @@ export function SessionPage() {
                     key={tile.id}
                     className={`workflow-rail-item ${tile.status}`}
                     href={`#wf-${tile.id}`}
+                    title={tile.title}
+                    aria-current={tile.status === "current" ? "step" : undefined}
                   >
-                    {tile.title}
+                    {workflowRailLabel(tile.title)}
                   </a>
                 ))}
               </nav>
@@ -490,12 +492,14 @@ export function SessionPage() {
                   className={`artifact workflow-tile ${tile.status}${
                     tile.diagram ? " diagram-artifact" : ""
                   }`}
+                  aria-current={tile.status === "current" ? "step" : undefined}
                 >
                   <div className="panel-head">
                     <h2>{tile.title}</h2>
-                    <span className="panel-kicker">{tile.status}</span>
                   </div>
-                  {tile.diagram ? <MermaidDiagram source={tile.diagram} /> : null}
+                  {tile.diagram ? (
+                    <MermaidDiagram source={tile.diagram} edgeNotes={edgeNotes} />
+                  ) : null}
                   {tile.body ? (
                     <MarkdownView content={tile.body} className="doc" />
                   ) : tile.status === "pending" ? (
@@ -514,7 +518,7 @@ export function SessionPage() {
                     <h2>System design diagram</h2>
                     <span className="panel-kicker">Diagram</span>
                   </div>
-                  <MermaidDiagram source={diagramSource} />
+                  <MermaidDiagram source={diagramSource} edgeNotes={edgeNotes} />
                 </div>
               ) : null}
               <div className="artifact">

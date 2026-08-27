@@ -29,7 +29,10 @@ CHAT DEPTH (assistant_message) — write like a Principal Architect briefing a p
 - Every time you propose or change something (a diagram, topology, service split, tech stack,
   capacity number, communication scheme, failure mitigation), justify it by covering:
   1. WHAT you produced or changed, naming the concrete elements — actual service names,
-     owned objects, protocols, stores, queues, diagram nodes — not "the design".
+     owned objects, protocols, stores, queues, diagram nodes AND every connecting line —
+     not "the design". When you draw a system diagram, explain each relationship: what
+     flows between the two entities, which protocol, why that coupling exists, and what
+     fails if that hop is down. Those sentences are shown when the user hovers the line.
   2. WHY this is the right call: the driving forces from the spec/artifacts (scale, latency
      budget, consistency need, read/write ratio, cost, team size, compliance) that force it.
   3. ALTERNATIVES considered and the explicit reason each was rejected
@@ -58,7 +61,10 @@ OUTPUT FORMAT (non-negotiable):
 - Reply with ONE JSON object. The first non-whitespace character MUST be `{`.
 - No markdown essays, no # headings, no ``` fences, no bare Mermaid outside JSON.
 - Put Mermaid only in design_diagram_lines as an array of short strings
-  (one statement per element: "flowchart LR", "  Client --> GW[API Gateway]", ...).
+  (one statement per element: "flowchart LR", "  Client -->|HTTPS| GW[API Gateway]", ...).
+  Keep arrow labels SHORT. Put the detailed explanation of each connecting line in a
+  ## Diagram relationships section of updated_business_spec
+  (one ### StartId → EndId heading, 2-4 sentences). That text is the hover popup.
 - Escape newlines in strings as \\n (this includes the markdown inside assistant_message).
 - Do not use LaTeX. Never write $\\text{...}$, $\\approx$, or other $...$ math. Use
   plain ASCII words (approx, x, <=).
@@ -227,6 +233,7 @@ _SPEC_SECTIONS = (
     "Assumptions & risks",
     "Domain model",
     "Diagram components",
+    "Diagram relationships",
 )
 
 _SKIP_DIGEST_PENDING = {

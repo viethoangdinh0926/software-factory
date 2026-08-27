@@ -1,8 +1,10 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
+import type { DiagramEdgeNote } from "./api";
+import { lookupEdgeNote } from "./fallbackDiagram";
 import { diagramLoadErrorMessage, renderMermaid } from "./mermaidRender";
 import { sanitizeMermaidSource } from "./sanitizeMermaid";
 
-type Props = { source: string };
+type Props = { source: string; edgeNotes?: DiagramEdgeNote[] };
 
 type Point = { x: number; y: number };
 
@@ -10,9 +12,12 @@ type EdgeInfo = {
   id: string;
   start: string;
   end: string;
+  startLabel: string;
+  endLabel: string;
   path: SVGPathElement;
   hitPath: SVGPathElement; // Invisible wider path for easier hovering
   label: SVGGElement | null;
+  protocol?: string;
   relationship?: string;
 };
 
@@ -31,7 +36,7 @@ const MIN_SCALE = 0.4;
 const MAX_SCALE = 2.5;
 const ZOOM_STEP = 1.15;
 
-export function MermaidDiagram({ source }: Props) {
+export function MermaidDiagram({ source, edgeNotes = [] }: Props) {
   const reactId = useId().replace(/:/g, "");
   const hostRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<SVGGElement | null>(null);
@@ -143,7 +148,7 @@ export function MermaidDiagram({ source }: Props) {
         // Clean up old hit paths before creating new ones
         scene.querySelectorAll<SVGPathElement>("[data-hit-path='true']").forEach(p => p.remove());
         
-        edgesRef.current = indexEdges(scene, [...nodes.keys()]);
+        edgesRef.current = indexEdges(scene, [...nodes.keys()], edgeNotes);
 
         setEmpty(false);
         setError(null);
@@ -167,7 +172,7 @@ export function MermaidDiagram({ source }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [sanitized, reactId]);
+  }, [sanitized, reactId, edgeNotes]);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -380,7 +385,7 @@ export function MermaidDiagram({ source }: Props) {
         <button type="button" className="btn ghost diagram-tool" onClick={resetView} title="Reset view">
           Reset
         </button>
-        <span className="diagram-hint">Drag nodes · drag background to pan · scroll to zoom</span>
+        <span className="diagram-hint">Hover a line for the relationship · drag nodes · scroll to zoom</span>
       </div>
       {error ? (
         <div className="diagram-error">
@@ -406,10 +411,15 @@ export function MermaidDiagram({ source }: Props) {
           }}
         >
           <div className="diagram-tooltip-content">
-            <strong>{hoveredEdge.start} → {hoveredEdge.end}</strong>
-            {hoveredEdge.relationship && (
+            <strong>
+              {hoveredEdge.startLabel} → {hoveredEdge.endLabel}
+            </strong>
+            {hoveredEdge.protocol ? (
+              <span className="diagram-tooltip-protocol">{hoveredEdge.protocol}</span>
+            ) : null}
+            {hoveredEdge.relationship ? (
               <p className="diagram-tooltip-description">{hoveredEdge.relationship}</p>
-            )}
+            ) : null}
           </div>
         </div>
       )}
@@ -624,7 +634,7 @@ function pathMidpoint(points: Point[]): Point {
   return points[points.length - 1];
 }
 
-function indexEdges(scene: SVGGElement, nodeKeys: string[]): EdgeInfo[] {
+function indexEdges(scene: SVGGElement, nodeKeys: string[], edgeNotes: DiagramEdgeNote[]): EdgeInfo[] {
   const edges: EdgeInfo[] = [];
   const paths = scene.querySelectorAll<SVGPathElement>(".edgePaths path, path[data-et='edge']");
   const seen = new Set<string>();
@@ -638,31 +648,32 @@ function indexEdges(scene: SVGGElement, nodeKeys: string[]): EdgeInfo[] {
     const labelEl = (scene
       .querySelector(`.edgeLabel [data-id="${cssEscape(edgeId)}"]`)
       ?.closest("g.edgeLabel") ?? null) as SVGGElement | null;
-    
-    // Extract relationship label from the edge label element
-    let relationship: string | undefined;
+
+    let protocol: string | undefined;
     if (labelEl) {
-      const labelSpan = labelEl.querySelector("span");
-      if (labelSpan) {
-        relationship = labelSpan.textContent?.trim() || undefined;
-      }
+      const labelSpan = labelEl.querySelector("span, p, div");
+      const fromLabel = labelSpan?.textContent?.trim();
+      if (fromLabel) protocol = fromLabel;
     }
-    
-    // Generate relationship description if not present
-    if (!relationship) {
-      relationship = generateRelationshipDescription(ends.start, ends.end);
-    }
-    
-    // Create invisible hit path for easier hovering
+
+    const note = lookupEdgeNote(edgeNotes, ends.start, ends.end);
+    const relationship =
+      note?.explanation?.trim()
+      || (protocol && protocol.length > 40 ? protocol : undefined)
+      || `${ends.start} depends on ${ends.end}. Hover details are filled when the architect writes the diagram relationships.`;
+
     const hitPath = createHitPath(path);
-    
+
     edges.push({
       id: edgeId,
       start: ends.start,
       end: ends.end,
+      startLabel: note?.from_label || ends.start,
+      endLabel: note?.to_label || ends.end,
       path,
       hitPath,
       label: labelEl,
+      protocol: note?.label || (protocol && protocol.length <= 40 ? protocol : undefined),
       relationship,
     });
   });
@@ -689,36 +700,6 @@ function createHitPath(originalPath: SVGPathElement): SVGPathElement {
   originalPath.parentNode?.insertBefore(hitPath, originalPath);
   
   return hitPath;
-}
-
-function generateRelationshipDescription(start: string, end: string): string {
-  // Generate contextual relationship descriptions based on node names
-  const commonPatterns: Record<string, string> = {
-    "Client": "User requests from client devices",
-    "CDN": "Content delivery network for global distribution",
-    "LB": "Load balancing and traffic routing",
-    "GW": "API gateway for request routing",
-    "Auth": "Authentication and authorization",
-    "Meta": "Video metadata management",
-    "Upload": "Video upload and ingestion",
-    "Social": "Social interactions and engagement",
-    "Disc": "Content discovery and search",
-    "UserDB": "User data persistence",
-    "VideoDB": "Video metadata persistence",
-    "S3Raw": "Raw video storage",
-    "Kafka": "Event streaming and messaging",
-    "Transcoder": "Video transcoding and processing",
-    "S3Proc": "Processed video storage",
-    "ES": "Full-text search indexing",
-    "Redis": "Caching and session management",
-    "SocialDB": "Social data persistence",
-    "RecEngine": "Recommendation and personalization",
-  };
-  
-  const startDesc = commonPatterns[start] || `${start} component`;
-  const endDesc = commonPatterns[end] || `${end} component`;
-  
-  return `${startDesc} communicates with ${endDesc}`;
 }
 
 function logicalNodeId(el: Element): string | null {

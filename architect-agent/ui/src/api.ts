@@ -31,6 +31,15 @@ export type WorkflowState = {
   tiles: WorkflowTile[];
 };
 
+export type DiagramEdgeNote = {
+  from: string;
+  to: string;
+  from_label?: string;
+  to_label?: string;
+  label?: string;
+  explanation: string;
+};
+
 export type DesignSession = {
   design_session_id: string;
   phase: string;
@@ -48,6 +57,7 @@ export type DesignSession = {
   approve_kind: string;
   business_spec: string;
   design_diagram: string;
+  diagram_edges: DiagramEdgeNote[];
   design_justification: string;
   tradeoff_ledger: string;
   scale_estimates: string;
@@ -149,38 +159,49 @@ export function formatMessageNode(node?: string): string {
   return formatPhaseLabel(node) || node.replaceAll("_", " ");
 }
 
-export function trackStepLabel(session: DesignSession): string | null {
-  const track = (session.design_track || "").toUpperCase();
-  if (!track || track === "UNSET") {
-    return session.phase === "phase0" ? "Phase 0" : null;
-  }
-  const max = track === "LLD" ? 3 : track === "HLD" ? 6 : 0;
-  if (!max || session.phase === "market_research") {
-    return track;
-  }
-  const step = Math.max(0, session.design_step || 0);
-  if (step <= 0) return track;
-  const title = (session.design_step_title || "").trim();
-  return title ? `${track} · ${step}/${max} ${title}` : `${track} · Step ${step}/${max}`;
+function normalizeChip(label: string): string {
+  return label
+    .toLowerCase()
+    .replaceAll("·", " ")
+    .replaceAll("/", " ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\bstep\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
-/** Header chips without repeating the same phase/track label twice. */
+function chipIsRedundant(existing: string | null, candidate: string): boolean {
+  if (!existing) return false;
+  const a = normalizeChip(existing);
+  const b = normalizeChip(candidate);
+  if (!a || !b) return false;
+  if (a === b || a.includes(b) || b.includes(a)) return true;
+  const tokensA = new Set(a.split(" ").filter((w) => w.length > 1));
+  const tokensB = b.split(" ").filter((w) => w.length > 1);
+  return tokensB.length > 0 && tokensB.every((w) => tokensA.has(w));
+}
+
+/** Compact rail index ("HLD 3") so the tile heading can keep the full step name. */
+export function workflowRailLabel(title: string): string {
+  const dash = title.indexOf(" - ");
+  if (dash > 0) return title.slice(0, dash).trim();
+  return title;
+}
+
+/** Process-state chips that are not already shown by the workflow rail. */
 export function sessionHeaderChips(session: DesignSession): string[] {
-  const current = session.workflow?.title?.trim();
-  const track = trackStepLabel(session);
-  const chips: string[] = [];
-  if (current) chips.push(current);
-  if (track && !chipIsRedundant(current || null, track) && !chipIsRedundant(track, current || "")) {
-    chips.push(track);
+  const tiles = session.workflow?.tiles || [];
+  const current = (session.workflow?.title || "").trim();
+  if (!tiles.length) {
+    return current ? [current] : [];
   }
-  return chips;
-}
-
-function chipIsRedundant(track: string | null, phase: string): boolean {
-  if (!track) return false;
-  const t = track.toLowerCase();
-  const p = phase.toLowerCase();
-  return t === p || t.includes(p);
+  const onTrackStep = session.phase === "lld" || session.phase === "hld";
+  if (onTrackStep || session.phase === "done") return [];
+  const track = (session.design_track || "").toUpperCase();
+  if (track && track !== "UNSET" && !chipIsRedundant(current || null, track)) {
+    return [track];
+  }
+  return [];
 }
 
 export function shouldShowMessageNode(node: string | undefined, phase: string): boolean {
