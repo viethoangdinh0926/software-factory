@@ -20,6 +20,11 @@ type EdgeInfo = {
   label: SVGGElement | null;
   protocol?: string;
   relationship: string;
+  originalD: string;
+  pathStart: Point;
+  pathEnd: Point;
+  startCenter0: Point;
+  endCenter0: Point;
 };
 
 type TooltipState = {
@@ -161,7 +166,7 @@ export function MermaidDiagram({ source, edgeNotes = [] }: Props) {
         // Clean up old hit paths before creating new ones
         scene.querySelectorAll<SVGPathElement>("[data-hit-path='true']").forEach(p => p.remove());
         
-        edgesRef.current = indexEdges(scene, [...nodes.keys()], edgeNotesRef.current);
+        edgesRef.current = indexEdges(scene, nodes, edgeNotesRef.current);
         hoveredEdgeRef.current = null;
         setTooltip(null);
 
@@ -433,7 +438,7 @@ export function MermaidDiagram({ source, edgeNotes = [] }: Props) {
   );
 }
 
-/** Rebuild a continuous orthogonal edge between the two live node anchors. */
+/** Keep Mermaid’s original curve; retarget the endpoints to the live node borders. */
 function rerouteEdge(edge: EdgeInfo, nodes: Map<string, SVGGElement>) {
   const startEl = nodes.get(edge.start);
   const endEl = nodes.get(edge.end);
@@ -441,23 +446,37 @@ function rerouteEdge(edge: EdgeInfo, nodes: Map<string, SVGGElement>) {
 
   const startCenter = nodeCenter(startEl);
   const endCenter = nodeCenter(endEl);
-  const startPt = borderAnchor(startEl, startCenter, endCenter);
-  const endPt = borderAnchor(endEl, endCenter, startCenter);
-  const points =
-    edge.start === edge.end ? selfLoopPoints(startCenter, startEl) : orthogonalRoute(startPt, endPt);
+  const startPt = {
+    x: edge.pathStart.x + (startCenter.x - edge.startCenter0.x),
+    y: edge.pathStart.y + (startCenter.y - edge.startCenter0.y),
+  };
+  const endPt = {
+    x: edge.pathEnd.x + (endCenter.x - edge.endCenter0.x),
+    y: edge.pathEnd.y + (endCenter.y - edge.endCenter0.y),
+  };
 
-  writeEdgePath(edge.path, points);
-  writeEdgePath(edge.hitPath, points); // Also update the hit path
-  try {
-    edge.path.setAttribute("data-points", btoa(JSON.stringify(points)));
-    edge.hitPath.setAttribute("data-points", btoa(JSON.stringify(points)));
-  } catch {
-    /* ignore */
-  }
+  const nextD =
+    edge.start === edge.end
+      ? translatePath(edge.originalD, {
+          x: startPt.x - edge.pathStart.x,
+          y: startPt.y - edge.pathStart.y,
+        })
+      : keepOriginalCurve(edge.originalD)
+        ? remapPath(edge.originalD, edge.pathStart, edge.pathEnd, startPt, endPt) ||
+          cubicBetween(startPt, endPt)
+        : cubicBetween(startPt, endPt);
+
+  edge.path.setAttribute("d", nextD);
+  edge.hitPath.setAttribute("d", nextD);
 
   if (edge.label) {
-    const mid = pathMidpoint(points);
-    writeTranslate(edge.label, mid.x, mid.y);
+    try {
+      const len = edge.path.getTotalLength();
+      const mid = edge.path.getPointAtLength(len / 2);
+      writeTranslate(edge.label, mid.x, mid.y);
+    } catch {
+      writeTranslate(edge.label, (startPt.x + endPt.x) / 2, (startPt.y + endPt.y) / 2);
+    }
   }
 }
 
@@ -465,179 +484,220 @@ function nodeCenter(el: SVGGElement): Point {
   return readTranslate(el);
 }
 
-function nodeHalfSize(el: SVGGElement): Point {
-  try {
-    const box = el.getBBox();
-    return { x: Math.max(box.width / 2, 8), y: Math.max(box.height / 2, 8) };
-  } catch {
-    return { x: 40, y: 24 };
-  }
+function keepOriginalCurve(d: string): boolean {
+  if (/[CcQqSsAa]/.test(d)) return true;
+  const nums = d.match(/[-+]?(?:\d*\.\d+|\d+)/g) || [];
+  return nums.length >= 12;
 }
 
-/** Mermaid decision nodes (`A{...}`) render as a 4-point polygon diamond. */
-function isDiamondShape(el: SVGGElement): boolean {
-  const poly = el.querySelector("polygon");
-  if (poly?.points && poly.points.numberOfItems === 4) return true;
-  // Hand-drawn diamonds are paths; detect near-square node with no rect.
-  if (el.querySelector("rect, circle, ellipse")) return false;
-  const path = el.querySelector("path");
-  if (!path) return false;
-  const half = nodeHalfSize(el);
-  return Math.abs(half.x - half.y) / Math.max(half.x, half.y) < 0.2;
-}
-
-/**
- * Point on the node border in the direction of `toward`.
- * Rectangles use L∞ (AABB); diamonds use L1 (rhombus) so edges meet the tips/sides.
- */
-function borderAnchor(el: SVGGElement, center: Point, toward: Point): Point {
-  const poly = shapePolygonInScene(el);
-  if (poly && poly.length >= 3) {
-    const hit = rayPolygonIntersect(center, toward, poly);
-    if (hit) return hit;
-  }
-
-  const half = nodeHalfSize(el);
-  const dx = toward.x - center.x;
-  const dy = toward.y - center.y;
-  if (Math.abs(dx) < 1e-6 && Math.abs(dy) < 1e-6) {
-    return { x: center.x + half.x, y: center.y };
-  }
-
-  if (isDiamondShape(el)) {
-    // Rhombus with vertices at (±r,0) and (0,±r), r ≈ half of square bbox.
-    const r = Math.max(half.x, half.y);
-    const t = r / (Math.abs(dx) + Math.abs(dy));
-    return { x: center.x + dx * t, y: center.y + dy * t };
-  }
-
-  const scale = Math.min(half.x / Math.abs(dx), half.y / Math.abs(dy));
-  return { x: center.x + dx * scale, y: center.y + dy * scale };
-}
-
-/** Polygon vertices transformed into diagram-scene coordinates. */
-function shapePolygonInScene(el: SVGGElement): Point[] | null {
-  const poly = el.querySelector("polygon");
-  if (!poly?.points || poly.points.numberOfItems < 3) return null;
-  const scene = el.ownerSVGElement?.querySelector(".diagram-scene") as SVGGElement | null;
-  const sceneCtm = scene?.getScreenCTM();
-  const polyCtm = poly.getScreenCTM();
-  if (!sceneCtm || !polyCtm) return null;
-  const toScene = sceneCtm.inverse().multiply(polyCtm);
-  const pts: Point[] = [];
-  for (let i = 0; i < poly.points.numberOfItems; i++) {
-    const p = poly.points.getItem(i);
-    const mapped = new DOMPoint(p.x, p.y).matrixTransform(toScene);
-    pts.push({ x: mapped.x, y: mapped.y });
-  }
-  return pts;
-}
-
-/** Closest ray hit from origin toward `toward` against a polygon. */
-function rayPolygonIntersect(origin: Point, toward: Point, poly: Point[]): Point | null {
-  const dx = toward.x - origin.x;
-  const dy = toward.y - origin.y;
-  if (Math.abs(dx) < 1e-9 && Math.abs(dy) < 1e-9) return poly[0] ?? null;
-
-  let bestT = Infinity;
-  let best: Point | null = null;
-  for (let i = 0; i < poly.length; i++) {
-    const a = poly[i];
-    const b = poly[(i + 1) % poly.length];
-    const hit = raySegmentIntersect(origin, dx, dy, a, b);
-    if (hit && hit.t > 1e-6 && hit.t < bestT) {
-      bestT = hit.t;
-      best = hit.point;
-    }
-  }
-  return best;
-}
-
-function raySegmentIntersect(
-  origin: Point,
-  dx: number,
-  dy: number,
-  a: Point,
-  b: Point,
-): { t: number; point: Point } | null {
-  const ex = b.x - a.x;
-  const ey = b.y - a.y;
-  const denom = dx * ey - dy * ex;
-  if (Math.abs(denom) < 1e-9) return null;
-  const ox = a.x - origin.x;
-  const oy = a.y - origin.y;
-  const t = (ox * ey - oy * ex) / denom;
-  const u = (ox * dy - oy * dx) / denom;
-  if (t <= 1e-6 || u < -1e-6 || u > 1 + 1e-6) return null;
-  return { t, point: { x: origin.x + t * dx, y: origin.y + t * dy } };
-}
-
-function orthogonalRoute(from: Point, to: Point): Point[] {
+function cubicBetween(from: Point, to: Point): string {
   const dx = to.x - from.x;
   const dy = to.y - from.y;
-  if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) return [from, to];
-
-  // Prefer a single elbow; keep the path continuous (no stranded midpoints).
-  if (Math.abs(dx) >= Math.abs(dy)) {
-    const midX = from.x + dx / 2;
-    return [from, { x: midX, y: from.y }, { x: midX, y: to.y }, to];
-  }
-  const midY = from.y + dy / 2;
-  return [from, { x: from.x, y: midY }, { x: to.x, y: midY }, to];
+  const dist = Math.hypot(dx, dy);
+  if (dist < 0.5) return `M ${fmt(from.x)} ${fmt(from.y)} L ${fmt(to.x)} ${fmt(to.y)}`;
+  const lift = Math.min(48, dist * 0.22);
+  const nx = (-dy / dist) * lift;
+  const ny = (dx / dist) * lift;
+  const c1x = from.x + dx * 0.35 + nx;
+  const c1y = from.y + dy * 0.35 + ny;
+  const c2x = from.x + dx * 0.65 + nx;
+  const c2y = from.y + dy * 0.65 + ny;
+  return `M ${fmt(from.x)} ${fmt(from.y)} C ${fmt(c1x)} ${fmt(c1y)} ${fmt(c2x)} ${fmt(c2y)} ${fmt(to.x)} ${fmt(to.y)}`;
 }
 
-function selfLoopPoints(center: Point, el: SVGGElement): Point[] {
-  const half = nodeHalfSize(el);
-  if (isDiamondShape(el)) {
-    const r = Math.max(half.x, half.y);
-    const out = r + 18;
-    return [
-      { x: center.x + r, y: center.y },
-      { x: center.x + out, y: center.y },
-      { x: center.x + out, y: center.y - out },
-      { x: center.x, y: center.y - out },
-      { x: center.x, y: center.y - r },
-    ];
-  }
-  const r = Math.max(half.x, half.y) + 18;
-  return [
-    { x: center.x + half.x, y: center.y },
-    { x: center.x + r, y: center.y },
-    { x: center.x + r, y: center.y - r },
-    { x: center.x, y: center.y - r },
-    { x: center.x, y: center.y - half.y },
-  ];
+function fmt(n: number): string {
+  return (Math.round(n * 100) / 100).toString();
 }
 
-function writeEdgePath(path: SVGPathElement, points: Point[]) {
-  if (points.length === 0) return;
-  const [first, ...rest] = points;
-  path.setAttribute("d", `M ${first.x} ${first.y}` + rest.map((p) => ` L ${p.x} ${p.y}`).join(""));
+type PathCmd = { cmd: string; nums: number[] };
+
+function tokenizePath(d: string): PathCmd[] {
+  const out: PathCmd[] = [];
+  const re = /([MmLlHhVvCcSsQqTtAaZz])([^MmLlHhVvCcSsQqTtAaZz]*)/g;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(d || ""))) {
+    const nums = (match[2].match(/[-+]?(?:\d*\.\d+|\d+)(?:[eE][-+]?\d+)?/g) || []).map(Number);
+    out.push({ cmd: match[1], nums });
+  }
+  return out;
 }
 
-function pathMidpoint(points: Point[]): Point {
-  if (points.length === 0) return { x: 0, y: 0 };
-  if (points.length === 1) return points[0];
-  let total = 0;
-  const seg: number[] = [];
-  for (let i = 1; i < points.length; i++) {
-    const len = Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y);
-    seg.push(len);
-    total += len;
-  }
-  if (total === 0) return points[Math.floor(points.length / 2)];
-  let left = total / 2;
-  for (let i = 0; i < seg.length; i++) {
-    if (left <= seg[i]) {
-      const t = seg[i] === 0 ? 0 : left / seg[i];
-      return {
-        x: points[i].x + (points[i + 1].x - points[i].x) * t,
-        y: points[i].y + (points[i + 1].y - points[i].y) * t,
-      };
+function toAbsolutePath(cmds: PathCmd[]): PathCmd[] {
+  let x = 0;
+  let y = 0;
+  let startX = 0;
+  let startY = 0;
+  const abs: PathCmd[] = [];
+
+  for (const { cmd, nums } of cmds) {
+    const upper = cmd.toUpperCase();
+    const rel = cmd !== upper;
+
+    if (upper === "Z") {
+      abs.push({ cmd: "Z", nums: [] });
+      x = startX;
+      y = startY;
+      continue;
     }
-    left -= seg[i];
+
+    if (upper === "H") {
+      const pts: number[] = [];
+      for (const n of nums) {
+        x = rel ? x + n : n;
+        pts.push(x, y);
+      }
+      abs.push({ cmd: "L", nums: pts });
+      continue;
+    }
+
+    if (upper === "V") {
+      const pts: number[] = [];
+      for (const n of nums) {
+        y = rel ? y + n : n;
+        pts.push(x, y);
+      }
+      abs.push({ cmd: "L", nums: pts });
+      continue;
+    }
+
+    if (upper === "A") {
+      const next: number[] = [];
+      for (let i = 0; i + 6 < nums.length; i += 7) {
+        const nx = rel ? x + nums[i + 5] : nums[i + 5];
+        const ny = rel ? y + nums[i + 6] : nums[i + 6];
+        next.push(nums[i], nums[i + 1], nums[i + 2], nums[i + 3], nums[i + 4], nx, ny);
+        x = nx;
+        y = ny;
+      }
+      abs.push({ cmd: "A", nums: next });
+      continue;
+    }
+
+    const stride = upper === "C" ? 6 : upper === "S" || upper === "Q" ? 4 : 2;
+    const next: number[] = [];
+    for (let i = 0; i < nums.length; i += stride) {
+      const chunk = nums.slice(i, i + stride);
+      const originX = x;
+      const originY = y;
+      for (let j = 0; j + 1 < chunk.length; j += 2) {
+        const nx = rel ? originX + chunk[j] : chunk[j];
+        const ny = rel ? originY + chunk[j + 1] : chunk[j + 1];
+        chunk[j] = nx;
+        chunk[j + 1] = ny;
+        if (stride === 2 || j + 2 >= chunk.length) {
+          x = nx;
+          y = ny;
+        }
+      }
+      next.push(...chunk);
+      if (upper === "M" && i === 0) {
+        startX = x;
+        startY = y;
+      }
+    }
+
+    if (upper === "M" && next.length > 2) {
+      abs.push({ cmd: "M", nums: next.slice(0, 2) });
+      abs.push({ cmd: "L", nums: next.slice(2) });
+    } else {
+      abs.push({ cmd: upper, nums: next });
+    }
   }
-  return points[points.length - 1];
+
+  return abs;
+}
+
+function pathTerminals(cmds: PathCmd[]): { start: Point; end: Point } | null {
+  let start: Point | null = null;
+  let x = 0;
+  let y = 0;
+  for (const { cmd, nums } of cmds) {
+    if (cmd === "Z" || nums.length < 2) continue;
+    if (cmd === "A") {
+      for (let i = 0; i + 6 < nums.length; i += 7) {
+        x = nums[i + 5];
+        y = nums[i + 6];
+        if (!start) start = { x, y };
+      }
+      continue;
+    }
+    for (let i = 0; i + 1 < nums.length; i += 2) {
+      x = nums[i];
+      y = nums[i + 1];
+      if (!start) start = { x, y };
+    }
+  }
+  return start ? { start, end: { x, y } } : null;
+}
+
+function mapPathCommands(cmds: PathCmd[], mapPt: (p: Point) => Point, scale = 1): PathCmd[] {
+  return cmds.map(({ cmd, nums }) => {
+    if (cmd === "Z" || nums.length === 0) return { cmd, nums };
+    if (cmd === "A") {
+      const next: number[] = [];
+      for (let i = 0; i + 6 < nums.length; i += 7) {
+        const mapped = mapPt({ x: nums[i + 5], y: nums[i + 6] });
+        next.push(nums[i] * scale, nums[i + 1] * scale, nums[i + 2], nums[i + 3], nums[i + 4], mapped.x, mapped.y);
+      }
+      return { cmd, nums: next };
+    }
+    const next = nums.slice();
+    for (let i = 0; i + 1 < next.length; i += 2) {
+      const mapped = mapPt({ x: next[i], y: next[i + 1] });
+      next[i] = mapped.x;
+      next[i + 1] = mapped.y;
+    }
+    return { cmd, nums: next };
+  });
+}
+
+function serializePath(cmds: PathCmd[]): string {
+  return cmds
+    .map(({ cmd, nums }) => (nums.length ? `${cmd} ${nums.map(fmt).join(" ")}` : cmd))
+    .join(" ");
+}
+
+function chordMap(fromA: Point, fromB: Point, toA: Point, toB: Point): { map: (p: Point) => Point; scale: number } {
+  const v0x = fromB.x - fromA.x;
+  const v0y = fromB.y - fromA.y;
+  const v1x = toB.x - toA.x;
+  const v1y = toB.y - toA.y;
+  const len0 = Math.hypot(v0x, v0y) || 1;
+  const len1 = Math.hypot(v1x, v1y) || 1;
+  const scale = len1 / len0;
+  const dAng = Math.atan2(v1y, v1x) - Math.atan2(v0y, v0x);
+  const cos = Math.cos(dAng);
+  const sin = Math.sin(dAng);
+  return {
+    scale,
+    map: (p: Point) => {
+      const lx = p.x - fromA.x;
+      const ly = p.y - fromA.y;
+      return {
+        x: toA.x + (lx * cos - ly * sin) * scale,
+        y: toA.y + (lx * sin + ly * cos) * scale,
+      };
+    },
+  };
+}
+
+function remapPath(d: string, fromStart: Point, fromEnd: Point, toStart: Point, toEnd: Point): string | null {
+  const cmds = toAbsolutePath(tokenizePath(d));
+  if (!cmds.length) return null;
+  const { map, scale } = chordMap(fromStart, fromEnd, toStart, toEnd);
+  return serializePath(mapPathCommands(cmds, map, scale));
+}
+
+function translatePath(d: string, delta: Point): string {
+  const cmds = toAbsolutePath(tokenizePath(d));
+  if (!cmds.length) return d;
+  return serializePath(
+    mapPathCommands(cmds, (p) => ({ x: p.x + delta.x, y: p.y + delta.y })),
+  );
+}
+
+function pathStartEnd(d: string): { start: Point; end: Point } | null {
+  return pathTerminals(toAbsolutePath(tokenizePath(d)));
 }
 
 function applyEdgeNote(edge: EdgeInfo, edgeNotes: DiagramEdgeNote[]) {
@@ -705,9 +765,14 @@ function collectEdgePaths(scene: SVGGElement): SVGPathElement[] {
   return out;
 }
 
-function indexEdges(scene: SVGGElement, nodeKeys: string[], edgeNotes: DiagramEdgeNote[]): EdgeInfo[] {
+function indexEdges(
+  scene: SVGGElement,
+  nodes: Map<string, SVGGElement>,
+  edgeNotes: DiagramEdgeNote[],
+): EdgeInfo[] {
   const edges: EdgeInfo[] = [];
   const seen = new Set<string>();
+  const nodeKeys = [...nodes.keys()];
 
   collectEdgePaths(scene).forEach((path) => {
     const edgeId = path.getAttribute("data-id") || stripDiagramPrefix(path.id);
@@ -739,6 +804,8 @@ function indexEdges(scene: SVGGElement, nodeKeys: string[], edgeNotes: DiagramEd
       || `${startLabel} connects to ${endLabel}.`;
 
     const hitPath = createHitPath(path, `${startLabel} → ${endLabel}. ${relationship}`);
+    const originalD = path.getAttribute("d") || "";
+    const terminals = pathStartEnd(originalD) || { start: { x: 0, y: 0 }, end: { x: 1, y: 0 } };
 
     const edge: EdgeInfo = {
       id: edgeId,
@@ -751,6 +818,11 @@ function indexEdges(scene: SVGGElement, nodeKeys: string[], edgeNotes: DiagramEd
       label: labelEl,
       protocol: note?.label || (protocol && protocol.length <= 40 ? protocol : undefined),
       relationship,
+      originalD,
+      pathStart: terminals.start,
+      pathEnd: terminals.end,
+      startCenter0: nodes.get(start) ? nodeCenter(nodes.get(start)!) : terminals.start,
+      endCenter0: nodes.get(end) ? nodeCenter(nodes.get(end)!) : terminals.end,
     };
     applyEdgeNote(edge, edgeNotes);
     edges.push(edge);

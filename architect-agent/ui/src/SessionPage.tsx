@@ -72,6 +72,7 @@ mermaid.initialize({
     padding: 12,
     nodeSpacing: 48,
     rankSpacing: 56,
+    curve: "basis",
   },
 });
 void warmupMermaid();
