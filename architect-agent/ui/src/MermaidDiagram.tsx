@@ -16,10 +16,19 @@ type EdgeInfo = {
   startLabel: string;
   endLabel: string;
   path: SVGPathElement;
-  hitPath: SVGPathElement; // Invisible wider path for easier hovering
+  hitPath: SVGPathElement;
   label: SVGGElement | null;
   protocol?: string;
-  relationship?: string;
+  relationship: string;
+};
+
+type TooltipState = {
+  startLabel: string;
+  endLabel: string;
+  protocol?: string;
+  relationship: string;
+  x: number;
+  y: number;
 };
 
 type NodeDrag = {
@@ -46,11 +55,13 @@ export function MermaidDiagram({ source, edgeNotes = [] }: Props) {
   const viewRef = useRef({ x: 0, y: 0, scale: 1 });
   const dragRef = useRef<DragMode>(null);
   const hoveredEdgeRef = useRef<EdgeInfo | null>(null);
+  const edgeNotesRef = useRef(edgeNotes);
+  const tooltipElRef = useRef<HTMLDivElement>(null);
+  edgeNotesRef.current = edgeNotes;
   const [error, setError] = useState<string | null>(null);
   const [empty, setEmpty] = useState(!source.trim());
   const [ready, setReady] = useState(false);
-  const [hoveredEdge, setHoveredEdge] = useState<EdgeInfo | null>(null);
-  const [tooltipPos, setTooltipPos] = useState<Point | null>(null);
+  const [tooltip, setTooltip] = useState<TooltipState | null>(null);
   const sanitized = useMemo(() => sanitizeMermaidSource(source), [source]);
 
   const applyView = () => {
@@ -123,6 +134,7 @@ export function MermaidDiagram({ source, edgeNotes = [] }: Props) {
         svgEl.style.maxWidth = "none";
         svgEl.style.width = "100%";
         svgEl.style.height = "100%";
+        svgEl.style.pointerEvents = "auto";
         svgEl.setAttribute("overflow", "visible");
         svgEl.setAttribute("preserveAspectRatio", "xMidYMid meet");
 
@@ -149,7 +161,9 @@ export function MermaidDiagram({ source, edgeNotes = [] }: Props) {
         // Clean up old hit paths before creating new ones
         scene.querySelectorAll<SVGPathElement>("[data-hit-path='true']").forEach(p => p.remove());
         
-        edgesRef.current = indexEdges(scene, [...nodes.keys()], edgeNotes);
+        edgesRef.current = indexEdges(scene, [...nodes.keys()], edgeNotesRef.current);
+        hoveredEdgeRef.current = null;
+        setTooltip(null);
 
         setEmpty(false);
         setError(null);
@@ -173,7 +187,13 @@ export function MermaidDiagram({ source, edgeNotes = [] }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [sanitized, reactId, edgeNotes]);
+  }, [sanitized, reactId]);
+
+  useEffect(() => {
+    for (const edge of edgesRef.current) {
+      applyEdgeNote(edge, edgeNotes);
+    }
+  }, [edgeNotes]);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -192,45 +212,44 @@ export function MermaidDiagram({ source, edgeNotes = [] }: Props) {
       return { x: b.x - a.x, y: b.y - a.y };
     };
 
-    const onEdgeMouseEnter = (event: MouseEvent) => {
-      const target = event.target as SVGPathElement;
-      const edge = edgesRef.current.find(e => e.hitPath === target || e.path === target);
-      if (edge) {
-        hoveredEdgeRef.current = edge;
-        setHoveredEdge(edge);
-        setTooltipPos({ x: event.clientX, y: event.clientY });
-        // Highlight only the visible edge, keep hit path completely transparent
-        edge.path.style.stroke = "#3db8ff";
-        edge.path.style.strokeWidth = "3";
-        // Ensure hit path stays transparent
-        edge.hitPath.style.stroke = "transparent";
-        edge.hitPath.style.strokeOpacity = "0";
-        edge.hitPath.style.fill = "none";
-        edge.hitPath.style.fillOpacity = "0";
-      }
-    };
-
-    const onEdgeMouseLeave = () => {
-      const currentEdge = hoveredEdgeRef.current;
-      if (currentEdge) {
-        // Reset edge styling
-        currentEdge.path.style.stroke = "";
-        currentEdge.path.style.strokeWidth = "";
-        // Ensure hit path stays transparent
-        currentEdge.hitPath.style.stroke = "transparent";
-        currentEdge.hitPath.style.strokeOpacity = "0";
-        currentEdge.hitPath.style.fill = "none";
-        currentEdge.hitPath.style.fillOpacity = "0";
+    const clearHover = () => {
+      const current = hoveredEdgeRef.current;
+      if (current) {
+        current.path.style.stroke = "";
+        current.path.style.strokeWidth = "";
       }
       hoveredEdgeRef.current = null;
-      setHoveredEdge(null);
-      setTooltipPos(null);
+      setTooltip(null);
     };
 
-    const onEdgeMouseMove = (event: MouseEvent) => {
-      if (hoveredEdgeRef.current) {
-        setTooltipPos({ x: event.clientX, y: event.clientY });
+    const tooltipPoint = (clientX: number, clientY: number) => ({
+      left: Math.max(12, Math.min(clientX + 18, window.innerWidth - 380)),
+      top: Math.max(12, Math.min(clientY + 18, window.innerHeight - 200)),
+    });
+
+    const showHover = (edge: EdgeInfo, clientX: number, clientY: number) => {
+      const { left, top } = tooltipPoint(clientX, clientY);
+      if (hoveredEdgeRef.current === edge && tooltipElRef.current) {
+        tooltipElRef.current.style.left = `${left}px`;
+        tooltipElRef.current.style.top = `${top}px`;
+        return;
       }
+      const current = hoveredEdgeRef.current;
+      if (current && current !== edge) {
+        current.path.style.stroke = "";
+        current.path.style.strokeWidth = "";
+      }
+      hoveredEdgeRef.current = edge;
+      edge.path.style.stroke = "#3db8ff";
+      edge.path.style.strokeWidth = "3";
+      setTooltip({
+        startLabel: edge.startLabel,
+        endLabel: edge.endLabel,
+        protocol: edge.protocol,
+        relationship: edge.relationship,
+        x: clientX,
+        y: clientY,
+      });
     };
 
     const applyNodeDrag = (drag: NodeDrag, client: Point) => {
@@ -285,19 +304,30 @@ export function MermaidDiagram({ source, edgeNotes = [] }: Props) {
 
     const onPointerMove = (event: PointerEvent) => {
       const drag = dragRef.current;
-      if (!drag) return;
-
-      if (drag.kind === "pan") {
-        viewRef.current = {
-          ...viewRef.current,
-          x: drag.start.x + (event.clientX - drag.origin.x),
-          y: drag.start.y + (event.clientY - drag.origin.y),
-        };
-        applyView();
+      if (drag) {
+        clearHover();
+        if (drag.kind === "pan") {
+          viewRef.current = {
+            ...viewRef.current,
+            x: drag.start.x + (event.clientX - drag.origin.x),
+            y: drag.start.y + (event.clientY - drag.origin.y),
+          };
+          applyView();
+          return;
+        }
+        applyNodeDrag(drag, { x: event.clientX, y: event.clientY });
         return;
       }
 
-      applyNodeDrag(drag, { x: event.clientX, y: event.clientY });
+      const edge = edgeAtPointer(host, edgesRef.current, event.clientX, event.clientY);
+      if (edge) showHover(edge, event.clientX, event.clientY);
+      else if (hoveredEdgeRef.current) clearHover();
+    };
+
+    const onPointerLeave = (event: PointerEvent) => {
+      if (dragRef.current) return;
+      if (event.relatedTarget instanceof Node && host.contains(event.relatedTarget)) return;
+      clearHover();
     };
 
     const onPointerUp = (event: PointerEvent) => {
@@ -327,16 +357,7 @@ export function MermaidDiagram({ source, edgeNotes = [] }: Props) {
     host.addEventListener("pointermove", onPointerMove);
     host.addEventListener("pointerup", onPointerUp);
     host.addEventListener("pointercancel", onPointerUp);
-
-    // Add edge hover listeners
-    edgesRef.current.forEach(edge => {
-      edge.hitPath.addEventListener("mouseenter", onEdgeMouseEnter);
-      edge.hitPath.addEventListener("mouseleave", onEdgeMouseLeave);
-      edge.hitPath.addEventListener("mousemove", onEdgeMouseMove);
-      edge.path.addEventListener("mouseenter", onEdgeMouseEnter);
-      edge.path.addEventListener("mouseleave", onEdgeMouseLeave);
-      edge.path.addEventListener("mousemove", onEdgeMouseMove);
-    });
+    host.addEventListener("pointerleave", onPointerLeave);
 
     return () => {
       host.removeEventListener("wheel", onWheel);
@@ -344,16 +365,8 @@ export function MermaidDiagram({ source, edgeNotes = [] }: Props) {
       host.removeEventListener("pointermove", onPointerMove);
       host.removeEventListener("pointerup", onPointerUp);
       host.removeEventListener("pointercancel", onPointerUp);
-
-      // Remove edge hover listeners
-      edgesRef.current.forEach(edge => {
-        edge.hitPath.removeEventListener("mouseenter", onEdgeMouseEnter);
-        edge.hitPath.removeEventListener("mouseleave", onEdgeMouseLeave);
-        edge.hitPath.removeEventListener("mousemove", onEdgeMouseMove);
-        edge.path.removeEventListener("mouseenter", onEdgeMouseEnter);
-        edge.path.removeEventListener("mouseleave", onEdgeMouseLeave);
-        edge.path.removeEventListener("mousemove", onEdgeMouseMove);
-      });
+      host.removeEventListener("pointerleave", onPointerLeave);
+      clearHover();
     };
   }, [ready]);
 
@@ -392,28 +405,28 @@ export function MermaidDiagram({ source, edgeNotes = [] }: Props) {
         hidden={Boolean(error)}
         aria-label="Interactive architecture diagram"
       />
-      {hoveredEdge && tooltipPos
+      {tooltip
         ? createPortal(
             <div
+              ref={tooltipElRef}
               className="diagram-tooltip"
+              role="tooltip"
               style={{
-                left: `${Math.max(12, Math.min(tooltipPos.x + 16, window.innerWidth - 420))}px`,
-                top: `${Math.max(12, Math.min(tooltipPos.y + 16, window.innerHeight - 220))}px`,
+                left: `${Math.max(12, Math.min(tooltip.x + 18, window.innerWidth - 380))}px`,
+                top: `${Math.max(12, Math.min(tooltip.y + 18, window.innerHeight - 200))}px`,
               }}
             >
               <div className="diagram-tooltip-content">
                 <strong>
-                  {hoveredEdge.startLabel} → {hoveredEdge.endLabel}
+                  {tooltip.startLabel} → {tooltip.endLabel}
                 </strong>
-                {hoveredEdge.protocol ? (
-                  <span className="diagram-tooltip-protocol">{hoveredEdge.protocol}</span>
+                {tooltip.protocol ? (
+                  <span className="diagram-tooltip-protocol">{tooltip.protocol}</span>
                 ) : null}
-                {hoveredEdge.relationship ? (
-                  <p className="diagram-tooltip-description">{hoveredEdge.relationship}</p>
-                ) : null}
+                <p className="diagram-tooltip-description">{tooltip.relationship}</p>
               </div>
             </div>,
-            document.body
+            document.body,
           )
         : null}
     </div>
@@ -627,17 +640,82 @@ function pathMidpoint(points: Point[]): Point {
   return points[points.length - 1];
 }
 
+function applyEdgeNote(edge: EdgeInfo, edgeNotes: DiagramEdgeNote[]) {
+  const note = lookupEdgeNote(edgeNotes, edge.start, edge.end);
+  if (note?.from_label) edge.startLabel = note.from_label;
+  if (note?.to_label) edge.endLabel = note.to_label;
+  if (note?.label) edge.protocol = note.label;
+  if (note?.explanation?.trim()) edge.relationship = note.explanation.trim();
+}
+
+function edgeAtPointer(
+  host: HTMLElement,
+  edges: EdgeInfo[],
+  clientX: number,
+  clientY: number,
+): EdgeInfo | null {
+  const stack = document.elementsFromPoint(clientX, clientY);
+  for (const el of stack) {
+    if (!(el instanceof Element) || el.closest(".diagram-tooltip")) continue;
+    if (!host.contains(el)) continue;
+    for (const edge of edges) {
+      if (el === edge.hitPath || el === edge.path) return edge;
+      if (edge.label && (el === edge.label || edge.label.contains(el))) return edge;
+    }
+  }
+  const top = stack.find((el) => host.contains(el) && el !== host);
+  if (top?.closest("g.node, g.cluster")) return null;
+  for (const edge of edges) {
+    if (pointInStroke(edge.hitPath, clientX, clientY) || pointInStroke(edge.path, clientX, clientY)) {
+      return edge;
+    }
+  }
+  return null;
+}
+
+function pointInStroke(path: SVGPathElement, clientX: number, clientY: number): boolean {
+  if (typeof path.isPointInStroke !== "function") return false;
+  const ctm = path.getScreenCTM();
+  if (!ctm) return false;
+  try {
+    const local = new DOMPoint(clientX, clientY).matrixTransform(ctm.inverse());
+    return path.isPointInStroke(local);
+  } catch {
+    return false;
+  }
+}
+
+function collectEdgePaths(scene: SVGGElement): SVGPathElement[] {
+  const seen = new Set<SVGPathElement>();
+  const out: SVGPathElement[] = [];
+  const add = (path: SVGPathElement) => {
+    if (seen.has(path) || path.getAttribute("data-hit-path") === "true") return;
+    seen.add(path);
+    out.push(path);
+  };
+  scene
+    .querySelectorAll<SVGPathElement>(
+      ".edgePaths path, .edgePath path, path.flowchart-link, path[data-et='edge']",
+    )
+    .forEach(add);
+  scene.querySelectorAll<SVGPathElement>("path[id], path[data-id]").forEach((path) => {
+    const id = path.getAttribute("data-id") || path.id || "";
+    if (/(?:^|[-_])L_|flowchart-link/.test(id) || path.classList.contains("flowchart-link")) add(path);
+  });
+  return out;
+}
+
 function indexEdges(scene: SVGGElement, nodeKeys: string[], edgeNotes: DiagramEdgeNote[]): EdgeInfo[] {
   const edges: EdgeInfo[] = [];
-  const paths = scene.querySelectorAll<SVGPathElement>(".edgePaths path, path[data-et='edge']");
   const seen = new Set<string>();
 
-  paths.forEach((path) => {
+  collectEdgePaths(scene).forEach((path) => {
     const edgeId = path.getAttribute("data-id") || stripDiagramPrefix(path.id);
     if (!edgeId || seen.has(edgeId)) return;
-    const ends = parseEdgeEndpoints(edgeId, nodeKeys);
-    if (!ends) return;
     seen.add(edgeId);
+    const ends = parseEdgeEndpoints(edgeId, nodeKeys);
+    const start = ends?.start || edgeId;
+    const end = ends?.end || "";
     const labelEl = (scene
       .querySelector(`.edgeLabel [data-id="${cssEscape(edgeId)}"]`)
       ?.closest("g.edgeLabel") ?? null) as SVGGElement | null;
@@ -649,49 +727,57 @@ function indexEdges(scene: SVGGElement, nodeKeys: string[], edgeNotes: DiagramEd
       if (fromLabel) protocol = fromLabel;
     }
 
-    const note = lookupEdgeNote(edgeNotes, ends.start, ends.end);
+    path.parentElement?.setAttribute("pointer-events", "visiblePainted");
+    path.style.pointerEvents = "stroke";
+
+    const note = lookupEdgeNote(edgeNotes, start, end);
+    const startLabel = note?.from_label || start;
+    const endLabel = note?.to_label || end || "connected component";
     const relationship =
       note?.explanation?.trim()
       || (protocol && protocol.length > 40 ? protocol : undefined)
-      || `${ends.start} depends on ${ends.end}. Hover details are filled when the architect writes the diagram relationships.`;
+      || `${startLabel} connects to ${endLabel}.`;
 
-    const hitPath = createHitPath(path);
+    const hitPath = createHitPath(path, `${startLabel} → ${endLabel}. ${relationship}`);
 
-    edges.push({
+    const edge: EdgeInfo = {
       id: edgeId,
-      start: ends.start,
-      end: ends.end,
-      startLabel: note?.from_label || ends.start,
-      endLabel: note?.to_label || ends.end,
+      start,
+      end,
+      startLabel,
+      endLabel,
       path,
       hitPath,
       label: labelEl,
       protocol: note?.label || (protocol && protocol.length <= 40 ? protocol : undefined),
       relationship,
-    });
+    };
+    applyEdgeNote(edge, edgeNotes);
+    edges.push(edge);
   });
 
   return edges;
 }
 
-function createHitPath(originalPath: SVGPathElement): SVGPathElement {
-  const hitPath = originalPath.cloneNode(true) as SVGPathElement;
+function createHitPath(originalPath: SVGPathElement, label: string): SVGPathElement {
+  const hitPath = originalPath.cloneNode(false) as SVGPathElement;
   hitPath.setAttribute("data-hit-path", "true");
-  hitPath.style.stroke = "transparent";
-  hitPath.style.strokeWidth = "20"; // Much wider for easier hovering
-  hitPath.style.fill = "none";
-  hitPath.style.fillOpacity = "0";
-  hitPath.style.strokeOpacity = "0";
+  hitPath.removeAttribute("marker-end");
+  hitPath.removeAttribute("marker-start");
+  hitPath.removeAttribute("style");
+  hitPath.removeAttribute("class");
+  hitPath.setAttribute("fill", "none");
+  hitPath.setAttribute("stroke", "rgba(0, 48, 96, 0.08)");
+  hitPath.setAttribute("stroke-width", "28");
+  hitPath.setAttribute("stroke-linecap", "round");
+  hitPath.setAttribute("stroke-linejoin", "round");
+  hitPath.setAttribute("vector-effect", "non-scaling-stroke");
   hitPath.style.pointerEvents = "stroke";
   hitPath.style.cursor = "pointer";
-  hitPath.style.visibility = "visible"; // Ensure it's visible for hit detection but transparent
-  
-  // Remove any fill attributes that might have been cloned
-  hitPath.removeAttribute("fill");
-  
-  // Insert the hit path before the original path so it's on top for hit detection
-  originalPath.parentNode?.insertBefore(hitPath, originalPath);
-  
+  const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
+  title.textContent = label;
+  hitPath.appendChild(title);
+  originalPath.after(hitPath);
   return hitPath;
 }
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { Link, useParams } from "react-router-dom";
 import mermaid from "mermaid";
 import { warmupMermaid } from "./mermaidRender";
@@ -87,6 +87,7 @@ export function SessionPage() {
   const [endConfirm, setEndConfirm] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const appRef = useRef<HTMLDivElement>(null);
   const phaseBeforeApprove = useRef<string | null>(null);
   const kindBeforeApprove = useRef<string | null>(null);
 
@@ -103,6 +104,38 @@ export function SessionPage() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [session?.messages, pendingUserText, chatBusy]);
+
+  useLayoutEffect(() => {
+    const root = appRef.current;
+    if (!root) return;
+
+    const measure = () => {
+      const chrome = root.querySelectorAll<HTMLElement>(
+        ":scope > .top, :scope > .approve-bar, :scope > .end-confirm, :scope > .error.banner",
+      );
+      const rootTop = root.getBoundingClientRect().top;
+      let chromeBottom = rootTop;
+      chrome.forEach((el) => {
+        const bottom = el.getBoundingClientRect().bottom;
+        if (bottom > chromeBottom) chromeBottom = bottom;
+      });
+      const padBottom = parseFloat(getComputedStyle(root).paddingBottom) || 0;
+      const fill = Math.max(280, Math.round(window.innerHeight - (chromeBottom - rootTop) - padBottom));
+      root.style.setProperty("--session-fill", `${fill}px`);
+    };
+
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(root);
+    root.querySelectorAll(":scope > .top, :scope > .approve-bar").forEach((el) => ro.observe(el));
+    window.addEventListener("resize", measure);
+    window.visualViewport?.addEventListener("resize", measure);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", measure);
+      window.visualViewport?.removeEventListener("resize", measure);
+    };
+  }, [error, endConfirm, session?.finalized, session?.last_handoff?.status]);
 
   const workflow = session?.workflow;
   const workflowTiles = workflow?.tiles || [];
@@ -287,7 +320,7 @@ export function SessionPage() {
   const showMarketReport = Boolean(session.market_evaluation_report?.trim());
 
   return (
-    <div className="app session-app">
+    <div className="app session-app" ref={appRef}>
       <div className="atmosphere" aria-hidden />
       <header className="top">
         <div className="top-copy">
