@@ -22,6 +22,7 @@ from architect_agent.design_diagram import (
     diagram_is_due,
     extract_spec_section,
     ensure_design_diagram,
+    fallback_design_diagram,
     with_diagram_walkthrough,
 )
 from architect_agent.design_progress import NO_UPDATES_TO_DELIVER, package_fingerprint
@@ -161,6 +162,7 @@ class DesignSession:
             "approve_label": label,
             "approve_kind": interrupt.get("approve_kind") or "",
             "business_spec": self.business_spec,
+            "design_diagram": self.design_diagram,
             "diagram_edges": diagram_edge_notes(
                 self.design_diagram,
                 extract_spec_section(self.business_spec, "Diagram relationships"),
@@ -190,6 +192,23 @@ class DesignSession:
         }
 
 
+def _diagram_from_saved_payload(data: dict[str, Any]) -> str:
+    """Recover Mermaid from the session file, including pre-persist workflow tiles."""
+    direct = sanitize_mermaid(str(data.get("design_diagram") or ""))
+    if direct.strip():
+        return direct
+    workflow = data.get("workflow")
+    tiles = workflow.get("tiles") if isinstance(workflow, dict) else None
+    if isinstance(tiles, list):
+        for tile in tiles:
+            if not isinstance(tile, dict):
+                continue
+            diagram = sanitize_mermaid(str(tile.get("diagram") or ""))
+            if diagram.strip():
+                return diagram
+    return ""
+
+
 def _session_from_disk(data: dict[str, Any]) -> DesignSession:
     session_id = data.get("design_session_id") or data.get("session_id")
     if not session_id:
@@ -203,7 +222,7 @@ def _session_from_disk(data: dict[str, Any]) -> DesignSession:
         design_track=mapped["design_track"],
         design_step=int(mapped["design_step"]),
         business_spec=str(data.get("business_spec") or ""),
-        design_diagram=str(data.get("design_diagram") or ""),
+        design_diagram=_diagram_from_saved_payload(data),
         design_justification=str(data.get("design_justification") or ""),
         tradeoff_ledger=str(data.get("tradeoff_ledger") or ""),
         scale_estimates=coerce_artifact_markdown(data.get("scale_estimates") or ""),
@@ -246,6 +265,7 @@ class SessionStore:
                 | {
                     "created_at": session.created_at,
                     "discussion_digest": session.discussion_digest,
+                    "design_diagram": session.design_diagram,
                 },
                 indent=2,
             ),
@@ -269,6 +289,7 @@ class SessionStore:
                 session.design_step,
             )
 
+        self._restore_design_diagram(session)
         self._ensure_graph_resumable(session)
         self._fill_missing_phase0_spec(session)
         self._fill_missing_diagram(session)
@@ -489,10 +510,8 @@ class SessionStore:
             )
             if payload.get("business_spec"):
                 session.business_spec = payload["business_spec"]
-            if payload.get("design_diagram") is not None:
-                session.design_diagram = sanitize_mermaid(
-                    payload.get("design_diagram") or session.design_diagram
-                )
+            if payload.get("design_diagram"):
+                session.design_diagram = sanitize_mermaid(str(payload.get("design_diagram") or ""))
             if payload.get("design_justification") is not None:
                 session.design_justification = (
                     payload.get("design_justification") or session.design_justification
@@ -591,6 +610,30 @@ class SessionStore:
             )
             self._persist(session)
 
+    def _restore_design_diagram(self, session: DesignSession) -> None:
+        """Prefer a checkpointer copy over a blank or stock fallback after restart."""
+        try:
+            values = self._graph.get_state(self._config(session.session_id)).values or {}
+        except Exception:  # noqa: BLE001
+            return
+        from_graph = sanitize_mermaid(str(values.get("design_diagram") or ""))
+        if not from_graph.strip():
+            return
+        current = sanitize_mermaid(session.design_diagram or "")
+        track = session.design_track if session.design_track in {"lld", "hld"} else "lld"
+        stock = sanitize_mermaid(fallback_design_diagram(session.business_spec, track))
+        if current.strip() and current.strip() != stock.strip():
+            return
+        if from_graph.strip() == stock.strip() and current.strip():
+            return
+        session.design_diagram = from_graph
+        logger.info(
+            "Restored design diagram for session %s from graph checkpoint (%s chars)",
+            session.session_id,
+            len(from_graph),
+        )
+        self._persist(session)
+
     def _fill_missing_diagram(self, session: DesignSession) -> None:
         """Attach a sketch and component catalog once the track is past the diagram step."""
         if not diagram_is_due(session.phase, session.design_track, session.design_step):
@@ -600,7 +643,7 @@ class SessionStore:
         if not (session.design_diagram or "").strip():
             session.design_diagram = ensure_design_diagram(
                 session.business_spec,
-                "",
+                session.design_diagram,
                 track=track,
                 allow_llm=False,
             )

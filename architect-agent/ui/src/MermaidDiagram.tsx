@@ -767,11 +767,16 @@ function createHitPath(originalPath: SVGPathElement, label: string): SVGPathElem
   hitPath.removeAttribute("style");
   hitPath.removeAttribute("class");
   hitPath.setAttribute("fill", "none");
-  hitPath.setAttribute("stroke", "rgba(0, 48, 96, 0.08)");
+  hitPath.setAttribute("stroke", "#000000");
+  hitPath.setAttribute("stroke-opacity", "0");
   hitPath.setAttribute("stroke-width", "28");
   hitPath.setAttribute("stroke-linecap", "round");
   hitPath.setAttribute("stroke-linejoin", "round");
   hitPath.setAttribute("vector-effect", "non-scaling-stroke");
+  hitPath.style.fill = "none";
+  hitPath.style.stroke = "#000000";
+  hitPath.style.strokeOpacity = "0";
+  hitPath.style.strokeWidth = "28";
   hitPath.style.pointerEvents = "stroke";
   hitPath.style.cursor = "pointer";
   const title = document.createElementNS("http://www.w3.org/2000/svg", "title");

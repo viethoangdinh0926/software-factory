@@ -465,16 +465,19 @@ button.approve-btn:disabled {
 .session-layout {
   display: grid;
   grid-template-columns: 1.05fr 0.95fr;
-  grid-auto-rows: var(--session-fill);
+  grid-auto-rows: auto;
   gap: 1rem;
   align-items: stretch;
   animation: rise-in 0.6s ease-out 0.08s both;
 }
 
+.session-layout.has-diagram {
+  grid-template-rows: var(--session-fill) auto;
+}
+
 .session-layout .chat-panel,
-.session-layout .view-panel,
-.session-layout .diagram-span {
-  height: 100%;
+.session-layout .view-panel {
+  height: var(--session-fill);
   max-height: none;
   min-height: 0;
 }
@@ -497,7 +500,13 @@ button.approve-btn:disabled {
 
 .session-layout .diagram-span {
   grid-column: 1 / -1;
+  align-self: start;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 1 / 1;
   min-width: 0;
+  min-height: 0;
+  max-height: none;
   overflow: hidden;
 }
 
@@ -867,6 +876,8 @@ textarea::placeholder {
 
 .diagram [data-hit-path="true"] {
   fill: none !important;
+  stroke: #000 !important;
+  stroke-opacity: 0 !important;
   pointer-events: stroke !important;
   cursor: pointer;
   vector-effect: non-scaling-stroke;
