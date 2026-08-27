@@ -1,4 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { DiagramEdgeNote } from "./api";
 import { lookupEdgeNote } from "./fallbackDiagram";
 import { diagramLoadErrorMessage, renderMermaid } from "./mermaidRender";
@@ -197,11 +198,7 @@ export function MermaidDiagram({ source, edgeNotes = [] }: Props) {
       if (edge) {
         hoveredEdgeRef.current = edge;
         setHoveredEdge(edge);
-        const rect = host.getBoundingClientRect();
-        setTooltipPos({
-          x: event.clientX - rect.left,
-          y: event.clientY - rect.top
-        });
+        setTooltipPos({ x: event.clientX, y: event.clientY });
         // Highlight only the visible edge, keep hit path completely transparent
         edge.path.style.stroke = "#3db8ff";
         edge.path.style.strokeWidth = "3";
@@ -232,11 +229,7 @@ export function MermaidDiagram({ source, edgeNotes = [] }: Props) {
 
     const onEdgeMouseMove = (event: MouseEvent) => {
       if (hoveredEdgeRef.current) {
-        const rect = host.getBoundingClientRect();
-        setTooltipPos({
-          x: event.clientX - rect.left,
-          y: event.clientY - rect.top
-        });
+        setTooltipPos({ x: event.clientX, y: event.clientY });
       }
     };
 
@@ -399,30 +392,30 @@ export function MermaidDiagram({ source, edgeNotes = [] }: Props) {
         hidden={Boolean(error)}
         aria-label="Interactive architecture diagram"
       />
-      {hoveredEdge && tooltipPos && (
-        <div
-          className="diagram-tooltip"
-          style={{
-            position: "absolute",
-            left: `${tooltipPos.x + 15}px`,
-            top: `${tooltipPos.y + 15}px`,
-            pointerEvents: "none",
-            zIndex: 1000,
-          }}
-        >
-          <div className="diagram-tooltip-content">
-            <strong>
-              {hoveredEdge.startLabel} → {hoveredEdge.endLabel}
-            </strong>
-            {hoveredEdge.protocol ? (
-              <span className="diagram-tooltip-protocol">{hoveredEdge.protocol}</span>
-            ) : null}
-            {hoveredEdge.relationship ? (
-              <p className="diagram-tooltip-description">{hoveredEdge.relationship}</p>
-            ) : null}
-          </div>
-        </div>
-      )}
+      {hoveredEdge && tooltipPos
+        ? createPortal(
+            <div
+              className="diagram-tooltip"
+              style={{
+                left: `${Math.max(12, Math.min(tooltipPos.x + 16, window.innerWidth - 420))}px`,
+                top: `${Math.max(12, Math.min(tooltipPos.y + 16, window.innerHeight - 220))}px`,
+              }}
+            >
+              <div className="diagram-tooltip-content">
+                <strong>
+                  {hoveredEdge.startLabel} → {hoveredEdge.endLabel}
+                </strong>
+                {hoveredEdge.protocol ? (
+                  <span className="diagram-tooltip-protocol">{hoveredEdge.protocol}</span>
+                ) : null}
+                {hoveredEdge.relationship ? (
+                  <p className="diagram-tooltip-description">{hoveredEdge.relationship}</p>
+                ) : null}
+              </div>
+            </div>,
+            document.body
+          )
+        : null}
     </div>
   );
 }

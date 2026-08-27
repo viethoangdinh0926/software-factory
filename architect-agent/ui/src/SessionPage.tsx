@@ -104,8 +104,13 @@ export function SessionPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [session?.messages, pendingUserText, chatBusy]);
 
+  const workflow = session?.workflow;
+  const workflowTiles = workflow?.tiles || [];
+  const diagramFromTiles =
+    workflowTiles.find((tile) => tile.diagram?.trim())?.diagram?.trim() || "";
   const diagramSource = session
     ? session.design_diagram?.trim() ||
+      diagramFromTiles ||
       (diagramIsDue(session.phase, session.design_track, session.design_step)
         ? fallbackDesignDiagram(session.business_spec, session.design_track)
         : "")
@@ -143,8 +148,6 @@ export function SessionPage() {
   const showComponentWalkthrough =
     Boolean(session && showComponents && !chatDescribesComponents(session.messages, diagramSource));
   const headerChips = session ? sessionHeaderChips(session) : [];
-  const workflow = session?.workflow;
-  const workflowTiles = workflow?.tiles || [];
 
   async function onChat(e: FormEvent) {
     e.preventDefault();
@@ -398,7 +401,7 @@ export function SessionPage() {
 
       {error ? <p className="error banner">{error}</p> : null}
 
-      <main className="grid session-grid">
+      <main className={`session-layout${showDiagram ? " has-diagram" : ""}`}>
         <section className="panel chat-panel">
           <div className="panel-head">
             <h2>{session.finalized ? "Design finalized" : "Conversation"}</h2>
@@ -489,48 +492,44 @@ export function SessionPage() {
                 <article
                   key={tile.id}
                   id={`wf-${tile.id}`}
-                  className={`artifact workflow-tile ${tile.status}${
-                    tile.diagram ? " diagram-artifact" : ""
-                  }`}
+                  className={`artifact workflow-tile ${tile.status}`}
                   aria-current={tile.status === "current" ? "step" : undefined}
                 >
                   <div className="panel-head">
                     <h2>{tile.title}</h2>
                   </div>
-                  {tile.diagram ? (
-                    <MermaidDiagram source={tile.diagram} edgeNotes={edgeNotes} />
-                  ) : null}
                   {tile.body ? (
                     <MarkdownView content={tile.body} className="doc" />
                   ) : tile.status === "pending" ? (
                     <p className="lede">This step has not started.</p>
-                  ) : tile.diagram ? null : (
+                  ) : tile.diagram ? (
+                    <p className="lede">
+                      The system diagram for this step is shown below.
+                    </p>
+                  ) : (
                     <p className="lede">Waiting for this step's artifact.</p>
                   )}
                 </article>
               ))}
             </>
           ) : (
-            <>
-              {showDiagram ? (
-                <div className="artifact diagram-artifact">
-                  <div className="panel-head">
-                    <h2>System design diagram</h2>
-                    <span className="panel-kicker">Diagram</span>
-                  </div>
-                  <MermaidDiagram source={diagramSource} edgeNotes={edgeNotes} />
-                </div>
-              ) : null}
-              <div className="artifact">
-                <div className="panel-head">
-                  <h2>Living business specification</h2>
-                  <span className="panel-kicker">Spec</span>
-                </div>
-                <MarkdownView content={specForPanel} className="doc" />
+            <div className="artifact">
+              <div className="panel-head">
+                <h2>Living business specification</h2>
+                <span className="panel-kicker">Spec</span>
               </div>
-            </>
+              <MarkdownView content={specForPanel} className="doc" />
+            </div>
           )}
         </section>
+        {showDiagram ? (
+          <section className="panel diagram-span" id="design-diagram" aria-label="System design diagram">
+            <div className="panel-head">
+              <h2>System design diagram</h2>
+            </div>
+            <MermaidDiagram source={diagramSource} edgeNotes={edgeNotes} />
+          </section>
+        ) : null}
       </main>
     </div>
   );

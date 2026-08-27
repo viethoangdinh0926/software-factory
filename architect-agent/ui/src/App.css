@@ -461,44 +461,59 @@ button.approve-btn:disabled {
   max-width: 1400px;
 }
 
-.session-grid {
+.session-layout {
+  display: grid;
+  grid-template-columns: 1.05fr 0.95fr;
+  gap: 1rem;
   align-items: stretch;
+  animation: rise-in 0.6s ease-out 0.08s both;
 }
 
-.session-grid .chat-panel,
-.session-grid .view-panel {
+.session-layout .chat-panel,
+.session-layout .view-panel {
   min-height: 0;
   max-height: calc(100vh - 11rem);
   height: calc(100vh - 11rem);
 }
 
-.session-grid .chat-panel {
+.session-layout.has-diagram .chat-panel,
+.session-layout.has-diagram .view-panel {
+  height: auto;
+  max-height: min(52vh, calc(100vh - 26rem));
+  min-height: 16rem;
+}
+
+.session-layout .chat-panel {
   overflow: hidden;
 }
 
-.session-grid .chat-panel .messages {
+.session-layout .chat-panel .messages {
   flex: 1 1 auto;
   min-height: 0;
   overflow-x: auto;
   overflow-y: auto;
 }
 
-.session-grid .chat-panel .composer,
-.session-grid .chat-panel .finalize-note {
+.session-layout .chat-panel .composer,
+.session-layout .chat-panel .finalize-note {
   flex-shrink: 0;
 }
 
-.session-grid .view-panel .diagram-artifact .diagram,
-.session-grid .view-panel .diagram-artifact .diagram-interactive {
-  flex: 0 0 auto;
+.session-layout .diagram-span {
+  grid-column: 1 / -1;
+  min-width: 0;
   min-height: 0;
 }
 
-.session-grid .view-panel .diagram-artifact .diagram-canvas {
-  flex: 0 0 auto;
-  height: min(48vh, 520px);
+.diagram-span .diagram,
+.diagram-span .diagram-interactive {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.diagram-span .diagram-canvas {
+  height: min(46vh, 560px);
   min-height: 320px;
-  max-height: none;
 }
 
 @media (max-width: 960px) {
@@ -506,8 +521,14 @@ button.approve-btn:disabled {
     grid-template-columns: 1fr;
   }
 
-  .session-grid .chat-panel,
-  .session-grid .view-panel {
+  .session-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .session-layout .chat-panel,
+  .session-layout .view-panel,
+  .session-layout.has-diagram .chat-panel,
+  .session-layout.has-diagram .view-panel {
     height: auto;
     max-height: min(70vh, 640px);
   }
@@ -864,9 +885,10 @@ textarea::placeholder {
 }
 
 .diagram-tooltip {
-  position: absolute;
-  z-index: 1000;
+  position: fixed;
+  z-index: 2147483647;
   pointer-events: none;
+  transform: translate(0, 0);
   animation: tooltip-in 0.2s ease-out both;
 }
 
