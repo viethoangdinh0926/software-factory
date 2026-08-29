@@ -26,6 +26,7 @@ import {
 } from "./api";
 import { MarkdownView } from "./MarkdownView";
 import { MermaidDiagram } from "./MermaidDiagram";
+import { useSessionPresence } from "./sessionPresence";
 
 // Generic error message handler - provides user-friendly messages without exposing backend details
 function getUserFriendlyError(_err: unknown): string {
@@ -228,6 +229,7 @@ function ServiceTile({
   sessionId,
   svc,
   busy,
+  readOnly,
   onBusy,
   onUpdate,
   onError,
@@ -235,6 +237,7 @@ function ServiceTile({
   sessionId: string;
   svc: MicroservicePlan;
   busy: boolean;
+  readOnly: boolean;
   onBusy: (id: string | null) => void;
   onUpdate: (session: WorkflowSession) => void;
   onError: (msg: string) => void;
@@ -264,7 +267,7 @@ function ServiceTile({
   async function onChat(e: FormEvent) {
     e.preventDefault();
     const text = message.trim();
-    if (!text || busy || !open) return;
+    if (!text || busy || readOnly || !open) return;
     onBusy(svc.microservice_id);
     setPending(text);
     setMessage("");
@@ -279,7 +282,7 @@ function ServiceTile({
   }
 
   async function onApprove() {
-    if (busy || !svc.can_approve) return;
+    if (busy || readOnly || !svc.can_approve) return;
     onBusy(svc.microservice_id);
     try {
       onUpdate(await approve(sessionId, svc.microservice_id));
@@ -356,7 +359,7 @@ function ServiceTile({
       </InterviewResultsModal>
       <div className="tile-footer">
         {svc.can_approve ? (
-          <button className="btn primary" type="button" disabled={busy} onClick={onApprove}>
+          <button className="btn primary" type="button" disabled={busy || readOnly} onClick={onApprove}>
             {busy ? "Working…" : svc.approve_label || "Approve"}
           </button>
         ) : null}
@@ -367,10 +370,10 @@ function ServiceTile({
               onChange={(e) => setMessage(e.target.value)}
               onKeyDown={onComposerKey}
               rows={2}
-              disabled={busy}
+              disabled={busy || readOnly}
               placeholder={composerPlaceholder}
             />
-            <button className="btn" type="submit" disabled={busy || !message.trim()}>
+            <button className="btn" type="submit" disabled={busy || readOnly || !message.trim()}>
               Send
             </button>
           </form>
@@ -385,12 +388,14 @@ function ServiceTile({
 function GitAccessPanel({
   session,
   busy,
+  readOnly,
   onBusy,
   onUpdate,
   onError,
 }: {
   session: WorkflowSession;
   busy: boolean;
+  readOnly: boolean;
   onBusy: (id: string | null) => void;
   onUpdate: (session: WorkflowSession) => void;
   onError: (msg: string) => void;
@@ -401,7 +406,7 @@ function GitAccessPanel({
 
   async function onSave(e: FormEvent) {
     e.preventDefault();
-    if (busy || session.finalized) return;
+    if (busy || readOnly || session.finalized) return;
     onBusy("git");
     setSavedNote(null);
     onError("");
@@ -418,7 +423,7 @@ function GitAccessPanel({
   }
 
   async function onSend() {
-    if (busy || session.finalized || !session.can_send_git) return;
+    if (busy || readOnly || session.finalized || !session.can_send_git) return;
     onBusy("git");
     setSavedNote(null);
     onError("");
@@ -467,7 +472,7 @@ function GitAccessPanel({
             value={repoUrl}
             onChange={(e) => setRepoUrl(e.target.value)}
             placeholder="git@github.com:org/repo.git"
-            disabled={busy || session.finalized}
+            disabled={busy || readOnly || session.finalized}
             autoComplete="off"
             spellCheck={false}
           />
@@ -488,19 +493,19 @@ function GitAccessPanel({
                 ? "Leave blank to keep the stored key, or paste a new key to replace it."
                 : "-----BEGIN OPENSSH PRIVATE KEY-----"
             }
-            disabled={busy || session.finalized}
+            disabled={busy || readOnly || session.finalized}
             autoComplete="off"
             spellCheck={false}
           />
         </label>
         <div className="git-actions">
-          <button className="btn ghost" type="submit" disabled={busy || session.finalized}>
+          <button className="btn ghost" type="submit" disabled={busy || readOnly || session.finalized}>
             {busy ? "Working…" : "Save"}
           </button>
           <button
             className="btn primary"
             type="button"
-            disabled={busy || session.finalized || !session.can_send_git}
+            disabled={busy || readOnly || session.finalized || !session.can_send_git}
             onClick={() => void onSend()}
           >
             {busy ? "Working…" : sendLabel}
@@ -522,6 +527,8 @@ export function SessionPage() {
   const [retryingIngest, setRetryingIngest] = useState(false);
   const chatBusy = busyId === "session";
   const anyBusy = Boolean(busyId);
+  const presence = useSessionPresence(sessionId);
+  const viewOnly = !presence.interactive;
 
   const load = useCallback(async () => {
     const data = await getSession(sessionId);
@@ -544,7 +551,7 @@ export function SessionPage() {
   async function onChat(e: FormEvent) {
     e.preventDefault();
     const text = message.trim();
-    if (!text || !session || anyBusy || session.discussion_locked) return;
+    if (!text || !session || anyBusy || viewOnly || session.discussion_locked) return;
     setEndConfirm(false);
     setBusyId("session");
     setPendingUserText(text);
@@ -560,7 +567,7 @@ export function SessionPage() {
   }
 
   async function onApprove() {
-    if (!session || anyBusy || session.discussion_locked) return;
+    if (!session || anyBusy || viewOnly || session.discussion_locked) return;
     setEndConfirm(false);
     setBusyId("session");
     try {
@@ -573,7 +580,7 @@ export function SessionPage() {
   }
 
   async function onEndSession() {
-    if (!session || !endConfirm) return;
+    if (!session || viewOnly || !endConfirm) return;
     setBusyId("session");
     try {
       setSession(await endSession(session.design_session_id));
@@ -586,7 +593,7 @@ export function SessionPage() {
   }
 
   async function onRetryIngest() {
-    if (!session || anyBusy) return;
+    if (!session || anyBusy || viewOnly) return;
     setRetryingIngest(true);
     setError(null);
     try {
@@ -672,7 +679,7 @@ export function SessionPage() {
             <button
               className="btn ghost"
               type="button"
-              disabled={anyBusy}
+              disabled={anyBusy || viewOnly}
               onClick={() => setEndConfirm(true)}
             >
               End session
@@ -681,7 +688,13 @@ export function SessionPage() {
         </div>
       </header>
 
-      {endConfirm && !session.finalized ? (
+      {viewOnly ? (
+        <p className="view-only banner" role="status">
+          Someone else is working on this session. You can watch progress; controls unlock when they close the tab.
+        </p>
+      ) : null}
+
+      {endConfirm && !session.finalized && !viewOnly ? (
         <div className="end-confirm" role="alertdialog">
           <p className="end-confirm-copy">End this workflow? Chat and approve will stop.</p>
           <button className="btn ghost" type="button" onClick={() => setEndConfirm(false)}>
@@ -698,6 +711,7 @@ export function SessionPage() {
       <GitAccessPanel
         session={session}
         busy={busyId === "git"}
+        readOnly={viewOnly}
         onBusy={setBusyId}
         onUpdate={setSession}
         onError={(msg) => setError(msg || null)}
@@ -719,7 +733,7 @@ export function SessionPage() {
           <button 
             className="btn ghost" 
             onClick={onRetryIngest}
-            disabled={retryingIngest || anyBusy}
+            disabled={retryingIngest || anyBusy || viewOnly}
             type="button"
           >
             {retryingIngest ? "Retrying…" : "Retry"}
@@ -747,6 +761,7 @@ export function SessionPage() {
                 sessionId={session.design_session_id}
                 svc={svc}
                 busy={busyId === svc.microservice_id}
+                readOnly={viewOnly}
                 onBusy={setBusyId}
                 onUpdate={setSession}
                 onError={setError}
@@ -771,7 +786,7 @@ export function SessionPage() {
             <button
               className="btn primary approve-btn"
               type="button"
-              disabled={!session.can_approve || anyBusy || session.finalized || locked}
+              disabled={!session.can_approve || anyBusy || session.finalized || locked || viewOnly}
               onClick={onApprove}
             >
               {chatBusy ? "Working…" : session.approve_label || "Approve"}
@@ -820,10 +835,10 @@ export function SessionPage() {
                     onChange={(e) => setMessage(e.target.value)}
                     onKeyDown={onComposerKey}
                     rows={3}
-                    disabled={anyBusy}
+                    disabled={anyBusy || viewOnly}
                     placeholder="Reply… Enter to send, Shift+Enter for a new line"
                   />
-                  <button className="btn" type="submit" disabled={anyBusy || !message.trim()}>
+                  <button className="btn" type="submit" disabled={anyBusy || viewOnly || !message.trim()}>
                     Send
                   </button>
                 </form>

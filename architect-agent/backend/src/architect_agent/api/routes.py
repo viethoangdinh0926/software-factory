@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
 from architect_agent.config import get_settings
+from architect_agent.session_presence import SessionBusyError
 from architect_agent.sessions import get_store
 
 logger = logging.getLogger(__name__)
@@ -23,6 +24,31 @@ class DesignStartResponse(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1)
+
+
+class PresenceRequest(BaseModel):
+    holder_id: str = Field(min_length=1)
+
+
+def _holder(x_session_holder: str | None) -> str | None:
+    value = (x_session_holder or "").strip()
+    return value or None
+
+
+def _public(session, holder: str | None = None) -> dict:
+    data = session.to_public()
+    data["interaction"] = get_store().presence.snapshot(session.session_id, holder)
+    return data
+
+
+def _require_interaction(session_id: str, holder: str | None) -> None:
+    try:
+        get_store().presence.require(session_id, holder)
+    except SessionBusyError as exc:
+        raise HTTPException(
+            status_code=423,
+            detail="This session is open in another browser.",
+        ) from exc
 
 
 @router.post("/design", response_model=DesignStartResponse)
@@ -75,15 +101,48 @@ async def start_design_session(
 
 
 @router.get("/api/sessions/{session_id}")
-async def get_session(session_id: str) -> dict:
+async def get_session(
+    session_id: str,
+    x_session_holder: str | None = Header(default=None),
+) -> dict:
     try:
-        return get_store().get(session_id).to_public()
+        return _public(get_store().get(session_id), _holder(x_session_holder))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Unknown design session") from exc
 
 
+@router.post("/api/sessions/{session_id}/presence")
+async def heartbeat_presence(session_id: str, body: PresenceRequest) -> dict:
+    try:
+        get_store().get(session_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Unknown design session") from exc
+    try:
+        return get_store().presence.heartbeat(session_id, body.holder_id)
+    except SessionBusyError as exc:
+        raise HTTPException(
+            status_code=423,
+            detail="This session is open in another browser.",
+        ) from exc
+
+
+@router.post("/api/sessions/{session_id}/presence/release")
+async def release_presence(session_id: str, body: PresenceRequest) -> dict:
+    try:
+        get_store().get(session_id)
+    except KeyError:
+        return {"holder_id": "", "is_holder": False, "interactive": False, "locked": False}
+    return get_store().presence.release(session_id, body.holder_id)
+
+
 @router.post("/api/sessions/{session_id}/chat")
-async def chat(session_id: str, body: ChatRequest) -> dict:
+async def chat(
+    session_id: str,
+    body: ChatRequest,
+    x_session_holder: str | None = Header(default=None),
+) -> dict:
+    holder = _holder(x_session_holder)
+    _require_interaction(session_id, holder)
     try:
         session = get_store().chat(session_id, body.message)
     except KeyError as exc:
@@ -91,22 +150,32 @@ async def chat(session_id: str, body: ChatRequest) -> dict:
     except Exception as exc:  # noqa: BLE001
         logger.exception("Chat failed for session %s", session_id)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-    return session.to_public()
+    return _public(session, holder)
 
 
 @router.post("/api/sessions/{session_id}/approve")
-async def approve(session_id: str) -> dict:
+async def approve(
+    session_id: str,
+    x_session_holder: str | None = Header(default=None),
+) -> dict:
+    holder = _holder(x_session_holder)
+    _require_interaction(session_id, holder)
     try:
         session = get_store().approve(session_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Unknown design session") from exc
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-    return session.to_public()
+    return _public(session, holder)
 
 
 @router.post("/api/sessions/{session_id}/retry-handoff")
-async def retry_handoff(session_id: str) -> dict:
+async def retry_handoff(
+    session_id: str,
+    x_session_holder: str | None = Header(default=None),
+) -> dict:
+    holder = _holder(x_session_holder)
+    _require_interaction(session_id, holder)
     try:
         session = get_store().retry_orchestrator_handoff(session_id)
     except KeyError as exc:
@@ -116,18 +185,23 @@ async def retry_handoff(session_id: str) -> dict:
     except Exception as exc:  # noqa: BLE001
         logger.exception("Retry handoff failed for session %s", session_id)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-    return session.to_public()
+    return _public(session, holder)
 
 
 @router.post("/api/sessions/{session_id}/end")
-async def end_session(session_id: str) -> dict:
+async def end_session(
+    session_id: str,
+    x_session_holder: str | None = Header(default=None),
+) -> dict:
+    holder = _holder(x_session_holder)
+    _require_interaction(session_id, holder)
     try:
         session = get_store().end_session(session_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Unknown design session") from exc
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-    return session.to_public()
+    return _public(session, holder)
 
 
 @router.get("/api/sessions/{session_id}/download/spec")

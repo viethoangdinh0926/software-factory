@@ -1,3 +1,5 @@
+import { holderHeaders } from "./sessionPresence";
+
 export type ChatMessage = {
   role: "assistant" | "user" | "system";
   content: string;
@@ -76,6 +78,13 @@ export type SubEngineer = {
   };
 };
 
+export type InteractionState = {
+  holder_id: string;
+  is_holder: boolean;
+  interactive: boolean;
+  locked: boolean;
+};
+
 export type FleetSession = {
   design_session_id: string;
   ui_path: string;
@@ -87,6 +96,7 @@ export type FleetSession = {
   git_repo_url: string;
   git_key_configured: boolean;
   git_received_at: string;
+  interaction?: InteractionState;
 };
 
 export type FleetSummary = {
@@ -117,7 +127,7 @@ export async function ingestPackage(markdown: string): Promise<{ design_session_
 }
 
 export async function getSession(sessionId: string): Promise<FleetSession> {
-  const res = await fetch(`/api/sessions/${sessionId}`);
+  const res = await fetch(`/api/sessions/${sessionId}`, { headers: holderHeaders(sessionId) });
   if (!res.ok) throw new Error(await readError(res));
   return res.json() as Promise<FleetSession>;
 }
@@ -129,7 +139,7 @@ export async function chat(
 ): Promise<FleetSession> {
   const res = await fetch(`/api/sessions/${sessionId}/chat`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: holderHeaders(sessionId, { "Content-Type": "application/json" }),
     body: JSON.stringify({ message, service_id: serviceId ?? null }),
   });
   if (!res.ok) throw new Error(await readError(res));
@@ -139,7 +149,7 @@ export async function chat(
 export async function approve(sessionId: string, serviceId?: string): Promise<FleetSession> {
   const res = await fetch(`/api/sessions/${sessionId}/approve`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: holderHeaders(sessionId, { "Content-Type": "application/json" }),
     body: JSON.stringify({ service_id: serviceId ?? null }),
   });
   if (!res.ok) throw new Error(await readError(res));
@@ -149,7 +159,7 @@ export async function approve(sessionId: string, serviceId?: string): Promise<Fl
 export async function pause(sessionId: string, serviceId?: string): Promise<FleetSession> {
   const res = await fetch(`/api/sessions/${sessionId}/pause`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: holderHeaders(sessionId, { "Content-Type": "application/json" }),
     body: JSON.stringify({ service_id: serviceId ?? null }),
   });
   if (!res.ok) throw new Error(await readError(res));
@@ -159,7 +169,7 @@ export async function pause(sessionId: string, serviceId?: string): Promise<Flee
 export async function execute(sessionId: string, serviceId?: string): Promise<FleetSession> {
   const res = await fetch(`/api/sessions/${sessionId}/execute`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: holderHeaders(sessionId, { "Content-Type": "application/json" }),
     body: JSON.stringify({ service_id: serviceId ?? null }),
   });
   if (!res.ok) throw new Error(await readError(res));

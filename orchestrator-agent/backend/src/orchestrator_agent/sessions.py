@@ -28,6 +28,7 @@ from orchestrator_agent.query_intent import (
     format_classify_context,
     workflow_action,
 )
+from orchestrator_agent.session_presence import SessionPresence
 from orchestrator_agent.workflow import session_workflow_tiles, set_workflow_position
 from orchestrator_agent.secrets_store import load_git_secrets, save_git_secrets
 
@@ -187,6 +188,7 @@ class SessionStore:
         self._cache: dict[str, WorkflowSession] = {}
         self._ingest_locks: dict[str, threading.Lock] = {}
         self._ingest_locks_guard = threading.Lock()
+        self.presence = SessionPresence()
         self._load_disk()
 
     def _lock_for(self, session_id: str) -> threading.Lock:
@@ -376,6 +378,12 @@ class SessionStore:
         return existing
 
     def resume(
+        self, session_id: str, action: str, text: str = "", service_id: str | None = None
+    ) -> WorkflowSession:
+        with self._lock_for(session_id):
+            return self._resume_locked(session_id, action, text, service_id)
+
+    def _resume_locked(
         self, session_id: str, action: str, text: str = "", service_id: str | None = None
     ) -> WorkflowSession:
         session = self.get(session_id)

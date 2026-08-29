@@ -30,6 +30,7 @@ import {
 } from "./fallbackDiagram";
 import { MarkdownView } from "./MarkdownView";
 import { MermaidDiagram } from "./MermaidDiagram";
+import { useSessionPresence } from "./sessionPresence";
 
 // Generic error message handler - provides user-friendly messages without exposing backend details
 function getUserFriendlyError(_err: unknown): string {
@@ -91,6 +92,8 @@ export function SessionPage() {
   const appRef = useRef<HTMLDivElement>(null);
   const phaseBeforeApprove = useRef<string | null>(null);
   const kindBeforeApprove = useRef<string | null>(null);
+  const presence = useSessionPresence(sessionId);
+  const viewOnly = !presence.interactive;
 
   const load = useCallback(async () => {
     const data = await getSession(sessionId);
@@ -103,6 +106,14 @@ export function SessionPage() {
   }, [load]);
 
   useEffect(() => {
+    if (!viewOnly) return;
+    const id = window.setInterval(() => {
+      load().catch(() => undefined);
+    }, 3000);
+    return () => window.clearInterval(id);
+  }, [load, viewOnly]);
+
+  useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [session?.messages, pendingUserText, chatBusy]);
 
@@ -112,7 +123,7 @@ export function SessionPage() {
 
     const measure = () => {
       const chrome = root.querySelectorAll<HTMLElement>(
-        ":scope > .top, :scope > .approve-bar, :scope > .end-confirm, :scope > .error.banner",
+        ":scope > .top, :scope > .approve-bar, :scope > .end-confirm, :scope > .error.banner, :scope > .view-only.banner",
       );
       const rootTop = root.getBoundingClientRect().top;
       let chromeBottom = rootTop;
@@ -136,7 +147,7 @@ export function SessionPage() {
       window.removeEventListener("resize", measure);
       window.visualViewport?.removeEventListener("resize", measure);
     };
-  }, [error, endConfirm, session?.finalized, session?.last_handoff?.status]);
+  }, [error, endConfirm, viewOnly, session?.finalized, session?.last_handoff?.status]);
 
   const workflow = session?.workflow;
   const workflowTiles = workflow?.tiles || [];
@@ -186,7 +197,7 @@ export function SessionPage() {
   async function onChat(e: FormEvent) {
     e.preventDefault();
     const text = message.trim();
-    if (!text || chatBusy || approveBusy || retryBusy) return;
+    if (!text || chatBusy || approveBusy || retryBusy || viewOnly) return;
     setEndConfirm(false);
     setChatBusy(true);
     setPendingUserText(text);
@@ -208,12 +219,12 @@ export function SessionPage() {
   function onComposerKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing) return;
     e.preventDefault();
-    if (chatBusy || approveBusy || retryBusy || !message.trim()) return;
+    if (chatBusy || approveBusy || retryBusy || viewOnly || !message.trim()) return;
     e.currentTarget.form?.requestSubmit();
   }
 
   async function onApprove() {
-    if (approveBusy || retryBusy || !session) return;
+    if (approveBusy || retryBusy || viewOnly || !session) return;
     setEndConfirm(false);
     phaseBeforeApprove.current = session.phase;
     kindBeforeApprove.current = session.approve_kind;
@@ -232,7 +243,7 @@ export function SessionPage() {
   }
 
   async function onRetryHandoff() {
-    if (retryBusy || approveBusy || chatBusy || !session?.can_retry_handoff) return;
+    if (retryBusy || approveBusy || chatBusy || viewOnly || !session?.can_retry_handoff) return;
     setEndConfirm(false);
     setRetryBusy(true);
     setError(null);
@@ -247,7 +258,7 @@ export function SessionPage() {
   }
 
   async function onEndSession() {
-    if (approveBusy || chatBusy || retryBusy || !endConfirm) return;
+    if (approveBusy || chatBusy || retryBusy || viewOnly || !endConfirm) return;
     setApproveBusy(true);
     setError(null);
     try {
@@ -378,7 +389,7 @@ export function SessionPage() {
             <button
               className="btn ghost"
               type="button"
-              disabled={busy}
+              disabled={busy || viewOnly}
               onClick={() => setEndConfirm(true)}
               aria-expanded={endConfirm}
             >
@@ -388,7 +399,13 @@ export function SessionPage() {
         </div>
       </header>
 
-      {endConfirm && !session.finalized ? (
+      {viewOnly ? (
+        <p className="view-only banner" role="status">
+          Someone else is working on this session. You can watch progress; controls unlock when they close the tab.
+        </p>
+      ) : null}
+
+      {endConfirm && !session.finalized && !viewOnly ? (
         <div className="end-confirm" role="alertdialog" aria-labelledby="end-confirm-title">
           <p id="end-confirm-title" className="end-confirm-copy">
             End this design session? Chat and approve will stop. This cannot be undone.
@@ -417,7 +434,7 @@ export function SessionPage() {
           <button
             className="btn primary approve-btn"
             type="button"
-            disabled={busy}
+            disabled={busy || viewOnly}
             onClick={onRetryHandoff}
           >
             {retryBusy ? "Retrying handoff…" : `Retry handoff v${session.design_version}`}
@@ -426,7 +443,7 @@ export function SessionPage() {
         <button
           className={canRetry ? "btn ghost approve-btn" : "btn primary approve-btn"}
           type="button"
-          disabled={!canApprove || session.finalized || busy}
+          disabled={!canApprove || session.finalized || busy || viewOnly}
           onClick={onApprove}
         >
           {approveLabel}
@@ -488,7 +505,7 @@ export function SessionPage() {
                 onChange={(e) => setMessage(e.target.value)}
                 onKeyDown={onComposerKeyDown}
                 placeholder={chatPlaceholder}
-                disabled={busy}
+                disabled={busy || viewOnly}
                 required
                 aria-keyshortcuts="Enter Shift+Enter"
                 title="Enter to send · Shift+Enter for a new line"
@@ -496,7 +513,7 @@ export function SessionPage() {
               <button
                 className="btn primary"
                 type="submit"
-                disabled={busy || !message.trim()}
+                disabled={busy || viewOnly || !message.trim()}
               >
                 {chatBusy ? "Sending…" : "Send"}
               </button>

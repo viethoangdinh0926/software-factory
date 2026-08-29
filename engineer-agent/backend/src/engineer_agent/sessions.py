@@ -31,6 +31,7 @@ from engineer_agent.execution import (
 )
 from engineer_agent.llm import invoke_json
 from engineer_agent.plan_parse import ParsedHandoff, parse_handoff, parse_related_entities, sub_agent_id
+from engineer_agent.session_presence import SessionPresence
 from engineer_agent.query_intent import (
     SUGGESTED_ANSWER_RULES,
     user_message_first_block,
@@ -361,6 +362,7 @@ class SessionStore:
         self._workers_guard = threading.Lock()
         self._watchers: dict[str, list[queue.Queue[dict[str, Any] | None]]] = {}
         self._watchers_guard = threading.Lock()
+        self.presence = SessionPresence()
         self._load_disk()
 
     def _lock_for(self, session_id: str) -> threading.Lock:
@@ -425,8 +427,13 @@ class SessionStore:
         except queue.Full:
             pass
 
-    def _notify_watchers(self, session: FleetSession) -> None:
+    def _public_payload(self, session: FleetSession, holder_id: str | None = None) -> dict[str, Any]:
         payload = session.to_public()
+        payload["interaction"] = self.presence.snapshot(session.design_session_id, holder_id)
+        return payload
+
+    def _notify_watchers(self, session: FleetSession) -> None:
+        payload = self._public_payload(session)
         with self._watchers_guard:
             watchers = list(self._watchers.get(session.design_session_id) or [])
         for watcher in watchers:

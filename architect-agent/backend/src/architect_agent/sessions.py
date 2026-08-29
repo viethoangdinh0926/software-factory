@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -48,6 +49,7 @@ from architect_agent.query_intent import (
     with_next_prompt,
     workflow_action,
 )
+from architect_agent.session_presence import SessionPresence
 from architect_agent.workflow import (
     architect_workflow,
     current_position_label,
@@ -253,6 +255,17 @@ class SessionStore:
         self._graph = build_graph()
         self._settings = get_settings()
         self._settings.data_dir.mkdir(parents=True, exist_ok=True)
+        self._action_locks: dict[str, threading.Lock] = {}
+        self._action_locks_guard = threading.Lock()
+        self.presence = SessionPresence()
+
+    def _lock_for(self, session_id: str) -> threading.Lock:
+        with self._action_locks_guard:
+            lock = self._action_locks.get(session_id)
+            if lock is None:
+                lock = threading.Lock()
+                self._action_locks[session_id] = lock
+            return lock
 
     def _path(self, session_id: str) -> Path:
         return self._settings.data_dir / f"{session_id}.json"
@@ -771,6 +784,10 @@ class SessionStore:
         return session
 
     def resume(self, session_id: str, action: str, text: str = "") -> DesignSession:
+        with self._lock_for(session_id):
+            return self._resume_locked(session_id, action, text)
+
+    def _resume_locked(self, session_id: str, action: str, text: str = "") -> DesignSession:
         session = self.get(session_id)
         if session.finalized:
             return session
@@ -824,6 +841,10 @@ class SessionStore:
 
     def retry_orchestrator_handoff(self, session_id: str) -> DesignSession:
         """Resend the last failed/queued package. Does not advance the design track or version."""
+        with self._lock_for(session_id):
+            return self._retry_orchestrator_handoff_locked(session_id)
+
+    def _retry_orchestrator_handoff_locked(self, session_id: str) -> DesignSession:
         session = self.get(session_id)
         if session.finalized:
             raise ValueError("Session is finalized.")

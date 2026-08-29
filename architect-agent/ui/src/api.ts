@@ -1,3 +1,5 @@
+import { holderHeaders } from "./sessionPresence";
+
 export type ChatMessage = {
   role: "assistant" | "user" | "system";
   content: string;
@@ -74,6 +76,14 @@ export type DesignSession = {
   design_version: number;
   last_handoff: HandoffResult | null;
   can_retry_handoff: boolean;
+  interaction?: InteractionState;
+};
+
+export type InteractionState = {
+  holder_id: string;
+  is_holder: boolean;
+  interactive: boolean;
+  locked: boolean;
 };
 
 export type DesignStartResponse = {
@@ -98,7 +108,7 @@ export async function startDesign(markdown: string): Promise<DesignStartResponse
 }
 
 export async function getSession(sessionId: string): Promise<DesignSession> {
-  const res = await fetch(`/api/sessions/${sessionId}`);
+  const res = await fetch(`/api/sessions/${sessionId}`, { headers: holderHeaders(sessionId) });
   if (!res.ok) throw new Error(await readError(res));
   return res.json() as Promise<DesignSession>;
 }
@@ -106,7 +116,7 @@ export async function getSession(sessionId: string): Promise<DesignSession> {
 export async function chat(sessionId: string, message: string): Promise<DesignSession> {
   const res = await fetch(`/api/sessions/${sessionId}/chat`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: holderHeaders(sessionId, { "Content-Type": "application/json" }),
     body: JSON.stringify({ message }),
   });
   if (!res.ok) throw new Error(await readError(res));
@@ -114,19 +124,28 @@ export async function chat(sessionId: string, message: string): Promise<DesignSe
 }
 
 export async function approve(sessionId: string): Promise<DesignSession> {
-  const res = await fetch(`/api/sessions/${sessionId}/approve`, { method: "POST" });
+  const res = await fetch(`/api/sessions/${sessionId}/approve`, {
+    method: "POST",
+    headers: holderHeaders(sessionId),
+  });
   if (!res.ok) throw new Error(await readError(res));
   return res.json() as Promise<DesignSession>;
 }
 
 export async function retryHandoff(sessionId: string): Promise<DesignSession> {
-  const res = await fetch(`/api/sessions/${sessionId}/retry-handoff`, { method: "POST" });
+  const res = await fetch(`/api/sessions/${sessionId}/retry-handoff`, {
+    method: "POST",
+    headers: holderHeaders(sessionId),
+  });
   if (!res.ok) throw new Error(await readError(res));
   return res.json() as Promise<DesignSession>;
 }
 
 export async function endSession(sessionId: string): Promise<DesignSession> {
-  const res = await fetch(`/api/sessions/${sessionId}/end`, { method: "POST" });
+  const res = await fetch(`/api/sessions/${sessionId}/end`, {
+    method: "POST",
+    headers: holderHeaders(sessionId),
+  });
   if (!res.ok) throw new Error(await readError(res));
   return res.json() as Promise<DesignSession>;
 }

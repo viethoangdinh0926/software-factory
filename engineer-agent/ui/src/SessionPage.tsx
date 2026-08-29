@@ -14,6 +14,7 @@ import {
   type SubEngineer,
 } from "./api";
 import { MarkdownView } from "./MarkdownView";
+import { sessionHolderId, useSessionPresence } from "./sessionPresence";
 
 function getUserFriendlyError(_err: unknown) {
   return "Something went wrong. Please try again.";
@@ -78,6 +79,7 @@ function SubTile({
   sessionId,
   sub,
   busy,
+  readOnly,
   onBusy,
   onUpdate,
   onError,
@@ -85,6 +87,7 @@ function SubTile({
   sessionId: string;
   sub: SubEngineer;
   busy: boolean;
+  readOnly: boolean;
   onBusy: (id: string | null) => void;
   onUpdate: (session: FleetSession) => void;
   onError: (msg: string) => void;
@@ -96,7 +99,7 @@ function SubTile({
   async function onChat(e: FormEvent) {
     e.preventDefault();
     const text = message.trim();
-    if (!text || busy || !open) return;
+    if (!text || busy || readOnly || !open) return;
     onBusy(sub.microservice_id);
     setPending(text);
     setMessage("");
@@ -111,7 +114,7 @@ function SubTile({
   }
 
   async function run(action: () => Promise<FleetSession>) {
-    if (busy) return;
+    if (busy || readOnly) return;
     onBusy(sub.microservice_id);
     try {
       onUpdate(await action());
@@ -244,25 +247,25 @@ function SubTile({
             onKeyDown={onComposerKey}
             rows={3}
             placeholder={composerPlaceholder(sub)}
-            disabled={busy}
+            disabled={busy || readOnly}
           />
           <div className="composer-actions">
             {sub.can_approve ? (
-              <button className="btn" type="button" onClick={() => void run(() => approve(sessionId, sub.microservice_id))} disabled={busy}>
+              <button className="btn" type="button" onClick={() => void run(() => approve(sessionId, sub.microservice_id))} disabled={busy || readOnly}>
                 {sub.approve_label || "Approve plan"}
               </button>
             ) : null}
             {sub.can_pause ? (
-              <button className="btn" type="button" onClick={() => void run(() => pause(sessionId, sub.microservice_id))} disabled={busy}>
+              <button className="btn" type="button" onClick={() => void run(() => pause(sessionId, sub.microservice_id))} disabled={busy || readOnly}>
                 Pause
               </button>
             ) : null}
             {sub.can_execute ? (
-              <button className="btn" type="button" onClick={() => void run(() => execute(sessionId, sub.microservice_id))} disabled={busy}>
+              <button className="btn" type="button" onClick={() => void run(() => execute(sessionId, sub.microservice_id))} disabled={busy || readOnly}>
                 Execute plan
               </button>
             ) : null}
-            <button className="btn ghost" type="submit" disabled={busy || !message.trim()}>
+            <button className="btn ghost" type="submit" disabled={busy || readOnly || !message.trim()}>
               Send
             </button>
           </div>
@@ -279,6 +282,8 @@ export function SessionPage() {
   const [session, setSession] = useState<FleetSession | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const presence = useSessionPresence(sessionId);
+  const viewOnly = !presence.interactive;
 
   const load = useCallback(async () => {
     try {
@@ -298,7 +303,19 @@ export function SessionPage() {
     source.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data) as FleetSession;
-        if (data?.design_session_id) setSession(data);
+        if (data?.design_session_id) {
+          const lease = data.interaction?.holder_id || "";
+          const mine = sessionHolderId(sessionId);
+          setSession({
+            ...data,
+            interaction: {
+              holder_id: lease,
+              is_holder: Boolean(lease) && lease === mine,
+              interactive: Boolean(lease) && lease === mine,
+              locked: Boolean(lease) && lease !== mine,
+            },
+          });
+        }
       } catch {
         /* ignore a malformed frame */
       }
@@ -339,6 +356,11 @@ export function SessionPage() {
           </a>
         </div>
       </header>
+      {viewOnly ? (
+        <p className="view-only banner" role="status">
+          Someone else is working on this session. You can watch progress; controls unlock when they close the tab.
+        </p>
+      ) : null}
       {error ? (
         <div className="error banner" role="alert">
           <p>{error}</p>
@@ -354,6 +376,7 @@ export function SessionPage() {
             sessionId={session.design_session_id}
             sub={sub}
             busy={busyId !== null}
+            readOnly={viewOnly}
             onBusy={setBusyId}
             onUpdate={setSession}
             onError={setError}

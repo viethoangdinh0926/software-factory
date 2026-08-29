@@ -1,3 +1,5 @@
+import { holderHeaders } from "./sessionPresence";
+
 export type ChatMessage = {
   role: "assistant" | "user" | "system";
   content: string;
@@ -97,6 +99,14 @@ export type WorkflowSession = {
   git_send_error: string;
   git_sent_at: string;
   can_send_git: boolean;
+  interaction?: InteractionState;
+};
+
+export type InteractionState = {
+  holder_id: string;
+  is_holder: boolean;
+  interactive: boolean;
+  locked: boolean;
 };
 
 export type WorkflowSummary = {
@@ -131,7 +141,7 @@ export async function ingestPackage(markdown: string): Promise<{ design_session_
 }
 
 export async function getSession(sessionId: string): Promise<WorkflowSession> {
-  const res = await fetch(`/api/sessions/${sessionId}`);
+  const res = await fetch(`/api/sessions/${sessionId}`, { headers: holderHeaders(sessionId) });
   if (!res.ok) throw new Error(await readError(res));
   return res.json() as Promise<WorkflowSession>;
 }
@@ -143,7 +153,7 @@ export async function chat(
 ): Promise<WorkflowSession> {
   const res = await fetch(`/api/sessions/${sessionId}/chat`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: holderHeaders(sessionId, { "Content-Type": "application/json" }),
     body: JSON.stringify({ message, service_id: serviceId ?? null }),
   });
   if (!res.ok) throw new Error(await readError(res));
@@ -153,7 +163,7 @@ export async function chat(
 export async function approve(sessionId: string, serviceId?: string): Promise<WorkflowSession> {
   const res = await fetch(`/api/sessions/${sessionId}/approve`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: holderHeaders(sessionId, { "Content-Type": "application/json" }),
     body: JSON.stringify({ service_id: serviceId ?? null }),
   });
   if (!res.ok) throw new Error(await readError(res));
@@ -161,13 +171,19 @@ export async function approve(sessionId: string, serviceId?: string): Promise<Wo
 }
 
 export async function endSession(sessionId: string): Promise<WorkflowSession> {
-  const res = await fetch(`/api/sessions/${sessionId}/end`, { method: "POST" });
+  const res = await fetch(`/api/sessions/${sessionId}/end`, {
+    method: "POST",
+    headers: holderHeaders(sessionId),
+  });
   if (!res.ok) throw new Error(await readError(res));
   return res.json() as Promise<WorkflowSession>;
 }
 
 export async function retryIngest(sessionId: string): Promise<WorkflowSession> {
-  const res = await fetch(`/api/sessions/${sessionId}/retry-ingest`, { method: "POST" });
+  const res = await fetch(`/api/sessions/${sessionId}/retry-ingest`, {
+    method: "POST",
+    headers: holderHeaders(sessionId),
+  });
   if (!res.ok) throw new Error(await readError(res));
   return res.json() as Promise<WorkflowSession>;
 }
@@ -189,7 +205,7 @@ export async function saveGit(
 ): Promise<WorkflowSession> {
   const res = await fetch(`/api/sessions/${sessionId}/git`, {
     method: "PUT",
-    headers: { "Content-Type": "application/json" },
+    headers: holderHeaders(sessionId, { "Content-Type": "application/json" }),
     body: JSON.stringify({
       git_repo_url: gitRepoUrl,
       ssh_private_key: sshPrivateKey || null,
@@ -200,7 +216,10 @@ export async function saveGit(
 }
 
 export async function sendGit(sessionId: string): Promise<WorkflowSession> {
-  const res = await fetch(`/api/sessions/${sessionId}/git/send`, { method: "POST" });
+  const res = await fetch(`/api/sessions/${sessionId}/git/send`, {
+    method: "POST",
+    headers: holderHeaders(sessionId),
+  });
   if (!res.ok) throw new Error(await readGitError(res));
   return res.json() as Promise<WorkflowSession>;
 }

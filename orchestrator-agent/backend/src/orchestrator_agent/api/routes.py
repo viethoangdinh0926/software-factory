@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Form, HTTPException
+from fastapi import APIRouter, Form, Header, HTTPException
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
 from orchestrator_agent.config import get_settings
 from orchestrator_agent.git_access import GitAccessError
+from orchestrator_agent.session_presence import SessionBusyError
 from orchestrator_agent.sessions import get_store
 from orchestrator_agent.workflow import plan_package_markdown
 
@@ -36,6 +37,31 @@ class IngestResponse(BaseModel):
     design_version: int
     phase: str
     message: str | None = None
+
+
+class PresenceRequest(BaseModel):
+    holder_id: str = Field(min_length=1)
+
+
+def _holder(x_session_holder: str | None) -> str | None:
+    value = (x_session_holder or "").strip()
+    return value or None
+
+
+def _public(session, holder: str | None = None) -> dict:
+    data = session.to_public()
+    data["interaction"] = get_store().presence.snapshot(session.design_session_id, holder)
+    return data
+
+
+def _require_interaction(session_id: str, holder: str | None) -> None:
+    try:
+        get_store().presence.require(session_id, holder)
+    except SessionBusyError as exc:
+        raise HTTPException(
+            status_code=423,
+            detail="This session is open in another browser.",
+        ) from exc
 
 
 @router.post("/ingest", response_model=IngestResponse)
@@ -67,15 +93,48 @@ async def list_sessions() -> dict:
 
 
 @router.get("/api/sessions/{session_id}")
-async def get_session(session_id: str) -> dict:
+async def get_session(
+    session_id: str,
+    x_session_holder: str | None = Header(default=None),
+) -> dict:
     try:
-        return get_store().get(session_id).to_public()
+        return _public(get_store().get(session_id), _holder(x_session_holder))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Unknown design session") from exc
 
 
+@router.post("/api/sessions/{session_id}/presence")
+async def heartbeat_presence(session_id: str, body: PresenceRequest) -> dict:
+    try:
+        get_store().get(session_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Unknown design session") from exc
+    try:
+        return get_store().presence.heartbeat(session_id, body.holder_id)
+    except SessionBusyError as exc:
+        raise HTTPException(
+            status_code=423,
+            detail="This session is open in another browser.",
+        ) from exc
+
+
+@router.post("/api/sessions/{session_id}/presence/release")
+async def release_presence(session_id: str, body: PresenceRequest) -> dict:
+    try:
+        get_store().get(session_id)
+    except KeyError:
+        return {"holder_id": "", "is_holder": False, "interactive": False, "locked": False}
+    return get_store().presence.release(session_id, body.holder_id)
+
+
 @router.post("/api/sessions/{session_id}/chat")
-async def chat(session_id: str, body: ChatRequest) -> dict:
+async def chat(
+    session_id: str,
+    body: ChatRequest,
+    x_session_holder: str | None = Header(default=None),
+) -> dict:
+    holder = _holder(x_session_holder)
+    _require_interaction(session_id, holder)
     try:
         session = get_store().chat(session_id, body.message, service_id=body.service_id)
     except KeyError as exc:
@@ -85,11 +144,17 @@ async def chat(session_id: str, body: ChatRequest) -> dict:
     except Exception as exc:  # noqa: BLE001
         logger.exception("Chat failed for session %s", session_id)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-    return session.to_public()
+    return _public(session, holder)
 
 
 @router.post("/api/sessions/{session_id}/approve")
-async def approve(session_id: str, body: ApproveRequest | None = None) -> dict:
+async def approve(
+    session_id: str,
+    body: ApproveRequest | None = None,
+    x_session_holder: str | None = Header(default=None),
+) -> dict:
+    holder = _holder(x_session_holder)
+    _require_interaction(session_id, holder)
     service_id = body.service_id if body else None
     try:
         session = get_store().approve(session_id, service_id=service_id)
@@ -99,22 +164,32 @@ async def approve(session_id: str, body: ApproveRequest | None = None) -> dict:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-    return session.to_public()
+    return _public(session, holder)
 
 
 @router.post("/api/sessions/{session_id}/end")
-async def end_session(session_id: str) -> dict:
+async def end_session(
+    session_id: str,
+    x_session_holder: str | None = Header(default=None),
+) -> dict:
+    holder = _holder(x_session_holder)
+    _require_interaction(session_id, holder)
     try:
         session = get_store().end_session(session_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Unknown design session") from exc
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-    return session.to_public()
+    return _public(session, holder)
 
 
 @router.post("/api/sessions/{session_id}/retry-ingest")
-async def retry_ingest(session_id: str) -> dict:
+async def retry_ingest(
+    session_id: str,
+    x_session_holder: str | None = Header(default=None),
+) -> dict:
+    holder = _holder(x_session_holder)
+    _require_interaction(session_id, holder)
     try:
         session = get_store().get(session_id)
         # Remove error messages from the session
@@ -129,7 +204,7 @@ async def retry_ingest(session_id: str) -> dict:
     except Exception as exc:  # noqa: BLE001
         logger.exception("Failed to retry ingest for session %s", session_id)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-    return session.to_public()
+    return _public(session, holder)
 
 
 @router.get("/api/sessions/{session_id}/download/plan")
@@ -149,7 +224,13 @@ async def download_plan(session_id: str) -> PlainTextResponse:
 
 
 @router.put("/api/sessions/{session_id}/git")
-async def save_git(session_id: str, body: GitSaveRequest) -> dict:
+async def save_git(
+    session_id: str,
+    body: GitSaveRequest,
+    x_session_holder: str | None = Header(default=None),
+) -> dict:
+    holder = _holder(x_session_holder)
+    _require_interaction(session_id, holder)
     try:
         session = get_store().save_git(
             session_id,
@@ -163,11 +244,16 @@ async def save_git(session_id: str, body: GitSaveRequest) -> dict:
     except Exception as exc:  # noqa: BLE001
         logger.exception("Failed to save git access for session %s", session_id)
         raise HTTPException(status_code=500, detail="Something went wrong. Please try again.") from exc
-    return session.to_public()
+    return _public(session, holder)
 
 
 @router.post("/api/sessions/{session_id}/git/send")
-async def send_git(session_id: str) -> dict:
+async def send_git(
+    session_id: str,
+    x_session_holder: str | None = Header(default=None),
+) -> dict:
+    holder = _holder(x_session_holder)
+    _require_interaction(session_id, holder)
     try:
         session = get_store().send_git(session_id)
     except KeyError as exc:
@@ -175,4 +261,4 @@ async def send_git(session_id: str) -> dict:
     except Exception as exc:  # noqa: BLE001
         logger.exception("Failed to send git access for session %s", session_id)
         raise HTTPException(status_code=500, detail="Something went wrong. Please try again.") from exc
-    return session.to_public()
+    return _public(session, holder)
