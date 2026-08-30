@@ -94,22 +94,51 @@ export type DesignStartResponse = {
   message: string | null;
 };
 
-async function readError(_res: Response): Promise<string> {
-  // Always return a generic error message to avoid exposing backend details
+export class HttpError extends Error {
+  readonly status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = "HttpError";
+    this.status = status;
+  }
+}
+
+export type SessionSummary = {
+  design_session_id: string;
+  phase: string;
+  design_track: string;
+  design_step: number;
+  updated_at: string;
+  finalized: boolean;
+  design_version: number;
+  ui_path: string;
+};
+
+async function readError(res: Response): Promise<string> {
+  if (res.status === 404) return "Session not found.";
+  if (res.status === 423) return "This session is open in another browser.";
   return "Something went wrong. Please try again.";
+}
+
+export async function listSessions(): Promise<SessionSummary[]> {
+  const res = await fetch("/api/sessions");
+  if (!res.ok) throw new HttpError(res.status, await readError(res));
+  const data = (await res.json()) as { sessions: SessionSummary[] };
+  return data.sessions ?? [];
 }
 
 export async function startDesign(markdown: string): Promise<DesignStartResponse> {
   const body = new FormData();
   body.set("markdown", markdown);
   const res = await fetch("/design", { method: "POST", body });
-  if (!res.ok) throw new Error(await readError(res));
+  if (!res.ok) throw new HttpError(res.status, await readError(res));
   return res.json() as Promise<DesignStartResponse>;
 }
 
 export async function getSession(sessionId: string): Promise<DesignSession> {
+  if (!sessionId.trim()) throw new HttpError(404, "Session not found.");
   const res = await fetch(`/api/sessions/${sessionId}`, { headers: holderHeaders(sessionId) });
-  if (!res.ok) throw new Error(await readError(res));
+  if (!res.ok) throw new HttpError(res.status, await readError(res));
   return res.json() as Promise<DesignSession>;
 }
 

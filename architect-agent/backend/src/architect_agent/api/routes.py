@@ -100,6 +100,11 @@ async def start_design_session(
     )
 
 
+@router.get("/api/sessions")
+async def list_sessions() -> dict:
+    return {"sessions": get_store().list_sessions()}
+
+
 @router.get("/api/sessions/{session_id}")
 async def get_session(
     session_id: str,

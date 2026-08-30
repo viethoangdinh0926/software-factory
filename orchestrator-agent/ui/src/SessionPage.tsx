@@ -29,8 +29,8 @@ import { MermaidDiagram } from "./MermaidDiagram";
 import { useSessionPresence } from "./sessionPresence";
 
 // Generic error message handler - provides user-friendly messages without exposing backend details
-function getUserFriendlyError(_err: unknown): string {
-  // Always return a generic message regardless of the actual error
+function getUserFriendlyError(err: unknown): string {
+  if (err instanceof Error && err.message.trim()) return err.message;
   return "Something went wrong. Please try again.";
 }
 
@@ -608,25 +608,25 @@ export function SessionPage() {
   }
 
   if (!session) {
+    const notFound = Boolean(error && /not found/i.test(error));
     return (
       <div className="app">
         <div className="atmosphere" aria-hidden />
         <div className="state-card">
           <p className="brand">Orchestrator Agent</p>
-          <h1>Loading workflow…</h1>
-          <div className="loading-line" />
+          <h1>{notFound ? "Session not found" : error ? "Session unavailable" : "Loading workflow…"}</h1>
           {error ? (
             <div>
-              <p className="error">{error}</p>
-              <button 
-                className="btn ghost" 
-                onClick={() => window.location.reload()}
-                type="button"
-              >
-                Retry
-              </button>
+              <p className="error">
+                {notFound ? `No workflow matches ${sessionId || "this URL"}.` : error}
+              </p>
+              <Link className="btn ghost" to="/">
+                Back home
+              </Link>
             </div>
-          ) : null}
+          ) : (
+            <div className="loading-line" />
+          )}
         </div>
       </div>
     );

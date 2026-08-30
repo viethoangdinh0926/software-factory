@@ -1,6 +1,6 @@
-import { useState, type FormEvent } from "react";
-import { useNavigate } from "react-router-dom";
-import { startDesign } from "./api";
+import { useEffect, useState, type FormEvent } from "react";
+import { Link, useNavigate } from "react-router-dom";
+import { listSessions, startDesign, type SessionSummary } from "./api";
 
 const ROUND_STEPS = [
   {
@@ -83,6 +83,13 @@ export function HomePage() {
   const [showPlaceholder, setShowPlaceholder] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [sessions, setSessions] = useState<SessionSummary[] | null>(null);
+
+  useEffect(() => {
+    listSessions()
+      .then(setSessions)
+      .catch(() => setSessions([]));
+  }, []);
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -112,6 +119,22 @@ export function HomePage() {
           </p>
         </div>
       </header>
+
+      {sessions === null ? null : sessions.length ? (
+        <section className="session-list" aria-label="Saved design sessions">
+          {sessions.map((row) => (
+            <Link key={row.design_session_id} className="session-row" to={row.ui_path}>
+              <span className="mono">{row.design_session_id}</span>
+              <span>
+                v{row.design_version} · {row.design_track} · {row.phase}
+                {row.design_step ? ` step ${row.design_step}` : ""}
+              </span>
+            </Link>
+          ))}
+        </section>
+      ) : (
+        <p className="lede">No saved design sessions yet.</p>
+      )}
 
       <section className="panel flow-guide" aria-labelledby="flow-heading">
         <div className="panel-head">

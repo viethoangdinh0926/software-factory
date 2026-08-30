@@ -124,7 +124,9 @@ Each agent classifies a user turn as **command** vs **information** (LLM JSON + 
 
 Two stores stay in sync: **LangGraph state** (resumable interrupts) and **SessionStore** (what the UI shows). Wait nodes call LangGraph `interrupt()`; the BFF resumes with `Command(resume={action, text})`.
 
-There is **no** `GET /api/sessions` list and **no SSE**. The home page starts a new design; you resume by opening `/sessions/{id}`. A locked (non-holder) tab polls GET every ~3s.
+`GET /api/sessions` lists summaries from in-memory sessions plus `data/sessions/*.json` (no graph rehydrate). The home page shows that list so you can reopen a stored atelier. Opening an unknown `/sessions/{id}` returns **404** and the UI says **Session not found**. There is **no SSE**. A locked (non-holder) tab polls GET every ~3s.
+
+If checkpoint / graph repair fails after a file load, the BFF still serves the disk snapshot instead of failing the whole session.
 
 ### 3.2 Starting a session
 
@@ -238,6 +240,7 @@ Tile status: `current` | `done` | `pending`. A full-width Mermaid panel shows wh
 | Method | Path |
 | --- | --- |
 | POST | `/design` |
+| GET | `/api/sessions` |
 | GET | `/api/sessions/{id}` |
 | POST | `/api/sessions/{id}/presence` |
 | POST | `/api/sessions/{id}/presence/release` |
@@ -285,7 +288,7 @@ ingest → classify → handle_update
 
 `wait_node` interrupts with `{action, text, service_id}`. Resume is per tile when `service_id` is set.
 
-Unlike the architect, orchestrator **lists** sessions: `GET /api/sessions`. No SSE; the session page polls GET about every 4s.
+Orchestrator **lists** sessions: `GET /api/sessions`. No SSE; the session page polls GET about every 4s. Unknown `/sessions/{id}` is **404** / **Session not found**.
 
 ### 4.2 How packages arrive
 
@@ -431,7 +434,7 @@ The engineer does **not** use LangGraph. `SessionStore` + a background worker th
 | Pi runner | `backend/src/engineer_agent/pi_runner/` (`npm install` / `make install-pi-runner`) |
 | Git secrets | engineer `secrets_store` (key never in `to_public()`) |
 
-**SSE:** `GET /api/sessions/{id}/events` streams the public fleet JSON so the UI does not poll. (Architect and orchestrator do not have this.)
+**SSE:** `GET /api/sessions/{id}/events` streams the public fleet JSON so the UI does not poll. (Architect and orchestrator do not have this.) Unknown `/sessions/{id}` is **404** / **Session not found**.
 
 ### 5.2 How work arrives
 

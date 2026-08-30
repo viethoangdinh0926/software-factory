@@ -1131,7 +1131,34 @@ textarea::placeholder {
   border-radius: 1rem;
   background: var(--panel);
   backdrop-filter: blur(16px);
-  animation: rise-in 0.45s ease-out both;
+}
+
+.session-list {
+  display: grid;
+  gap: 0.65rem;
+  margin-bottom: 1.5rem;
+}
+
+.session-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: 0.85rem;
+  background: var(--panel);
+  text-decoration: none;
+  color: inherit;
+}
+
+.session-row:hover {
+  border-color: var(--line-strong);
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
 }
 
 .loading-line {

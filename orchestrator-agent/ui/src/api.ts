@@ -120,8 +120,9 @@ export type WorkflowSummary = {
   ui_path: string;
 };
 
-async function readError(_res: Response): Promise<string> {
-  // Always return a generic error message to avoid exposing backend details
+async function readError(res: Response): Promise<string> {
+  if (res.status === 404) return "Session not found.";
+  if (res.status === 423) return "This session is open in another browser.";
   return "Something went wrong. Please try again.";
 }
 
@@ -141,6 +142,7 @@ export async function ingestPackage(markdown: string): Promise<{ design_session_
 }
 
 export async function getSession(sessionId: string): Promise<WorkflowSession> {
+  if (!sessionId.trim()) throw new Error("Session not found.");
   const res = await fetch(`/api/sessions/${sessionId}`, { headers: holderHeaders(sessionId) });
   if (!res.ok) throw new Error(await readError(res));
   return res.json() as Promise<WorkflowSession>;

@@ -302,19 +302,75 @@ class SessionStore:
                 session.design_step,
             )
 
-        self._restore_design_diagram(session)
-        self._ensure_graph_resumable(session)
-        self._fill_missing_phase0_spec(session)
-        self._fill_missing_diagram(session)
-        self._fill_missing_domain_model(session)
-        self._fill_missing_fmea(session)
+        try:
+            self._restore_design_diagram(session)
+            self._ensure_graph_resumable(session)
+            self._fill_missing_phase0_spec(session)
+            self._fill_missing_diagram(session)
+            self._fill_missing_domain_model(session)
+            self._fill_missing_fmea(session)
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "Post-restore repair failed for session %s; serving the disk snapshot",
+                session.session_id,
+            )
         return session
 
     def _config(self, session_id: str) -> dict[str, Any]:
         return {"configurable": {"thread_id": session_id}}
 
+    def list_sessions(self) -> list[dict[str, Any]]:
+        """Summaries from memory plus JSON files under data/sessions — no graph rehydrate."""
+        rows: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for session in self._sessions.values():
+            seen.add(session.session_id)
+            rows.append(self._summary(session))
+        for path in self._settings.data_dir.glob("*.json"):
+            sid = path.stem
+            if sid in seen:
+                continue
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                if not isinstance(data, dict):
+                    continue
+                session_id = str(data.get("design_session_id") or data.get("session_id") or sid)
+                mapped = _legacy_map(data)
+                rows.append(
+                    {
+                        "design_session_id": session_id,
+                        "phase": mapped["phase"],
+                        "design_track": mapped["design_track"],
+                        "design_step": int(mapped["design_step"]),
+                        "updated_at": str(data.get("updated_at") or ""),
+                        "finalized": bool(data.get("finalized")) or mapped["phase"] == "done",
+                        "design_version": int(data.get("design_version") or 0),
+                        "ui_path": f"/sessions/{session_id}",
+                    }
+                )
+            except (OSError, json.JSONDecodeError, TypeError, ValueError, KeyError):
+                continue
+        rows.sort(key=lambda row: str(row.get("updated_at") or ""), reverse=True)
+        return rows
+
+    def _summary(self, session: DesignSession) -> dict[str, Any]:
+        return {
+            "design_session_id": session.session_id,
+            "phase": session.phase,
+            "design_track": session.design_track,
+            "design_step": session.design_step,
+            "updated_at": session.updated_at,
+            "finalized": session.finalized,
+            "design_version": session.design_version,
+            "ui_path": f"/sessions/{session.session_id}",
+        }
+
     def _has_interrupt(self, session_id: str) -> bool:
-        state = self._graph.get_state(self._config(session_id))
+        try:
+            state = self._graph.get_state(self._config(session_id))
+        except Exception:  # noqa: BLE001
+            logger.exception("Could not read graph state for session %s", session_id)
+            return False
         return any(bool(task.interrupts) for task in state.tasks)
 
     def _wait_node(self, session: DesignSession) -> str:

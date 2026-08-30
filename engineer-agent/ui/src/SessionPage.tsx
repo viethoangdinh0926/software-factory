@@ -17,7 +17,8 @@ import {
 import { MarkdownView } from "./MarkdownView";
 import { sessionHolderId, useSessionPresence } from "./sessionPresence";
 
-function getUserFriendlyError(_err: unknown) {
+function getUserFriendlyError(err: unknown) {
+  if (err instanceof Error && err.message.trim()) return err.message;
   return "Something went wrong. Please try again.";
 }
 
@@ -427,15 +428,18 @@ export function SessionPage() {
   }, [sessionId]);
 
   if (!session) {
+    const notFound = Boolean(error && /not found/i.test(error));
     return (
       <div className="app">
         <div className="atmosphere" aria-hidden />
         <div className="state-card">
           <p className="brand">Engineer Agent</p>
-          <h1>{error ? "Session unavailable" : "Loading fleet…"}</h1>
+          <h1>{notFound ? "Session not found" : error ? "Session unavailable" : "Loading fleet…"}</h1>
           {error ? (
             <>
-              <p className="error">{error}</p>
+              <p className="error">
+                {notFound ? `No fleet matches ${sessionId || "this URL"}.` : error}
+              </p>
               <Link className="btn ghost" to="/">
                 All fleets
               </Link>
