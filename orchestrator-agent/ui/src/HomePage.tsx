@@ -39,6 +39,7 @@ export function HomePage() {
   );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [hasFocused, setHasFocused] = useState(false);
 
   useEffect(() => {
     listSessions()
@@ -145,6 +146,12 @@ export function HomePage() {
         <textarea
           value={markdown}
           onChange={(e) => setMarkdown(e.target.value)}
+          onFocus={() => {
+            if (!hasFocused) {
+              setMarkdown("");
+              setHasFocused(true);
+            }
+          }}
           rows={16}
           required
           disabled={busy}
