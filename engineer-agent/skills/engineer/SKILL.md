@@ -60,6 +60,10 @@ The user can also command **Pi on the current item** in this sub-engineer's chat
 
 After Pi executes one of those commands, tell the user in chat that it succeeded.
 
+If Pi cannot continue an item without a product or design decision, capture its
+questions, ask the user in this sub-engineer's chat, and pass the answers back
+to Pi so it can continue the same item. Do not guess for the user.
+
 When Pi **finishes an item successfully**, write/update
 `IMPLEMENTATION_STATUS.md` in this service's private folder, tell the user in
 chat, and keep that status available on the tile so they can open it.

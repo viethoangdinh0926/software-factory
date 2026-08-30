@@ -38,6 +38,9 @@ function composerPlaceholder(sub: SubEngineer): string {
     return "Stop/resume/undo this item, pause the plan, or ask a question…";
   }
   if (sub.status === "paused") return "Revise the plan, then execute it…";
+  if (sub.status === "blocked" && sub.block_issue?.kind === "pi_questions") {
+    return "Answer Pi's questions so it can continue…";
+  }
   if (sub.status === "blocked") return "Tell me how to resolve this issue, then approve to continue…";
   if (sub.status === "shipped") return "Ask a follow-up, or wait for the next spec…";
   return "Revise the execution plan, or ask about a feature…";
@@ -285,7 +288,10 @@ function SubTile({
             </p>
             <p className="lede">{sub.block_issue.detail}</p>
             {sub.block_issue.item_title ? (
-              <p className="lede">Paused item: {sub.block_issue.item_title}</p>
+              <p className="lede">
+                {sub.block_issue.kind === "pi_questions" ? "Waiting item: " : "Paused item: "}
+                {sub.block_issue.item_title}
+              </p>
             ) : null}
             {sub.block_issue.instructions ? (
               <p className="lede">

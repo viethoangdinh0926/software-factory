@@ -50,6 +50,7 @@ from engineer_agent.workspace import (
     run_workspace_tests,
     ship_workspace,
     write_implementation_status,
+    write_pi_answers,
 )
 
 logger = logging.getLogger(__name__)
@@ -57,6 +58,7 @@ logger = logging.getLogger(__name__)
 APPROVE_LABELS = {
     "awaiting_plan": "Approve plan",
     "blocked": "Approve to continue",
+    "pi_questions": "Send answers to Pi",
 }
 
 PLAN_EDITABLE = {"awaiting_plan", "paused"}
@@ -189,6 +191,20 @@ def _issue_instructions(sub: dict[str, Any]) -> str:
     return str(sub.get("resume_instructions") or issue.get("instructions") or "").strip()
 
 
+def _block_kind(sub: dict[str, Any]) -> str:
+    issue = sub.get("block_issue") if isinstance(sub.get("block_issue"), dict) else {}
+    return str(issue.get("kind") or "")
+
+
+def _user_is_asking(text: str) -> bool:
+    compact = (text or "").strip().lower()
+    if not compact:
+        return False
+    return "?" in text or compact.startswith(
+        ("why", "what", "which", "how", "show", "explain", "list")
+    )
+
+
 def _taken_workspace_names(session: FleetSession, sub_id: str) -> set[str]:
     taken: set[str] = set()
     for other in session.sub_agents:
@@ -256,15 +272,22 @@ def decorate_sub(sub: dict[str, Any]) -> dict[str, Any]:
     can_approve = ((status == "awaiting_plan" and has_items) or blocked) and not suspended
     out["can_approve"] = can_approve
     if blocked:
-        out["approve_kind"] = "blocked"
-        out["approve_label"] = APPROVE_LABELS["blocked"]
+        issue = out.get("block_issue") if isinstance(out.get("block_issue"), dict) else {}
+        if str(issue.get("kind") or "") == "pi_questions":
+            out["approve_kind"] = "pi_questions"
+            out["approve_label"] = APPROVE_LABELS["pi_questions"]
+        else:
+            out["approve_kind"] = "blocked"
+            out["approve_label"] = APPROVE_LABELS["blocked"]
     elif can_approve:
         out["approve_kind"] = "awaiting_plan"
         out["approve_label"] = APPROVE_LABELS["awaiting_plan"]
     else:
         out["approve_kind"] = ""
         out["approve_label"] = ""
-    out["can_pause"] = status == "executing" and not suspended
+    out["can_pause"] = (
+        status == "executing" or (blocked and str((out.get("block_issue") or {}).get("kind") or "") == "pi_questions")
+    ) and not suspended
     out["can_execute"] = status == "paused" and has_items and not suspended
     out["plan_locked"] = status in {"executing", "blocked"} and not suspended
     out["discussion_open"] = not suspended
@@ -629,7 +652,7 @@ class SessionStore:
                     "stop_item",
                     "resume_item",
                     "undo_item",
-                }:
+                } and not (status == "blocked" and _block_kind(sub) == "pi_questions"):
                     return self._chat_locked(session, sub, text, consult.clarify_message)
                 sub["discussion_digest"] = consult.keynotes
                 session.replace(sub)
@@ -658,6 +681,14 @@ class SessionStore:
             elif action == "pause":
                 return self._chat_locked(session, sub, text, "Nothing is executing, so there is nothing to pause.")
             elif status == "blocked":
+                if _block_kind(sub) == "pi_questions":
+                    if action == "approve":
+                        return self._deliver_pi_answers_locked(session, sub, text)
+                    extra = ""
+                    if _is_peer_data_request(text):
+                        extra = self._handle_peer_data_request(session, dict(sub), text)
+                        sub = session.find(str(sub.get("microservice_id") or "")) or sub
+                    return self._chat_pi_questions_locked(session, sub, text, extra=extra)
                 if action == "approve":
                     return self._approve_locked(session, sub)
                 if action == "execute":
@@ -1022,6 +1053,124 @@ class SessionStore:
         self._persist(session)
         return session
 
+    def surface_pi_questions(
+        self,
+        session_id: str,
+        *,
+        service_id: str | None,
+        item: dict[str, Any],
+        questions: list[str],
+    ) -> FleetSession:
+        """Test/helper: post Pi's questions to the sub-engineer tile."""
+        with self._lock_for(session_id):
+            session = self.get(session_id)
+            sub = session.find(service_id)
+            if not sub:
+                raise KeyError(service_id or session_id)
+            self._surface_pi_questions_locked(session, sub, item, questions)
+            self._persist(session)
+            return session
+
+    def _surface_pi_questions_locked(
+        self,
+        session: FleetSession,
+        sub: dict[str, Any],
+        item: dict[str, Any],
+        questions: list[str],
+    ) -> None:
+        cleaned = [str(q).strip() for q in questions if str(q).strip()]
+        if not cleaned:
+            return
+        updated = dict(sub)
+        numbered = "\n".join(f"{index}. {q}" for index, q in enumerate(cleaned, start=1))
+        issue = {
+            "kind": "pi_questions",
+            "title": "Pi needs your answers",
+            "detail": numbered,
+            "item_id": str(item.get("id") or ""),
+            "item_title": str(item.get("title") or ""),
+            "instructions": "",
+            "questions": cleaned,
+        }
+        updated["status"] = "blocked"
+        updated["block_issue"] = issue
+        updated["resume_instructions"] = ""
+        title = str(item.get("title") or "this item")
+        note = (
+            f"Pi has questions about **{title}** and is waiting.\n\n{numbered}\n\n"
+            "Reply in this chat with the answers. I will pass them to Pi so it can continue."
+        )
+        msgs = list(updated.get("messages") or [])
+        msgs.append(
+            {
+                "role": "assistant",
+                "content": _close(note, status="blocked", can_approve=True),
+                "node": "pi_questions",
+            }
+        )
+        updated["messages"] = msgs
+        _remember_sub(updated, assistant=note, phase="pi_questions")
+        session.replace(updated)
+
+    def _chat_pi_questions_locked(
+        self,
+        session: FleetSession,
+        sub: dict[str, Any],
+        text: str,
+        *,
+        extra: str = "",
+    ) -> FleetSession:
+        if _user_is_asking(text) or _is_peer_data_request(text):
+            return self._record_block_instructions(session, sub, text, extra=extra)
+        return self._deliver_pi_answers_locked(session, sub, text)
+
+    def _deliver_pi_answers_locked(
+        self,
+        session: FleetSession,
+        sub: dict[str, Any],
+        text: str,
+    ) -> FleetSession:
+        updated = dict(sub)
+        issue = dict(updated.get("block_issue") if isinstance(updated.get("block_issue"), dict) else {})
+        answers = (text or "").strip()
+        if answers.lower() in {"approved", "approve", "send answers to pi"}:
+            answers = _issue_instructions(updated)
+        if not answers:
+            return self._chat_locked(
+                session,
+                updated,
+                text,
+                "Pi is still waiting. Reply with answers to its questions, then I will pass them along.",
+            )
+        item_id = str(issue.get("item_id") or "")
+        private = Path(str(updated.get("workspace_path") or ""))
+        if item_id and private:
+            write_pi_answers(private, item_id, answers)
+        issue["instructions"] = answers
+        updated["block_issue"] = {}
+        updated["resume_instructions"] = ""
+        updated["status"] = "executing"
+        title = str(issue.get("item_title") or "the current item")
+        note = (
+            f"I passed your answers to Pi for **{title}**. The command executed successfully. "
+            "It will continue this item with what you said."
+        )
+        msgs = list(updated.get("messages") or [])
+        msgs.append({"role": "user", "content": text, "node": "pi_questions"})
+        msgs.append(
+            {
+                "role": "assistant",
+                "content": _close(note, status="executing", can_approve=False),
+                "node": "pi_questions",
+            }
+        )
+        updated["messages"] = msgs
+        _remember_sub(updated, pending=text, assistant=note, phase="pi_questions")
+        session.replace(updated)
+        self._refresh_consults(session)
+        self._persist(session)
+        return session
+
     def approve(self, session_id: str, *, service_id: str | None = None) -> FleetSession:
         with self._lock_for(session_id):
             session = self.get(session_id)
@@ -1096,6 +1245,8 @@ class SessionStore:
         updated = dict(sub)
         msgs = list(updated.get("messages") or [])
         if str(updated.get("status") or "") == "blocked":
+            if _block_kind(updated) == "pi_questions":
+                return self._deliver_pi_answers_locked(session, updated, "Approved")
             msgs.append({"role": "user", "content": "Approve to continue", "node": "continue"})
             updated["messages"] = msgs
             return self._continue_locked(session, updated)
@@ -1117,7 +1268,7 @@ class SessionStore:
         return self._start_execute_locked(session, updated, user_note="Starting the updated execution plan.")
 
     def _pause_locked(self, session: FleetSession, sub: dict[str, Any]) -> FleetSession:
-        if str(sub.get("status") or "") != "executing":
+        if str(sub.get("status") or "") != "executing" and _block_kind(sub) != "pi_questions":
             raise PermissionError("Nothing is executing on this sub-engineer.")
         self._request_stop(str(sub.get("sub_agent_id") or ""))
         updated = dict(sub)
@@ -1845,6 +1996,25 @@ class SessionStore:
                 if outcome == "stop":
                     return
             if job:
+                job_item = dict(job.get("item") or {})
+
+                def on_questions(questions: list[str], _item: dict[str, Any] = job_item) -> None:
+                    with self._lock_for(session_id):
+                        try:
+                            live_session = self.get(session_id)
+                        except KeyError:
+                            return
+                        live_sub = live_session.find(sub_id=sub_id)
+                        if not live_sub:
+                            return
+                        prior = live_sub.get("block_issue") if isinstance(live_sub.get("block_issue"), dict) else {}
+                        if str(prior.get("kind") or "") == "pi_questions" and list(
+                            prior.get("questions") or []
+                        ) == list(questions):
+                            return
+                        self._surface_pi_questions_locked(live_session, live_sub, _item, questions)
+                        self._persist(live_session)
+
                 result = implement_plan_item(
                     Path(str(job["private_dir"])),
                     item=job["item"],
@@ -1855,6 +2025,7 @@ class SessionStore:
                     offered_api=str(job.get("offered_api") or ""),
                     tech_stack=str(job.get("tech_stack") or ""),
                     stop_check=lambda: self._stop_requested(sub_id),
+                    on_questions=on_questions,
                 )
                 with self._lock_for(session_id):
                     try:
@@ -1879,7 +2050,13 @@ class SessionStore:
                             self._persist(session)
                         return
                     if str(live.get("status") or "") != "executing":
-                        return
+                        if _block_kind(live) == "pi_questions" and getattr(result, "ok", False):
+                            resumed = dict(live)
+                            resumed["status"] = "executing"
+                            resumed["block_issue"] = {}
+                            live = resumed
+                        else:
+                            return
                     finished = self._finish_item_locked(session, live, job, result)
                     self._persist(session)
                     if finished:

@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+OnQuestions = Callable[[list[str]], None]
+
 from engineer_agent.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -42,6 +44,7 @@ def implement_plan_item(
     offered_api: str = "",
     tech_stack: str = "",
     stop_check: Callable[[], bool] | None = None,
+    on_questions: OnQuestions | None = None,
 ) -> PiItemResult:
     """Write the item brief, then either run Pi or local stubs."""
     from engineer_agent.workspace import snapshot_item_workspace, write_item_spec, write_item_stubs
@@ -75,14 +78,22 @@ def implement_plan_item(
             error="",
             stub=True,
         )
-    return _run_pi_sdk(private_dir, dest, stop_check=stop_check)
+    return _run_pi_sdk(
+        private_dir,
+        dest,
+        item_id=str(item.get("id") or dest.name),
+        stop_check=stop_check,
+        on_questions=on_questions,
+    )
 
 
 def _run_pi_sdk(
     private_dir: Path,
     item_dir: Path,
     *,
+    item_id: str,
     stop_check: Callable[[], bool] | None = None,
+    on_questions: OnQuestions | None = None,
 ) -> PiItemResult:
     settings = get_settings()
     result_path = item_dir / ".pi-result.json"
@@ -141,6 +152,7 @@ def _run_pi_sdk(
     limit = max(30, settings.pi_coder_timeout_seconds)
     stdout = ""
     stderr = ""
+    last_questions: tuple[str, ...] = ()
     try:
         while True:
             if stop_check and stop_check():
@@ -164,6 +176,16 @@ def _run_pi_sdk(
                     test_output="",
                     error=f"Pi coding run exceeded {limit}s.",
                 )
+            if on_questions:
+                from engineer_agent.workspace import read_pi_questions
+
+                current = tuple(read_pi_questions(private_dir, item_id))
+                if current and current != last_questions:
+                    last_questions = current
+                    try:
+                        on_questions(list(current))
+                    except Exception:  # noqa: BLE001
+                        logger.exception("Failed to surface Pi questions to the sub-engineer")
             try:
                 stdout, stderr = proc.communicate(timeout=2)
                 break

@@ -2,6 +2,8 @@
 
 This document describes the **Software Factory as implemented now**: Architect (`:8080`), Orchestrator (`:8090`), and Engineer (`:8091`). It is a code-accurate walkthrough, not a product pitch. Shared workflow key across all three is the architect **`design_session_id`**.
 
+**Keep this file current.** Whenever an agent's operation flow changes (statuses, chat commands, handoffs, Pi/workspace loop, UI controls that alter that loop), update the matching section in this document in the same change.
+
 Shorter overview and deploy commands live in [`README.md`](README.md). Per-agent READMEs and `SKILL.md` files are the source of truth for prompts and local run instructions.
 
 ---
@@ -450,8 +452,10 @@ A **new spec version** while coding:
 
 ```
 ingest → awaiting_plan  --approve-->  executing  --all items done-->  shipped
-                ^                       |  |
-                |                       |  +-- blocker --> blocked --approve to continue--> executing
+                ^                       |  |  |
+                |                       |  |  +-- Pi questions --> blocked (kind pi_questions)
+                |                       |  |         --user answers in chat--> executing (same Pi process)
+                |                       |  +-- git/peer/tests --> blocked --approve to continue--> executing
                 |                       +-- Pause --> paused --chat revise--> paused --Execute--> executing
                 +-- new architect/orchestrator spec --
 ```
@@ -462,11 +466,11 @@ ingest → awaiting_plan  --approve-->  executing  --all items done-->  shipped
 | `awaiting_plan` | Offered API + execution plan ready; user may revise or approve |
 | `executing` | Worker walking items; **plan locked** |
 | `paused` | User paused the **whole plan** to revise it |
-| `blocked` | Issue on the **current item** (git pull, peer contract, tests). Not the same as pause. |
+| `blocked` | Issue on the **current item**. Kind matters: `git_pull` / `peer_contract` / `tests_failed` retry after **Approve to continue**; `pi_questions` waits for chat answers and does **not** kill Pi. |
 | `shipped` | Every item terminal; git push attempted |
 | `suspended` | Orchestrator removed this service or flipped topology |
 
-`can_approve` is true for `awaiting_plan` (has items) and `blocked`. `can_pause` only while `executing`. `can_execute` only while `paused`. `plan_locked` while `executing` or `blocked`.
+`can_approve` is true for `awaiting_plan` (has items) and `blocked`. Approve label is **Send answers to Pi** when `block_issue.kind == pi_questions`. `can_pause` while `executing` **or** while blocked on Pi questions. `can_execute` only while `paused`. `plan_locked` while `executing` or `blocked`.
 
 ### 5.4 Offered API and execution plan
 
@@ -506,7 +510,11 @@ Pi pipeline (SDK `@earendil-works/pi-coding-agent`):
 4. On fail, implement again (up to `PI_CODER_MAX_ROUNDS`, default 5).
 5. On pass, return a short summary (`.pi-result.json`).
 
-`stop_check` (pause / stop-item / undo) **terminates** the Node process. Timeout default 900s (`PI_CODER_TIMEOUT_SECONDS`). Pi wants Node **≥ 22.19**; host Node older than that is a known foot-gun. Needs `~/.pi/agent` login/API key on the engineer machine.
+After each Pi `session.prompt`, the runner checks for questions (see **5.7**). If Pi asked, it **waits** on `.pi-answers.json` instead of exiting.
+
+`stop_check` (pause / stop-item / undo) **terminates** the Node process (including a wait for answers). Timeout default 900s (`PI_CODER_TIMEOUT_SECONDS`). Pi wants Node **≥ 22.19**; host Node older than that is a known foot-gun. Needs `~/.pi/agent` login/API key on the engineer machine.
+
+While the Node process is running, Python polls `.pi-questions.json` and calls `on_questions` so the sub-engineer can post the questions without holding the session lock across the whole Pi run.
 
 `_finish_item_locked`:
 
@@ -515,21 +523,42 @@ Pi pipeline (SDK `@earendil-works/pi-coding-agent`):
 - Pass → item `done`; notes + `implementation_notes`; rewrite **`IMPLEMENTATION_STATUS.md`** in the private folder and store the same markdown on `sub.implementation_status`; chat that Pi finished and the status file was updated.
 - If every item is `done` or `skipped` → **ship once** (`git push` if git execute is on). Status `shipped`.
 
-### 5.6 Blockers vs plan pause vs Pi item commands
+### 5.6 Blockers vs plan pause vs Pi item commands vs Pi questions
 
-Three different stops:
+Four different interrupts:
 
 | Mechanism | How | What it does |
 | --- | --- | --- |
-| **Blocked** | Git / peer / tests fail | Status `blocked`. Chat instructions. **Approve to continue** retries that item (not Execute plan). |
+| **Blocked (failure)** | Git / peer / tests fail | Status `blocked` (`git_pull`, `peer_contract`, `tests_failed`). **Kills** Pi. Chat instructions. **Approve to continue** retries that item (not Execute plan). |
 | **Pause plan** | Pause button or `pause` / `stop the plan` / `stop execution` | Status `paused`. Unlock the plan. Revise, then **Execute plan**. Transitions completed work. |
-| **Stop / resume / undo item** | Chat only (see below) | Plan stays `executing`. Only the current Pi item is held, restored, or restarted. |
+| **Stop / resume / undo item** | Chat only (see 5.8) | Plan stays `executing` (or hold). Only the current Pi item is held, restored, or restarted. |
+| **Pi questions** | See **5.7** | Status `blocked` (`kind: pi_questions`). **Does not kill Pi.** Chat answers (or **Send answers to Pi**) resume the same Node session. |
 
 While `executing`, revising the plan in chat is **rejected** (`PermissionError`) unless you pause first. Q&A and peer-data requests (“need more/less data from X”) still work.
 
-**Approve to continue** (blocked) is not **Execute plan**. Execute is only after a user pause (or first approve from `awaiting_plan`).
+**Approve to continue** (failure block) is not **Execute plan**. Execute is only after a user pause (or first approve from `awaiting_plan`). **Send answers to Pi** is not a retry: it only writes answers for the waiting process.
 
-### 5.7 Chat commands for Pi (current item)
+### 5.7 Pi asks the user (same item continues)
+
+Pi must not guess product or design decisions. Handshake:
+
+1. System prompt tells Pi: if blocked on a user decision, write `items/<id>/.pi-questions.json` as `{"questions": ["..."]}` and/or reply with a `PI_NEED_USER` line plus one question per line, then **stop editing**.
+2. After each `session.prompt`, `pi_runner/run_item.mjs` reads that file (or parses `PI_NEED_USER`). If there are questions, it **waits** (poll 1s) for `items/<id>/.pi-answers.json`.
+3. Python (`pi_coder._run_pi_sdk`) polls the questions file while `communicate()` is running. On a new question list it calls `on_questions` → `_surface_pi_questions_locked`:
+   - Sub status → `blocked`, `block_issue.kind = pi_questions` (title, numbered detail, `item_id`, `questions`)
+   - Item stays `in_progress` (not marked `blocked`, so a later retry path does not treat it as a failure)
+   - **Does not** `_request_stop`
+   - Chat: “Pi has questions about **title**…” plus the numbered list
+   - SSE updates the tile; banner + placeholder “Answer Pi's questions…”
+4. User replies in chat with the answers (or clicks **Send answers to Pi** after typing). A follow-up **question** about Pi’s questions stays on the tile and does not resume Pi.
+5. `_deliver_pi_answers_locked` writes `.pi-answers.json` as `{"answers": "..."}`, sets status back to `executing`, clears `block_issue`, and chats that the answers were passed.
+6. The Node runner reads the answers, deletes both handshake files, and `session.prompt`s Pi with the owner’s answers so it **continues the same session**. Pi may ask another round later (new questions file).
+
+Pause or stop/undo while waiting **does** kill the Node process. If the process dies on timeout while still waiting, the worker leaves the tile blocked (or turns a failed result into a normal error block).
+
+This is not the same as a tests-failed block: **Approve to continue** on a failure re-prepares the workspace and retries; answers to Pi do not spawn a second worker.
+
+### 5.8 Chat commands for Pi (current item)
 
 Classified **before** the LLM, so they are not mistaken for plan-wide pause/execute (`query_intent.classify_pi_item_command`).
 
@@ -543,7 +572,7 @@ After the command is applied, the tile chat says it **executed successfully**. I
 
 `stopped` items are not runnable and not terminal. A plan that is all `done` + `stopped` will not ship until those items are resumed and finished (or skipped by a later plan transition).
 
-### 5.8 Implementation status view
+### 5.9 Implementation status view
 
 After a successful item:
 
@@ -551,7 +580,7 @@ After a successful item:
 - Field: `implementation_status` on the sub (folded ASCII for the API).
 - UI: document **icon** on the tile header. Enabled when the field is non-empty; opens a modal of that markdown.
 
-### 5.9 Peer consults
+### 5.10 Peer consults
 
 If the relationship map says **this** service initiates toward another core service, the sub-engineer:
 
@@ -561,7 +590,7 @@ If the relationship map says **this** service initiates toward another core serv
 
 Peers that initiate toward **you** consume **your** offered API. You do not redesign them.
 
-### 5.10 Engineer API
+### 5.11 Engineer API
 
 | Method | Path |
 | --- | --- |
@@ -607,9 +636,10 @@ Smoke: `LLM_PROVIDER=stub PI_CODER_ENABLED=false BACKGROUND_EXECUTE=false GIT_EX
 9. Open **the same id** on the engineer (`:8091/sessions/{id}`). One tile per service, already in `awaiting_plan`.
 10. Revise or **Approve plan**. Worker + Pi implement item by item. Watch SSE. Open the status icon after items finish.
 11. If tests/git/peers fail: chat instructions, **Approve to continue**.
-12. To change the plan: **Pause**, chat, **Execute plan**.
-13. To stop only the current feature: chat `stop working on current feature` (then `resume this item` or `undo the changes`).
-14. After ship: back on orchestrator, add features/bugs on a tile and **Ship spec update** (no full re-walk). Or send a **new architect package** to re-walk every phase.
+12. If Pi asks questions: answer in that tile’s chat (or **Send answers to Pi**). Pi continues the same item.
+13. To change the plan: **Pause**, chat, **Execute plan**.
+14. To stop only the current feature: chat `stop working on current feature` (then `resume this item` or `undo the changes`).
+15. After ship: back on orchestrator, add features/bugs on a tile and **Ship spec update** (no full re-walk). Or send a **new architect package** to re-walk every phase.
 
 ### 6.2 Stand-alone / LLD app
 
@@ -694,6 +724,7 @@ Peer URLs that must be set for a live factory:
 | Orchestrator git | `orchestrator-agent/backend/src/orchestrator_agent/git_access.py` |
 | Engineer fleet + worker | `engineer-agent/backend/src/engineer_agent/sessions.py` |
 | Engineer plan parse | `engineer-agent/backend/src/engineer_agent/plan_parse.py` |
-| Engineer workspace / snapshot / status md | `engineer-agent/backend/src/engineer_agent/workspace.py` |
+| Engineer workspace / snapshot / status md / Pi Q&A files | `engineer-agent/backend/src/engineer_agent/workspace.py` (`write_pi_answers`, `read_pi_questions`) |
 | Engineer Pi handoff | `engineer-agent/backend/src/engineer_agent/pi_coder.py`, `pi_runner/run_item.mjs` |
+| Engineer Pi questions → user → answers | `sessions.py` (`_surface_pi_questions_locked`, `_deliver_pi_answers_locked`) |
 | Presence (each agent) | `*/session_presence.py` + `*/ui/src/sessionPresence.ts` |

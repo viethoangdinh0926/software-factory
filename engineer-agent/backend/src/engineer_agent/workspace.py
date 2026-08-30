@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -207,6 +208,43 @@ def write_item_stubs(
 
 def _safe_item_id(item_id: str) -> str:
     return _SAFE_ID_RE.sub("-", str(item_id or "item")) or "item"
+
+
+def item_dir_for(private_dir: Path, item_id: str) -> Path:
+    dest = Path(private_dir) / "items" / _safe_item_id(item_id)
+    dest.mkdir(parents=True, exist_ok=True)
+    return dest
+
+
+def questions_path_for(private_dir: Path, item_id: str) -> Path:
+    return item_dir_for(private_dir, item_id) / ".pi-questions.json"
+
+
+def answers_path_for(private_dir: Path, item_id: str) -> Path:
+    return item_dir_for(private_dir, item_id) / ".pi-answers.json"
+
+
+def read_pi_questions(private_dir: Path, item_id: str) -> list[str]:
+    path = questions_path_for(private_dir, item_id)
+    if not path.is_file():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    raw = data.get("questions") if isinstance(data, dict) else None
+    if not isinstance(raw, list):
+        return []
+    return [str(item).strip() for item in raw if str(item).strip()]
+
+
+def write_pi_answers(private_dir: Path, item_id: str, answers: str) -> Path:
+    path = answers_path_for(private_dir, item_id)
+    path.write_text(
+        json.dumps({"answers": (answers or "").strip()}, indent=2),
+        encoding="utf-8",
+    )
+    return path
 
 
 def snapshot_dir_for(private_dir: Path, item_id: str) -> Path:

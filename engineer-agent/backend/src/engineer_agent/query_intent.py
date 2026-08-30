@@ -720,6 +720,7 @@ def format_next_prompt(
     elif mode == "blocked":
         lines.extend(
             [
+                "- If Pi asked questions, answer them in chat so I can pass the answers back.",
                 "- Chat with instructions for how to resolve the issue.",
                 "- If you have no other concerns, please approve to continue this item.",
             ]

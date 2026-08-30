@@ -10,7 +10,7 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import {
   createAgentSession,
@@ -38,6 +38,8 @@ if (!cwd || !itemDir) {
 
 const specPath = join(itemDir, "SPEC.md");
 const spec = existsSync(specPath) ? readFileSync(specPath, "utf8") : "";
+const questionsPath = join(itemDir, ".pi-questions.json");
+const answersPath = join(itemDir, ".pi-answers.json");
 
 function writeResult(payload) {
   writeFileSync(resultPath, JSON.stringify(payload, null, 2), "utf8");
@@ -88,6 +90,67 @@ function runPredeterminedTests() {
   return { ok: result.status === 0, output: output.slice(0, 8000) };
 }
 
+function readQuestionsFile() {
+  if (!existsSync(questionsPath)) return [];
+  try {
+    const data = JSON.parse(readFileSync(questionsPath, "utf8"));
+    const raw = data && data.questions;
+    if (!Array.isArray(raw)) return [];
+    return raw.map((item) => String(item || "").trim()).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function extractQuestions(text) {
+  const body = String(text || "");
+  const marker = body.match(/PI_NEED_USER\b/);
+  if (!marker) return [];
+  const after = body.slice(marker.index + "PI_NEED_USER".length);
+  return after
+    .split("\n")
+    .map((line) => line.replace(/^[\s*#\-0-9.]+/, "").trim())
+    .filter((line) => line && !line.startsWith("```"));
+}
+
+function writeQuestions(questions) {
+  writeFileSync(questionsPath, JSON.stringify({ questions }, null, 2), "utf8");
+}
+
+function sleep(ms) {
+  return new Promise((resolveSleep) => {
+    setTimeout(resolveSleep, ms);
+  });
+}
+
+async function waitForAnswers() {
+  while (true) {
+    if (existsSync(answersPath)) {
+      const raw = readFileSync(answersPath, "utf8");
+      try {
+        const data = JSON.parse(raw);
+        return String((data && (data.answers || data.answer)) || raw).trim();
+      } catch {
+        return raw.trim();
+      }
+    }
+    await sleep(1000);
+  }
+}
+
+function clearHandshake() {
+  try {
+    unlinkSync(questionsPath);
+  } catch {
+    /* ignore */
+  }
+  try {
+    unlinkSync(answersPath);
+  } catch {
+    /* ignore */
+  }
+}
+
 const systemPrompt = [
   "You are the coding implementer for one microservice, invoked by the Engineer sub-agent.",
   `Working directory: ${cwd}`,
@@ -95,6 +158,10 @@ const systemPrompt = [
   "Stay inside this working directory. Do not git commit or git push.",
   "Do not weaken, delete, or skip tests after they are written.",
   "Prefer unittest modules named test_*.py under the current item directory so the engineer can re-run them.",
+  "If you cannot continue without a product or design decision from the user:",
+  "1. Write a JSON file at the item directory named .pi-questions.json with {\"questions\": [\"...\"]}.",
+  "2. Also reply with a line PI_NEED_USER followed by one question per line.",
+  "3. Stop editing and wait. Do not guess. The engineer will collect answers and send them back.",
 ].join("\n");
 
 const modelRuntime = await ModelRuntime.create();
@@ -119,8 +186,29 @@ session.subscribe((event) => {
   }
 });
 
-try {
+async function promptAndMaybeAsk(text) {
+  await session.prompt(text);
+  let questions = readQuestionsFile();
+  if (!questions.length) {
+    questions = extractQuestions(lastAssistantText(session.messages) || streamed);
+    if (questions.length) writeQuestions(questions);
+  }
+  if (!questions.length) return;
+  const answers = await waitForAnswers();
+  clearHandshake();
+  streamed = "";
   await session.prompt(
+    [
+      "The product owner answered your questions. Continue the current step with these answers.",
+      "Do not ask the same questions again unless they are still blocking.",
+      "",
+      answers || "(no answer text)",
+    ].join("\n"),
+  );
+}
+
+try {
+  await promptAndMaybeAsk(
     [
       "STEP 1 — WRITE TESTS ONLY.",
       "Read SPEC.md in the item directory and any existing service files.",
@@ -131,7 +219,7 @@ try {
     ].join("\n"),
   );
 
-  await session.prompt(
+  await promptAndMaybeAsk(
     [
       "STEP 2 — IMPLEMENT.",
       "Write the production code that makes the tests from step 1 pass.",
@@ -146,7 +234,7 @@ try {
     rounds = i + 1;
     lastTests = runPredeterminedTests();
     if (lastTests.ok) break;
-    await session.prompt(
+    await promptAndMaybeAsk(
       [
         "STEP 2 AGAIN — the predetermined tests still fail. Fix the implementation only.",
         "Do not delete or weaken tests.",
@@ -169,7 +257,7 @@ try {
   }
 
   streamed = "";
-  await session.prompt(
+  await promptAndMaybeAsk(
     [
       "STEP 4 — SUMMARIZE for the engineer sub-agent.",
       "The predetermined tests passed. Reply with a concise summary of:",

@@ -41,6 +41,7 @@ export type BlockIssue = {
   item_id?: string;
   item_title?: string;
   instructions?: string;
+  questions?: string[];
 };
 
 export type SubEngineer = {

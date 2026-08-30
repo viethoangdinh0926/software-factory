@@ -1,0 +1,12 @@
+---
+description: Keep HOW_THE_AGENTS_WORK.md current when any agent flow changes
+alwaysApply: true
+---
+
+# Factory operation doc
+
+Whenever you change how Architect, Orchestrator, or Engineer **operates** (statuses, chat/classify actions, handoffs, Pi/workspace loop, blockers, presence, UI controls that change that loop), update [`HOW_THE_AGENTS_WORK.md`](HOW_THE_AGENTS_WORK.md) in the **same change**.
+
+- Edit the section for the agent you touched. Do not leave the doc describing the old flow.
+- Add or adjust mermaid/status tables, command lists, and code entry points when those names change.
+- Skip the doc only for pure refactors, comments, tests, or styling that do not change user-visible or inter-agent behavior.

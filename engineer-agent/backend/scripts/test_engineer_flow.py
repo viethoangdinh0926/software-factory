@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 import os
 import sys
 import tempfile
@@ -33,7 +34,13 @@ from engineer_agent.query_intent import (
 )
 import engineer_agent.sessions as sessions_mod
 from engineer_agent.sessions import SessionStore, reset_store
-from engineer_agent.workspace import private_dir_for, private_dir_name, run_workspace_tests, write_item_work
+from engineer_agent.workspace import (
+    answers_path_for,
+    private_dir_for,
+    private_dir_name,
+    run_workspace_tests,
+    write_item_work,
+)
 
 get_settings.cache_clear()
 get_chat_model.cache_clear()
@@ -225,6 +232,31 @@ for msg in reversed(ident.get("messages") or []):
         last_asst = str(msg.get("content") or "")
         break
 assert "implementation status" in last_asst.lower(), last_asst[:400]
+
+print("Pi questions go to the user; answers go back…", flush=True)
+pending_item = next(
+    it
+    for it in (ident.get("execution_plan") or {}).get("items") or []
+    if it.get("status") == "pending"
+)
+s = store.surface_pi_questions(
+    SESSION,
+    service_id=IDENTITY,
+    item=pending_item,
+    questions=["Which auth header should clients send?"],
+)
+ident = s.find(IDENTITY)
+assert ident is not None
+assert ident["status"] == "blocked"
+assert (ident.get("block_issue") or {}).get("kind") == "pi_questions"
+q_note = str((ident.get("messages") or [{}])[-1].get("content") or "")
+assert "auth header" in q_note.lower(), q_note[:400]
+s = store.chat(SESSION, "Send Authorization: Bearer <token>.", service_id=IDENTITY)
+ident = s.find(IDENTITY)
+assert ident is not None
+assert ident["status"] == "executing"
+passed = json.loads(answers_path_for(private, str(pending_item.get("id"))).read_text())
+assert "Bearer" in str(passed.get("answers") or ""), passed
 
 print("stop / resume current item, then undo Pi work…", flush=True)
 s = store.chat(SESSION, "stop working on current feature", service_id=IDENTITY)

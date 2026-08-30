@@ -28,6 +28,8 @@ transition from current progress. In the sub-engineer chat you can also command 
 the **current item only**: stop it (`stop working on current feature`), resume it
 (`resume this item`), or undo every file change it made for that item
 (`undo the changes`). After Pi runs the command, the tile chat confirms success.
+If Pi needs a product decision, the sub-engineer posts those questions in the tile
+chat; your reply is written back so Pi can continue the same item.
 When Pi finishes an item, the sub-engineer updates `IMPLEMENTATION_STATUS.md` in the
 service folder and the tile shows a button to open that status. Code is shipped to git
 only after the entire plan completes. The sub-engineer pulls the fleet repo first and
