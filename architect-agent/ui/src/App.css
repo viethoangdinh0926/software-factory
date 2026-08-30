@@ -454,7 +454,11 @@ button.approve-btn:disabled {
   display: grid;
   grid-template-columns: 1.05fr 0.95fr;
   gap: 1rem;
-  animation: rise-in 0.6s ease-out 0.08s both;
+}
+
+.session-app .grid,
+.session-app .session-layout {
+  animation: none;
 }
 
 .session-app {
@@ -468,7 +472,6 @@ button.approve-btn:disabled {
   grid-auto-rows: auto;
   gap: 1rem;
   align-items: stretch;
-  animation: rise-in 0.6s ease-out 0.08s both;
 }
 
 .session-layout.has-diagram {

@@ -56,7 +56,7 @@ export function MarkdownView({ content, className }: Props) {
   return (
     <div className={className ? `md ${className}` : "md"}>
       <ReactMarkdown remarkPlugins={[remarkGfm]}>
-        {preserveAngleBrackets(softenLatex(content))}
+        {preserveAngleBrackets(softenLatex(content || ""))}
       </ReactMarkdown>
     </div>
   );

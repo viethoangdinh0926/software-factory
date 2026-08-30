@@ -377,7 +377,7 @@ Handoff record on the session: `status` `sent` | `queued` | `failed`, path, targ
 
 ### 4.8 Git repo panel
 
-On the orchestrator session page:
+On the orchestrator session page the Git form is a collapsed disclosure **below** chat / service tiles so planning stays on screen. It opens automatically when the last send failed.
 
 1. Paste SSH remote URL + private key (**Save** → `PUT /api/sessions/{id}/git`).
 2. Orchestrator validates URL/key and stores the key only under `data/secrets/` (fingerprint may appear in the UI; the key never comes back from GET).

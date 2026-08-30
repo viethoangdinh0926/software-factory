@@ -407,15 +407,17 @@ export function SessionPage() {
         if (data?.design_session_id) {
           const lease = data.interaction?.holder_id || "";
           const mine = sessionHolderId(sessionId);
-          setSession({
+          setSession((prev) => ({
+            ...prev,
             ...data,
+            sub_agents: data.sub_agents ?? prev?.sub_agents ?? [],
             interaction: {
               holder_id: lease,
               is_holder: Boolean(lease) && lease === mine,
               interactive: Boolean(lease) && lease === mine,
               locked: Boolean(lease) && lease !== mine,
             },
-          });
+          }));
         }
       } catch {
         /* ignore a malformed frame */
@@ -427,13 +429,27 @@ export function SessionPage() {
   if (!session) {
     return (
       <div className="app">
-        <p className="lede">{error || "Loading fleet…"}</p>
+        <div className="atmosphere" aria-hidden />
+        <div className="state-card">
+          <p className="brand">Engineer Agent</p>
+          <h1>{error ? "Session unavailable" : "Loading fleet…"}</h1>
+          {error ? (
+            <>
+              <p className="error">{error}</p>
+              <Link className="btn ghost" to="/">
+                All fleets
+              </Link>
+            </>
+          ) : (
+            <div className="loading-line" aria-hidden />
+          )}
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="app">
+    <div className="app session-app">
       <div className="atmosphere" aria-hidden />
       <header className="top">
         <div className="top-copy">
@@ -471,7 +487,7 @@ export function SessionPage() {
         </div>
       ) : null}
       <div className="service-grid">
-        {session.sub_agents.map((sub) => (
+        {(session.sub_agents || []).map((sub) => (
           <SubTile
             key={sub.sub_agent_id}
             sessionId={session.design_session_id}

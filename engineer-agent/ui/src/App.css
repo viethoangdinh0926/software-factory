@@ -398,7 +398,11 @@ button.approve-btn:disabled {
   display: grid;
   grid-template-columns: 1.05fr 0.95fr;
   gap: 1rem;
-  animation: rise-in 0.6s ease-out 0.08s both;
+}
+
+.session-app .grid,
+.service-grid {
+  animation: none;
 }
 
 .session-app {

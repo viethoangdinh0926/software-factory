@@ -441,19 +441,21 @@ function GitAccessPanel({
   }
 
   const sendLabel = session.git_send_status === "failed" ? "Resend to engineer" : "Send to engineer";
+  const statusLabel =
+    session.git_send_status === "sent"
+      ? "sent to engineer"
+      : session.git_send_status === "failed"
+        ? "send failed"
+        : session.git_key_configured
+          ? "key on file"
+          : "not configured";
 
   return (
-    <section className="panel git-panel">
-      <div className="panel-head">
+    <details className="panel git-panel" open={session.git_send_status === "failed"}>
+      <summary className="panel-head git-summary">
         <h2>Git repo</h2>
-        <span className="panel-kicker">
-          {session.git_send_status === "sent"
-            ? "sent to engineer"
-            : session.git_key_configured
-              ? "key on file"
-              : "not configured"}
-        </span>
-      </div>
+        <span className="panel-kicker">{statusLabel}</span>
+      </summary>
       <p className="lede">
         Sub-engineers use this SSH remote to update code for this design session. The private key
         stays on the server and is never shown again after you save.
@@ -512,7 +514,7 @@ function GitAccessPanel({
           </button>
         </div>
       </form>
-    </section>
+    </details>
   );
 }
 
@@ -630,20 +632,23 @@ export function SessionPage() {
     );
   }
 
+  const messages = session.messages || [];
+  const services = session.services || [];
+
   // Check if session has ingest errors
-  const hasIngestError = session.messages.some(
-    msg => msg.role === "system" && msg.content.includes("encountered an error")
+  const hasIngestError = messages.some(
+    (msg) => msg.role === "system" && (msg.content || "").includes("encountered an error"),
   );
 
   // Check if session has a new package notification
-  const hasNewPackageNotification = session.messages.some(
-    msg => msg.role === "system" && msg.content.includes("new design package was received")
+  const hasNewPackageNotification = messages.some(
+    (msg) => msg.role === "system" && (msg.content || "").includes("new design package was received"),
   );
 
   const distributed = session.topology === "distributed";
   const locked = session.discussion_locked;
-  const liveServices = session.services.filter((s) => s.status !== "suspended");
-  const suspendedServices = session.services.filter((s) => s.status === "suspended");
+  const liveServices = services.filter((s) => s.status !== "suspended");
+  const suspendedServices = services.filter((s) => s.status === "suspended");
 
   return (
     <div className="app session-app">
@@ -708,15 +713,6 @@ export function SessionPage() {
 
       {error ? <p className="error banner">{error}</p> : null}
 
-      <GitAccessPanel
-        session={session}
-        busy={busyId === "git"}
-        readOnly={viewOnly}
-        onBusy={setBusyId}
-        onUpdate={setSession}
-        onError={(msg) => setError(msg || null)}
-      />
-
       {hasNewPackageNotification ? (
         <div className="info banner" role="status">
           <p>
@@ -743,10 +739,10 @@ export function SessionPage() {
 
       {distributed ? (
         <>
-          {session.messages.filter((m) => m.role === "system" || m.node === "prime" || m.node === "extract").length ? (
+          {messages.filter((m) => m.role === "system" || m.node === "prime" || m.node === "extract").length ? (
             <div className="doc workflow-banner">
               <MarkdownView
-                content={session.messages
+                content={messages
                   .filter((m) => m.role === "system" || m.node === "prime" || m.node === "extract" || m.node === "ingest")
                   .map((m) => m.content)
                   .slice(-4)
@@ -799,7 +795,7 @@ export function SessionPage() {
                 <span className="panel-kicker">application</span>
               </div>
               <div className="messages">
-                {session.messages
+                {messages
                   .filter((msg) => (msg.content || "").trim())
                   .map((msg, i) => (
                   <div key={`${msg.role}-${i}`} className={`bubble ${msg.role}`}>
@@ -892,6 +888,15 @@ export function SessionPage() {
           </div>
         </>
       )}
+
+      <GitAccessPanel
+        session={session}
+        busy={busyId === "git"}
+        readOnly={viewOnly}
+        onBusy={setBusyId}
+        onUpdate={setSession}
+        onError={(msg) => setError(msg || null)}
+      />
 
       {session.design_diagram ? (
         <section className="panel diagram-panel">

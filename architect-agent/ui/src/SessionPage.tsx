@@ -191,7 +191,7 @@ export function SessionPage() {
     return fallbackRelationshipNotes(diagramSource, specText, commsText, fromSpec);
   }, [diagramSource, edgesJson, specText, commsText]);
   const showComponentWalkthrough =
-    Boolean(session && showComponents && !chatDescribesComponents(session.messages, diagramSource));
+    Boolean(session && showComponents && !chatDescribesComponents(session.messages || [], diagramSource));
   const headerChips = session ? sessionHeaderChips(session) : [];
 
   async function onChat(e: FormEvent) {
@@ -458,15 +458,15 @@ export function SessionPage() {
             <h2>{session.finalized ? "Design finalized" : "Conversation"}</h2>
           </div>
           <div className="messages" aria-live="polite">
-            {session.messages.map((m, i) => (
-              <div key={`${m.role}-${i}-${m.content.slice(0, 24)}`} className={`bubble ${m.role}`}>
+            {(session.messages || []).map((m, i) => (
+              <div key={`${m.role}-${i}-${(m.content || "").slice(0, 24)}`} className={`bubble ${m.role}`}>
                 <span className="who">
                   {m.role === "assistant" ? "Architect" : "You"}
                   {shouldShowMessageNode(m.node, session.phase)
                     ? ` · ${formatMessageNode(m.node)}`
                     : ""}
                 </span>
-                <MarkdownView content={m.content} className="bubble-md" />
+                <MarkdownView content={m.content || ""} className="bubble-md" />
               </div>
             ))}
             {pendingUserText ? (

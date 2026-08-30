@@ -398,7 +398,10 @@ button.approve-btn:disabled {
   display: grid;
   grid-template-columns: 1.05fr 0.95fr;
   gap: 1rem;
-  animation: rise-in 0.6s ease-out 0.08s both;
+}
+
+.session-app .grid {
+  animation: none;
 }
 
 .session-app {
@@ -1350,7 +1353,32 @@ textarea::placeholder {
 }
 
 .git-panel {
+  margin: 1.25rem 0 0;
+}
+
+.git-panel[open] {
   margin-bottom: 1.25rem;
+}
+
+.git-summary {
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+}
+
+.git-summary::-webkit-details-marker {
+  display: none;
+}
+
+.git-summary::before {
+  content: "▸";
+  color: var(--accent);
+  font-size: 0.85rem;
+  line-height: 1;
+}
+
+.git-panel[open] .git-summary::before {
+  content: "▾";
 }
 
 .git-form {

@@ -270,12 +270,12 @@ export function catalogCoversDiagram(catalog: string, diagram: string): boolean 
 }
 
 export function chatDescribesComponents(
-  messages: { role: string; content: string }[],
+  messages: { role: string; content: string }[] | undefined,
   diagram: string,
 ): boolean {
-  const texts = messages
+  const texts = (messages || [])
     .filter((m) => m.role === "assistant")
-    .map((m) => m.content)
+    .map((m) => m.content || "")
     .join("\n");
   if (texts.toLowerCase().includes("diagram components")) return true;
   return catalogCoversDiagram(texts, diagram);

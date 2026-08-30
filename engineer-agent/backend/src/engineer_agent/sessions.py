@@ -271,8 +271,8 @@ def decorate_sub(sub: dict[str, Any]) -> dict[str, Any]:
     blocked = status == "blocked"
     can_approve = ((status == "awaiting_plan" and has_items) or blocked) and not suspended
     out["can_approve"] = can_approve
+    issue = out.get("block_issue") if isinstance(out.get("block_issue"), dict) else {}
     if blocked:
-        issue = out.get("block_issue") if isinstance(out.get("block_issue"), dict) else {}
         if str(issue.get("kind") or "") == "pi_questions":
             out["approve_kind"] = "pi_questions"
             out["approve_label"] = APPROVE_LABELS["pi_questions"]
@@ -286,12 +286,11 @@ def decorate_sub(sub: dict[str, Any]) -> dict[str, Any]:
         out["approve_kind"] = ""
         out["approve_label"] = ""
     out["can_pause"] = (
-        status == "executing" or (blocked and str((out.get("block_issue") or {}).get("kind") or "") == "pi_questions")
+        status == "executing" or (blocked and str(issue.get("kind") or "") == "pi_questions")
     ) and not suspended
     out["can_execute"] = status == "paused" and has_items and not suspended
     out["plan_locked"] = status in {"executing", "blocked"} and not suspended
     out["discussion_open"] = not suspended
-    issue = out.get("block_issue") if isinstance(out.get("block_issue"), dict) else {}
     out["block_issue"] = issue if blocked and issue else None
     out["implementation_status"] = fold_to_ascii(str(out.get("implementation_status") or ""))
     from engineer_agent.workflow import sub_workflow_tiles
