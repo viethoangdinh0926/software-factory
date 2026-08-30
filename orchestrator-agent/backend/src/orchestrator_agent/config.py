@@ -52,6 +52,9 @@ class Settings(BaseSettings):
     # Live `git ls-remote` with the session SSH key before sending git data to the engineer.
     git_verify_enabled: bool = True
 
+    # Enable/disable web search for feature research
+    web_search_enabled: bool = True
+
 
 @lru_cache
 def get_settings() -> Settings:
