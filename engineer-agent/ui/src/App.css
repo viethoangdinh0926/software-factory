@@ -1354,6 +1354,11 @@ textarea::placeholder {
   border-radius: 0.55rem;
 }
 
+.icon-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 .icon-btn.has-results {
   border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
   color: var(--accent);

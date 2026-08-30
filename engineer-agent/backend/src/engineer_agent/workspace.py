@@ -5,10 +5,12 @@ from __future__ import annotations
 import logging
 import os
 import re
+import shutil
 import stat
 import subprocess
 import sys
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +20,8 @@ logger = logging.getLogger(__name__)
 
 _UNSAFE_DIR_RE = re.compile(r"[^A-Za-z0-9._-]+")
 _SAFE_ID_RE = _UNSAFE_DIR_RE
+_SNAPSHOT_DIR = ".pi-snapshots"
+_SNAPSHOT_SKIP = {_SNAPSHOT_DIR, "__pycache__", ".git", "node_modules", ".venv"}
 
 
 def _slug_dir_name(raw: str) -> str:
@@ -103,14 +107,18 @@ def prepare_workspace(
     return private, error
 
 
-def write_item_work(
+def write_item_spec(
     private_dir: Path,
     *,
     item: dict[str, Any],
     microservice_name: str,
     instructions: str = "",
+    feature_spec: str = "",
+    bug_spec: str = "",
+    offered_api: str = "",
+    tech_stack: str = "",
 ) -> Path:
-    """Write stub code + test for one plan item under the private folder."""
+    """Write the item brief Pi (or local stubs) will implement against."""
     item_id = _SAFE_ID_RE.sub("-", str(item.get("id") or "item")) or "item"
     dest = private_dir / "items" / item_id
     dest.mkdir(parents=True, exist_ok=True)
@@ -137,6 +145,44 @@ def write_item_work(
         f"{instr_md}{contract_md}",
         encoding="utf-8",
     )
+    spec_parts = [
+        f"# {title}\n",
+        f"- Kind: `{kind}`",
+        f"- Service: **{microservice_name}**",
+        f"- Priority: {item.get('priority')}",
+        f"- Item id: `{item_id}`",
+        "",
+        instr_md.rstrip(),
+        contract_md.rstrip(),
+        "## Feature spec\n",
+        (feature_spec or "").strip() or "(none)",
+        "",
+        "## Bug spec\n",
+        (bug_spec or "").strip() or "(none)",
+        "",
+        "## Offered API\n",
+        (offered_api or "").strip() or "(none)",
+        "",
+        "## Tech stack\n",
+        (tech_stack or "").strip() or "(none)",
+        "",
+    ]
+    (dest / "SPEC.md").write_text("\n".join(part for part in spec_parts if part is not None), encoding="utf-8")
+    return dest
+
+
+def write_item_stubs(
+    dest: Path,
+    *,
+    item: dict[str, Any],
+    microservice_name: str,
+) -> Path:
+    """Offline fallback used when Pi is disabled (tests / stub mode)."""
+    item_id = _SAFE_ID_RE.sub("-", str(item.get("id") or "item")) or "item"
+    title = str(item.get("title") or item_id)
+    kind = str(item.get("kind") or "feature")
+    peers = item.get("peer_services") or []
+    dest.mkdir(parents=True, exist_ok=True)
     (dest / "impl.py").write_text(
         f'"""Implementation stub for {title} ({kind}) on {microservice_name}."""\n\n'
         f"ITEM_ID = {item_id!r}\n"
@@ -157,6 +203,126 @@ def write_item_work(
         encoding="utf-8",
     )
     return dest
+
+
+def _safe_item_id(item_id: str) -> str:
+    return _SAFE_ID_RE.sub("-", str(item_id or "item")) or "item"
+
+
+def snapshot_dir_for(private_dir: Path, item_id: str) -> Path:
+    return Path(private_dir) / _SNAPSHOT_DIR / _safe_item_id(item_id) / "before"
+
+
+def _skip_snapshot_path(path: Path, root: Path) -> bool:
+    try:
+        parts = set(path.relative_to(root).parts)
+    except ValueError:
+        return True
+    return bool(parts & _SNAPSHOT_SKIP)
+
+
+def snapshot_item_workspace(private_dir: Path, item_id: str) -> Path:
+    """Copy the service folder (except snapshots) so Pi work on this item can be undone."""
+    root = Path(private_dir)
+    dest = snapshot_dir_for(root, item_id)
+    if dest.exists():
+        shutil.rmtree(dest, ignore_errors=True)
+    dest.mkdir(parents=True, exist_ok=True)
+    if not root.is_dir():
+        return dest
+    for path in root.rglob("*"):
+        if _skip_snapshot_path(path, root):
+            continue
+        rel = path.relative_to(root)
+        target = dest / rel
+        if path.is_dir():
+            target.mkdir(parents=True, exist_ok=True)
+        elif path.is_file():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, target)
+    return dest
+
+
+def restore_item_workspace(private_dir: Path, item_id: str) -> bool:
+    """Restore the service folder to the snapshot taken before this item's Pi run."""
+    root = Path(private_dir)
+    src = snapshot_dir_for(root, item_id)
+    if not src.is_dir():
+        return False
+    for child in list(root.iterdir()):
+        if child.name == _SNAPSHOT_DIR:
+            continue
+        if child.is_dir():
+            shutil.rmtree(child, ignore_errors=True)
+        else:
+            child.unlink(missing_ok=True)
+    for path in src.rglob("*"):
+        rel = path.relative_to(src)
+        target = root / rel
+        if path.is_dir():
+            target.mkdir(parents=True, exist_ok=True)
+        elif path.is_file():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, target)
+    return True
+
+
+def write_implementation_status(
+    private_dir: Path,
+    *,
+    microservice_name: str,
+    items: list[dict[str, Any]],
+) -> str:
+    """Rewrite the service implementation-status markdown from current plan items."""
+    name = microservice_name or "Service"
+    stamp = datetime.now(timezone.utc).isoformat()
+    lines = [
+        f"# Implementation status — {name}",
+        "",
+        f"Updated: `{stamp}`",
+        "",
+        "| Item | Kind | Status |",
+        "| --- | --- | --- |",
+    ]
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or item.get("id") or "item").replace("|", "/")
+        kind = str(item.get("kind") or "")
+        status = str(item.get("status") or "")
+        lines.append(f"| {title} | {kind} | {status} |")
+    details = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        notes = str(item.get("notes") or "").strip()
+        if not notes:
+            continue
+        details.append(f"## {item.get('title') or item.get('id')}\n\n{notes}")
+    if details:
+        lines.extend(["", *details])
+    text = "\n".join(lines).rstrip() + "\n"
+    root = Path(private_dir)
+    if root.is_dir():
+        (root / "IMPLEMENTATION_STATUS.md").write_text(text, encoding="utf-8")
+    return text
+
+
+def write_item_work(
+    private_dir: Path,
+    *,
+    item: dict[str, Any],
+    microservice_name: str,
+    instructions: str = "",
+) -> Path:
+    """Write stub code + test for one plan item under the private folder."""
+    dest = write_item_spec(
+        private_dir,
+        item=item,
+        microservice_name=microservice_name,
+        instructions=instructions,
+    )
+    return write_item_stubs(dest, item=item, microservice_name=microservice_name)
 
 
 def run_workspace_tests(private_dir: Path) -> tuple[bool, str]:

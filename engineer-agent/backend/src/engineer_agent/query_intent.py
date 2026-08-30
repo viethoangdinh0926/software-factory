@@ -221,8 +221,11 @@ _TURN_INTENT_SYSTEM = (
     "- approve: accept the current step and move on (Approve, looks good, next step, "
     "I'm happy with this, ship it, proceed, wrap up, continue to the next phase).\n"
     "- revise: change the spec, design, or plan from their comment or concern.\n"
-    "- pause: pause in-flight execution.\n"
+    "- pause: pause in-flight execution of the whole plan.\n"
     "- execute: start or resume an execution plan.\n"
+    "- stop_item: stop Pi on the current feature/bug/item only.\n"
+    "- resume_item: resume Pi on a stopped feature/bug/item.\n"
+    "- undo_item: undo all Pi file changes for the current or named item.\n"
     "- none: some other command.\n"
     "If category is information, action must be answer.\n"
     "A question about whether/why they should approve something is information.\n"
@@ -234,10 +237,12 @@ _TURN_INTENT_SYSTEM = (
     "This classification is the instruction the agent will follow for this turn: "
     "approve advances, revise writes their change, answer is Q&A only.\n"
     "Respond ONLY with JSON:\n"
-    '{"category":"command|information","action":"approve|revise|pause|execute|answer|none"}'
+    '{"category":"command|information","action":"approve|revise|pause|execute|stop_item|resume_item|undo_item|answer|none"}'
 )
 _VALID_CATEGORIES = frozenset({"command", "information"})
-_VALID_ACTIONS = frozenset({"approve", "revise", "pause", "execute", "answer", "none"})
+_VALID_ACTIONS = frozenset(
+    {"approve", "revise", "pause", "execute", "stop_item", "resume_item", "undo_item", "answer", "none"}
+)
 
 
 def _compact_user_text(text: str) -> str:
@@ -267,6 +272,9 @@ def _heuristic_turn_intent(text: str) -> tuple[str, str]:
         return "information", "none"
     if re.search(r"\b(weather|asdf|qwerty|lorem ipsum)\b", compact):
         return "information", "answer"
+    pi_cmd = classify_pi_item_command(raw)
+    if pi_cmd:
+        return "command", pi_cmd
     if compact in _PAUSE_EXACT or _PAUSE_RE.match(compact):
         return "command", "pause"
     if compact in _EXECUTE_EXACT or _EXECUTE_RE.match(compact):
@@ -353,6 +361,9 @@ def classify_user_message(text: str, context: str = "") -> tuple[str, str]:
     raw = (text or "").strip()
     if not raw:
         return "information", "none"
+    pi_cmd = classify_pi_item_command(raw)
+    if pi_cmd:
+        return "command", pi_cmd
     classified = _llm_turn_intent(raw, context)
     if classified is not None:
         return classified
@@ -478,6 +489,102 @@ _EXECUTE_RE = re.compile(
     re.I,
 )
 
+_STOP_ITEM_EXACT = {
+    "stop working on current feature",
+    "stop working on the current feature",
+    "stop working on this feature",
+    "stop working on current item",
+    "stop working on this item",
+    "stop working on the current item",
+    "stop fixing this bug",
+    "stop fixing the bug",
+    "stop fixing this item",
+    "stop this item",
+    "stop this feature",
+    "stop this bug",
+    "stop the current item",
+    "stop the current feature",
+    "stop coding",
+    "stop coding this",
+    "stop coding this item",
+    "stop pi",
+    "stop the pi agent",
+    "stop pi on this item",
+}
+_STOP_ITEM_RE = re.compile(
+    r"^(?:please\s+)?stop\s+"
+    r"(?:working\s+on|fixing|coding(?:\s+on)?|pi(?:\s+agent)?"
+    r"|(?:the\s+)?(?:current\s+|this\s+)?(?:feature|bug|item))"
+    r"(?:\s+on)?(?:\s+(?:the\s+)?(?:current\s+|this\s+)?(?:feature|bug|item|it))?$",
+    re.I,
+)
+_RESUME_ITEM_EXACT = {
+    "resume this feature",
+    "resume this bug",
+    "resume this item",
+    "resume the current feature",
+    "resume the current item",
+    "resume working on this",
+    "resume working on this feature",
+    "resume working on this item",
+    "resume working on this bug",
+    "resume coding",
+    "resume pi",
+    "continue this item",
+    "continue this feature",
+    "continue this bug",
+}
+_RESUME_ITEM_RE = re.compile(
+    r"^(?:please\s+)?(?:resume|continue)"
+    r"(?:\s+working\s+on|\s+coding(?:\s+on)?)?"
+    r"(?:\s+(?:the\s+)?(?:current\s+|this\s+))(?:feature|bug|item|it)$"
+    r"|^(?:please\s+)?(?:resume|continue)(?:\s+working\s+on\s+this|\s+coding)$"
+    r"|^(?:please\s+)?resume(?:\s+the\s+)?pi(?:\s+agent)?$",
+    re.I,
+)
+_UNDO_ITEM_EXACT = {
+    "undo",
+    "undo the changes",
+    "undo all changes",
+    "undo all the changes",
+    "undo pi changes",
+    "undo the pi changes",
+    "undo all pi changes",
+    "discard pi changes",
+    "revert this feature",
+    "revert this item",
+    "revert this bug",
+    "revert the changes",
+    "undo changes for this item",
+}
+_UNDO_ITEM_RE = re.compile(
+    r"^(?:please\s+)?(?:undo|revert|discard)(?:\s+all)?"
+    r"(?:\s+(?:the\s+)?)?(?:pi\s+)?(?:changes|work)"
+    r"(?:\s+(?:for|on|to)\s+(?:this|the current)\s+(?:item|feature|bug))?$"
+    r"|^(?:please\s+)?(?:undo|revert)(?:\s+(?:this|the current)\s+(?:item|feature|bug))?$",
+    re.I,
+)
+_PLAN_SCOPE_RE = re.compile(
+    r"\b(?:the\s+)?(?:whole\s+|entire\s+)?(?:execution(?:\s+plan)?|plan)\b",
+    re.I,
+)
+
+
+def classify_pi_item_command(text: str) -> str | None:
+    """Detect stop/resume/undo for the current Pi coding item (not the whole plan)."""
+    compact = _compact_user_text(text).lower()
+    if not compact:
+        return None
+    if compact in _UNDO_ITEM_EXACT or _UNDO_ITEM_RE.match(compact):
+        return "undo_item"
+    if compact in _RESUME_ITEM_EXACT or _RESUME_ITEM_RE.match(compact):
+        return "resume_item"
+    if compact in _STOP_ITEM_EXACT or _STOP_ITEM_RE.match(compact):
+        if _PLAN_SCOPE_RE.search(compact):
+            return None
+        return "stop_item"
+    return None
+
 _ADVANCE_RE = re.compile(
     r"(?i)(?:"
     r"\bnext(?:\s+the)?\s+step\b|"
@@ -550,7 +657,16 @@ def promote_chat_to_approve(
 def workflow_action(action: str) -> str:
     """Map classify action onto the resume action the graph understands."""
     mapped = (action or "").strip().lower()
-    if mapped in {"approve", "revise", "answer", "pause", "execute"}:
+    if mapped in {
+        "approve",
+        "revise",
+        "answer",
+        "pause",
+        "execute",
+        "stop_item",
+        "resume_item",
+        "undo_item",
+    }:
         return mapped
     return "chat"
 
@@ -581,7 +697,9 @@ def format_next_prompt(
     elif mode == "executing":
         lines.extend(
             [
-                "- Confirm you want to pause, or say `pause`, to stop execution so you can update the plan.",
+                "- Say `stop working on current feature` (or this bug) to stop Pi on this item only.",
+                "- Say `resume this item` to continue a stopped item, or `undo the changes` to discard Pi's work.",
+                "- Confirm you want to pause, or say `pause`, to stop the whole plan so you can update it.",
                 "- Ask a question about progress. The execution plan is locked until you pause.",
             ]
         )

@@ -1,6 +1,6 @@
 # Software Factory
 
-A local multi-agent design factory. The **Architect** turns a vague idea into an approved system design; the **Orchestrator** turns that design into engineer-ready plan specs; the **Engineer** runs a fleet of sub-engineers that own each microservice's offered API. All three expose a React UI, a FastAPI BFF, and an A2A JSON-RPC surface. They share the architect `design_session_id` as the workflow key.
+A local multi-agent design factory. The **Architect** turns a vague idea into an approved system design; the **Orchestrator** turns that design into engineer-ready plan specs; the **Engineer** runs a fleet of sub-engineers that own each microservice's offered API. All three expose a React UI, a FastAPI BFF, and an A2A JSON-RPC surface. They share the architect `design_session_id` as the workflow key. A step-by-step description of how each agent works today is in [`HOW_THE_AGENTS_WORK.md`](HOW_THE_AGENTS_WORK.md).
 
 | Agent | UI / API | Default URL |
 | --- | --- | --- |

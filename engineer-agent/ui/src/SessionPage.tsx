@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState, type FormEvent, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useId, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { Link, useParams } from "react-router-dom";
 import {
   approve,
@@ -33,11 +34,78 @@ function sortedItems(plan?: ExecutionPlan): PlanItem[] {
 }
 
 function composerPlaceholder(sub: SubEngineer): string {
-  if (sub.status === "executing") return "Pause to update the plan, or ask a question…";
+  if (sub.status === "executing") {
+    return "Stop/resume/undo this item, pause the plan, or ask a question…";
+  }
   if (sub.status === "paused") return "Revise the plan, then execute it…";
   if (sub.status === "blocked") return "Tell me how to resolve this issue, then approve to continue…";
   if (sub.status === "shipped") return "Ask a follow-up, or wait for the next spec…";
   return "Revise the execution plan, or ask about a feature…";
+}
+
+function StatusIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false">
+      <path
+        fill="currentColor"
+        d="M7 3.5h7.2L19.5 9v11.5A1.5 1.5 0 0 1 18 22H7a1.5 1.5 0 0 1-1.5-1.5v-16A1.5 1.5 0 0 1 7 3.5Zm6.5 1.2v5.3h5.1l-5.1-5.3ZM8.5 12.25h7v1.4h-7v-1.4Zm0 3.1h7v1.4h-7v-1.4Zm0 3.1h4.5v1.4H8.5v-1.4Z"
+      />
+    </svg>
+  );
+}
+
+function ImplementationStatusModal({
+  title,
+  open,
+  onClose,
+  children,
+}: {
+  title: string;
+  open: boolean;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  const headingId = useId();
+
+  useEffect(() => {
+    if (!open) return;
+    function onKey(e: globalThis.KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    document.addEventListener("keydown", onKey);
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [open, onClose]);
+
+  if (!open) return null;
+
+  return createPortal(
+    <div className="spec-modal-backdrop" role="presentation" onClick={onClose}>
+      <div
+        className="spec-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={headingId}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <header className="spec-modal-head">
+          <div>
+            <p className="brand">Implementation status</p>
+            <h2 id={headingId}>{title}</h2>
+          </div>
+          <button className="btn ghost" type="button" onClick={onClose}>
+            Close
+          </button>
+        </header>
+        <div className="spec-modal-body">{children}</div>
+      </div>
+    </div>,
+    document.body,
+  );
 }
 
 function PlanList({ plan, locked }: { plan?: ExecutionPlan; locked: boolean }) {
@@ -94,7 +162,9 @@ function SubTile({
 }) {
   const [message, setMessage] = useState("");
   const [pending, setPending] = useState<string | null>(null);
+  const [statusOpen, setStatusOpen] = useState(false);
   const open = sub.discussion_open && sub.status !== "suspended";
+  const statusDoc = (sub.implementation_status || "").trim();
 
   async function onChat(e: FormEvent) {
     e.preventDefault();
@@ -135,8 +205,33 @@ function SubTile({
     >
       <div className="panel-head">
         <h2>{subLabel(sub)}</h2>
-        <span className="panel-kicker">{sub.workflow?.title || sub.status}</span>
+        <div className="tile-head-actions">
+          <span className="panel-kicker">{sub.workflow?.title || sub.status}</span>
+          <button
+            className={`btn ghost icon-btn${statusDoc ? " has-results" : ""}`}
+            type="button"
+            title="Implementation status"
+            aria-label={`View implementation status for ${subLabel(sub)}`}
+            disabled={!statusDoc}
+            onClick={() => setStatusOpen(true)}
+          >
+            <StatusIcon />
+          </button>
+        </div>
       </div>
+      <ImplementationStatusModal
+        title={subLabel(sub)}
+        open={statusOpen}
+        onClose={() => setStatusOpen(false)}
+      >
+        {statusDoc ? (
+          <div className="doc">
+            <MarkdownView content={statusDoc} />
+          </div>
+        ) : (
+          <p className="lede">No implementation status yet. It appears after Pi finishes an item.</p>
+        )}
+      </ImplementationStatusModal>
       <p className="lede mono">{sub.sub_agent_id}</p>
       {sub.workflow?.tiles?.length ? (
         <>

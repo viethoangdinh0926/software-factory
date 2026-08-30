@@ -26,6 +26,7 @@ from engineer_agent.execution import (
     has_plan_items,
     next_runnable_item,
     normalize_plan,
+    plan_items,
     replace_item,
     snapshot_peer_contracts,
 )
@@ -40,13 +41,15 @@ from engineer_agent.query_intent import (
     with_next_prompt,
     with_resolution_close,
 )
+from engineer_agent.pi_coder import implement_plan_item
 from engineer_agent.secrets_store import load_git_secrets, save_git_secrets
 from engineer_agent.workspace import (
     prepare_workspace,
     private_dir_name,
+    restore_item_workspace,
     run_workspace_tests,
     ship_workspace,
-    write_item_work,
+    write_implementation_status,
 )
 
 logger = logging.getLogger(__name__)
@@ -57,6 +60,33 @@ APPROVE_LABELS = {
 }
 
 PLAN_EDITABLE = {"awaiting_plan", "paused"}
+
+
+def _plan_item_with_status(plan: dict[str, Any], status: str) -> dict[str, Any] | None:
+    found = [item for item in plan_items(plan) if str(item.get("status") or "") == status]
+    if not found:
+        return None
+    found.sort(key=lambda item: (int(item.get("priority") or 99), str(item.get("id"))))
+    return dict(found[0])
+
+
+def _last_done_item(plan: dict[str, Any]) -> dict[str, Any] | None:
+    done = [item for item in plan_items(plan) if str(item.get("status") or "") == "done"]
+    if not done:
+        return None
+    return dict(done[-1])
+
+
+def _target_item_for_pi_command(plan: dict[str, Any], action: str) -> dict[str, Any] | None:
+    if action == "resume_item":
+        return _plan_item_with_status(plan, "stopped")
+    if action == "stop_item":
+        return _plan_item_with_status(plan, "in_progress")
+    return (
+        _plan_item_with_status(plan, "in_progress")
+        or _plan_item_with_status(plan, "stopped")
+        or _last_done_item(plan)
+    )
 
 _PEER_NEED_RE = (
     "need more",
@@ -210,6 +240,9 @@ def empty_sub(
         "block_issue": {},
         "resume_instructions": "",
         "discussion_digest": "",
+        "pi_hold": False,
+        "pi_command": "",
+        "implementation_status": "",
     }
 
 
@@ -237,6 +270,7 @@ def decorate_sub(sub: dict[str, Any]) -> dict[str, Any]:
     out["discussion_open"] = not suspended
     issue = out.get("block_issue") if isinstance(out.get("block_issue"), dict) else {}
     out["block_issue"] = issue if blocked and issue else None
+    out["implementation_status"] = fold_to_ascii(str(out.get("implementation_status") or ""))
     from engineer_agent.workflow import sub_workflow_tiles
 
     out["workflow"] = sub_workflow_tiles(out)
@@ -551,6 +585,8 @@ class SessionStore:
         return self.get(session_id).git_data()
 
     def chat(self, session_id: str, message: str, *, service_id: str | None = None) -> FleetSession:
+        wait_for_pi = False
+        wait_service = service_id
         with self._lock_for(session_id):
             session = self.get(session_id)
             sub = session.find(service_id)
@@ -590,12 +626,21 @@ class SessionStore:
                     "approve",
                     "pause",
                     "execute",
+                    "stop_item",
+                    "resume_item",
+                    "undo_item",
                 }:
                     return self._chat_locked(session, sub, text, consult.clarify_message)
                 sub["discussion_digest"] = consult.keynotes
                 session.replace(sub)
 
-            if status == "executing":
+            if action in {"stop_item", "resume_item", "undo_item"}:
+                session, wait_for_pi = self._pi_item_command_locked(session, sub, text, action)
+                if wait_for_pi:
+                    wait_service = str(sub.get("microservice_id") or service_id or "")
+                else:
+                    return session
+            elif status == "executing":
                 if action == "pause":
                     return self._pause_locked(session, sub)
                 if action in {"approve", "execute"}:
@@ -610,11 +655,9 @@ class SessionStore:
                 if _is_peer_data_request(text):
                     return self._chat_apply(session, sub, text, self._handle_peer_data_request(session, dict(sub), text))
                 return self._chat_apply(session, sub, text, self._answer(sub, text))
-
-            if action == "pause":
+            elif action == "pause":
                 return self._chat_locked(session, sub, text, "Nothing is executing, so there is nothing to pause.")
-
-            if status == "blocked":
+            elif status == "blocked":
                 if action == "approve":
                     return self._approve_locked(session, sub)
                 if action == "execute":
@@ -631,22 +674,259 @@ class SessionStore:
                     extra = self._handle_peer_data_request(session, dict(sub), text)
                     sub = session.find(str(sub.get("microservice_id") or "")) or sub
                 return self._record_block_instructions(session, sub, text, extra=extra)
-
-            if status == "paused" and action == "execute":
+            elif status == "paused" and action == "execute":
                 return self._execute_locked(session, sub)
-
-            if decorated.get("can_approve") and action in {"approve", "execute"}:
+            elif decorated.get("can_approve") and action in {"approve", "execute"}:
                 return self._approve_locked(session, sub)
-
-            if _is_peer_data_request(text):
+            elif _is_peer_data_request(text):
                 return self._chat_apply(
                     session, sub, text, self._handle_peer_data_request(session, dict(sub), text)
                 )
-
-            if status in PLAN_EDITABLE and action == "revise":
+            elif status in PLAN_EDITABLE and action == "revise":
                 return self._chat_apply(session, sub, text, self._revise_execution_plan(sub, text))
+            else:
+                return self._chat_apply(session, sub, text, self._answer(sub, text))
+        if wait_for_pi:
+            return self._wait_for_pi_command(session_id, service_id=wait_service)
+        return self.get(session_id)
 
-            return self._chat_apply(session, sub, text, self._answer(sub, text))
+    def _worker_alive(self, sub_id: str) -> bool:
+        if not sub_id:
+            return False
+        with self._workers_guard:
+            existing = self._workers.get(sub_id)
+            return bool(existing and existing.is_alive())
+
+    def _wait_for_pi_command(
+        self, session_id: str, *, service_id: str | None = None, timeout: float = 30.0
+    ) -> FleetSession:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            time.sleep(0.2)
+            with self._lock_for(session_id):
+                session = self.get(session_id)
+                sub = session.find(service_id)
+                if not sub or not str(sub.get("pi_command") or "").strip():
+                    return session
+        with self._lock_for(session_id):
+            return self.get(session_id)
+
+    def _refresh_implementation_status(self, sub: dict[str, Any]) -> str:
+        private = Path(str(sub.get("workspace_path") or ""))
+        plan = sub.get("execution_plan") if isinstance(sub.get("execution_plan"), dict) else {}
+        text = write_implementation_status(
+            private,
+            microservice_name=str(sub.get("microservice_name") or "Service"),
+            items=plan_items(plan),
+        )
+        sub["implementation_status"] = text
+        return text
+
+    def _append_pi_notice(self, sub: dict[str, Any], note: str, *, user_text: str = "") -> None:
+        msgs = list(sub.get("messages") or [])
+        if user_text:
+            msgs.append({"role": "user", "content": user_text, "node": "pi_command"})
+        msgs.append(
+            {
+                "role": "assistant",
+                "content": _close(note, status=str(sub.get("status") or ""), can_approve=False),
+                "node": "pi_command",
+            }
+        )
+        sub["messages"] = msgs
+        _remember_sub(sub, pending=user_text, assistant=note, phase=str(sub.get("status") or "pi_command"))
+
+    def _pi_item_command_locked(
+        self,
+        session: FleetSession,
+        sub: dict[str, Any],
+        text: str,
+        action: str,
+    ) -> tuple[FleetSession, bool]:
+        updated = dict(sub)
+        plan = updated.get("execution_plan") if isinstance(updated.get("execution_plan"), dict) else {}
+        item = _target_item_for_pi_command(plan, action)
+        status = str(updated.get("status") or "")
+        if action == "resume_item":
+            return self._resume_item_locked(session, updated, text, item), False
+        if action == "stop_item":
+            if item is None and status != "executing" and not updated.get("pi_hold"):
+                self._append_pi_notice(
+                    updated,
+                    "No coding item is in progress. Say `pause` if you want to stop the whole plan.",
+                    user_text=text,
+                )
+                session.replace(updated)
+                self._persist(session)
+                return session, False
+            return self._request_or_apply_item_command(
+                session, updated, text, item, command="stop_item"
+            )
+        if item is None:
+            self._append_pi_notice(
+                updated,
+                "There is no Pi item to undo on this service yet.",
+                user_text=text,
+            )
+            session.replace(updated)
+            self._persist(session)
+            return session, False
+        return self._request_or_apply_item_command(
+            session, updated, text, item, command="undo_item"
+        )
+
+    def _request_or_apply_item_command(
+        self,
+        session: FleetSession,
+        sub: dict[str, Any],
+        text: str,
+        item: dict[str, Any] | None,
+        *,
+        command: str,
+    ) -> tuple[FleetSession, bool]:
+        sub_id = str(sub.get("sub_agent_id") or "")
+        running = (
+            str(sub.get("status") or "") == "executing"
+            and item is not None
+            and str(item.get("status") or "") == "in_progress"
+            and (self._worker_alive(sub_id) or self._stop_requested(sub_id))
+        )
+        msgs = list(sub.get("messages") or [])
+        msgs.append({"role": "user", "content": text, "node": "pi_command"})
+        sub["messages"] = msgs
+        if running and get_settings().background_execute:
+            sub["pi_command"] = command
+            sub["pi_hold"] = True
+            self._request_stop(sub_id)
+            session.replace(sub)
+            self._persist(session)
+            return session, True
+        if command == "undo_item":
+            self._apply_undo_item(sub, item)
+        else:
+            self._apply_stop_item(sub, item)
+        session.replace(sub)
+        self._persist(session)
+        return session, False
+
+    def _apply_stop_item(self, sub: dict[str, Any], item: dict[str, Any] | None) -> None:
+        if item:
+            held = dict(item)
+            held["status"] = "stopped"
+            plan = sub.get("execution_plan") if isinstance(sub.get("execution_plan"), dict) else {}
+            sub["execution_plan"] = replace_item(plan, held)
+            title = str(held.get("title") or held.get("id") or "item")
+            note = (
+                f"Stopped Pi on **{title}**. The command executed successfully. "
+                "Say `resume this item` to continue, or `undo the changes` to discard its work."
+            )
+        else:
+            note = (
+                "Stopped before starting the next item. The command executed successfully. "
+                "I will not start the next plan item until you say `resume this item`."
+            )
+        sub["pi_hold"] = True
+        sub["pi_command"] = ""
+        self._append_pi_notice(sub, note)
+
+    def _apply_undo_item(self, sub: dict[str, Any], item: dict[str, Any] | None) -> None:
+        title = "item"
+        restored = False
+        if item:
+            title = str(item.get("title") or item.get("id") or "item")
+            private = Path(str(sub.get("workspace_path") or ""))
+            restored = restore_item_workspace(private, str(item.get("id") or ""))
+            held = dict(item)
+            held["status"] = "stopped"
+            held["notes"] = "Undid Pi changes for this item."
+            plan = sub.get("execution_plan") if isinstance(sub.get("execution_plan"), dict) else {}
+            sub["execution_plan"] = replace_item(plan, held)
+        self._refresh_implementation_status(sub)
+        sub["pi_hold"] = True
+        sub["pi_command"] = ""
+        if restored:
+            note = (
+                f"Undid all Pi changes for **{title}**. The command executed successfully. "
+                "The service folder is back to the snapshot taken before that item. "
+                "Say `resume this item` when you want Pi to try again."
+            )
+        else:
+            note = (
+                f"Stopped **{title}** and discarded in-progress work. "
+                "The command executed successfully. There was no snapshot to restore."
+            )
+        self._append_pi_notice(sub, note)
+
+    def _resume_item_locked(
+        self,
+        session: FleetSession,
+        sub: dict[str, Any],
+        text: str,
+        item: dict[str, Any] | None,
+    ) -> FleetSession:
+        held = bool(sub.get("pi_hold"))
+        if item is None and not held:
+            self._append_pi_notice(
+                sub,
+                "Nothing is stopped. Say `execute` if you want to start or resume the whole plan.",
+                user_text=text,
+            )
+            session.replace(sub)
+            self._persist(session)
+            return session
+        if item:
+            pending = dict(item)
+            pending["status"] = "pending"
+            plan = sub.get("execution_plan") if isinstance(sub.get("execution_plan"), dict) else {}
+            sub["execution_plan"] = replace_item(plan, pending)
+            title = str(pending.get("title") or pending.get("id") or "item")
+            note = (
+                f"Resumed **{title}**. The command executed successfully. "
+                "Pi will continue this item from the current workspace."
+            )
+        else:
+            note = (
+                "Resumed the execution plan. The command executed successfully. "
+                "I will start the next plan item."
+            )
+        sub["pi_hold"] = False
+        sub["pi_command"] = ""
+        self._clear_stop(str(sub.get("sub_agent_id") or ""))
+        self._append_pi_notice(sub, note, user_text=text)
+        session.replace(sub)
+        self._persist(session)
+        if str(sub.get("status") or "") == "paused":
+            msgs = list(sub.get("messages") or [])
+            msgs.append({"role": "user", "content": "Execute plan", "node": "execute"})
+            sub["messages"] = msgs
+            return self._start_execute_locked(session, sub, user_note="Resuming the stopped item.")
+        self._maybe_spawn(session.design_session_id, str(sub.get("sub_agent_id") or ""))
+        return session
+
+    def _handle_pi_command_after_run(
+        self,
+        session: FleetSession,
+        sub: dict[str, Any],
+        job: dict[str, Any] | None,
+        result: Any,
+    ) -> bool:
+        """Apply a pending stop/undo after Pi exits. True when the command was handled."""
+        command = str(sub.get("pi_command") or "").strip()
+        if command not in {"stop_item", "undo_item"}:
+            return False
+        item = dict((job or {}).get("item") or {})
+        if not item:
+            plan = sub.get("execution_plan") if isinstance(sub.get("execution_plan"), dict) else {}
+            item = _plan_item_with_status(plan, "in_progress") or {}
+        live = dict(sub)
+        if command == "undo_item":
+            self._apply_undo_item(live, item or None)
+        else:
+            self._apply_stop_item(live, item or None)
+        self._clear_stop(str(live.get("sub_agent_id") or ""))
+        session.replace(live)
+        self._persist(session)
+        return True
 
     def _chat_locked(self, session: FleetSession, sub: dict[str, Any], text: str, assistant: str) -> FleetSession:
         return self._chat_apply(session, sub, text, _close(assistant, status=str(sub.get("status") or ""), can_approve=bool(decorate_sub(sub).get("can_approve"))))
@@ -787,7 +1067,23 @@ class SessionStore:
                 raise KeyError(service_id or session_id)
             if str(sub.get("status") or "") != "executing":
                 raise PermissionError("Nothing is executing on this sub-engineer.")
-            self._tick_locked(session, sub)
+            outcome, job = self._prepare_next_item_locked(session, sub)
+            if job:
+                result = implement_plan_item(
+                    Path(str(job["private_dir"])),
+                    item=job["item"],
+                    microservice_name=str(job["microservice_name"]),
+                    instructions=str(job.get("instructions") or ""),
+                    feature_spec=str(job.get("feature_spec") or ""),
+                    bug_spec=str(job.get("bug_spec") or ""),
+                    offered_api=str(job.get("offered_api") or ""),
+                    tech_stack=str(job.get("tech_stack") or ""),
+                )
+                live = session.find(service_id) or sub
+                if not self._handle_pi_command_after_run(session, live, job, result):
+                    self._finish_item_locked(session, live, job, result)
+            elif outcome == "stop":
+                pass
             self._persist(session)
             return session
 
@@ -826,6 +1122,8 @@ class SessionStore:
         self._request_stop(str(sub.get("sub_agent_id") or ""))
         updated = dict(sub)
         updated["previous_execution_plan"] = deepcopy(updated.get("execution_plan") or {})
+        updated["pi_hold"] = False
+        updated["pi_command"] = ""
         updated["status"] = "paused"
         msgs = list(updated.get("messages") or [])
         note = (
@@ -1064,6 +1362,8 @@ class SessionStore:
         sub["git_ship_error"] = ""
         sub["block_issue"] = {}
         sub["resume_instructions"] = ""
+        sub["pi_hold"] = False
+        sub["pi_command"] = ""
         self._clear_stop(str(sub.get("sub_agent_id") or ""))
         private, err = prepare_workspace(
             session_id=session.design_session_id,
@@ -1222,17 +1522,23 @@ class SessionStore:
         _remember_sub(updated, assistant=str(title), phase="blocked")
         session.replace(updated)
 
-    def _tick_locked(self, session: FleetSession, sub: dict[str, Any]) -> bool:
+    def _prepare_next_item_locked(
+        self, session: FleetSession, sub: dict[str, Any]
+    ) -> tuple[str, dict[str, Any] | None]:
+        """Claim the next plan item. Returns (work|stop|wait, job)."""
         bind_sub_workflow(sub)
         updated = dict(sub)
+        if updated.get("pi_hold"):
+            session.replace(updated)
+            return "wait", None
         plan = updated.get("execution_plan") if isinstance(updated.get("execution_plan"), dict) else {}
         nxt = next_runnable_item(plan)
         if nxt is None:
             if all_items_terminal(plan):
                 self._ship_locked(session, updated)
-                return True
+                return "stop", None
             session.replace(updated)
-            return False
+            return "wait", None
         item = dict(nxt)
         resume = str(updated.get("resume_instructions") or "").strip()
         peers_needed = [str(p).strip() for p in (item.get("peer_services") or []) if str(p).strip()]
@@ -1265,7 +1571,7 @@ class SessionStore:
                     item=item,
                     plan=plan,
                 )
-                return True
+                return "stop", None
             if not str(item.get("notes") or "").strip():
                 item["notes"] = "Settled communication contracts with " + ", ".join(sorted(contracts))
         item["status"] = "in_progress"
@@ -1293,13 +1599,70 @@ class SessionStore:
                     item=item,
                     plan=plan,
                 )
-                return True
-        write_item_work(
-            private,
-            item=item,
-            microservice_name=str(updated.get("microservice_name") or "Service"),
-            instructions=resume,
+                return "stop", None
+        msgs = list(updated.get("messages") or [])
+        msgs.append(
+            {
+                "role": "assistant",
+                "content": _close(
+                    f"Handing **{item.get('title')}** to Pi: write tests from the spec, "
+                    "implement the change, evaluate with those tests, and retry the "
+                    "implementation if anything still fails.",
+                    status="executing",
+                    can_approve=False,
+                ),
+                "node": "execute",
+            }
         )
+        updated["messages"] = msgs
+        updated["execution_plan"] = replace_item(plan, item)
+        session.replace(updated)
+        return "work", {
+            "item": item,
+            "plan": updated["execution_plan"],
+            "private_dir": str(private),
+            "instructions": resume,
+            "microservice_name": str(updated.get("microservice_name") or "Service"),
+            "feature_spec": str(updated.get("feature_spec") or ""),
+            "bug_spec": str(updated.get("bug_spec") or ""),
+            "offered_api": str(updated.get("offered_api") or ""),
+            "tech_stack": str(updated.get("tech_stack") or ""),
+        }
+
+    def _finish_item_locked(
+        self,
+        session: FleetSession,
+        sub: dict[str, Any],
+        job: dict[str, Any],
+        result: Any,
+    ) -> bool:
+        bind_sub_workflow(sub)
+        updated = dict(sub)
+        if str(updated.get("status") or "") != "executing":
+            return True
+        if getattr(result, "stopped", False):
+            return False
+        plan = updated.get("execution_plan") if isinstance(updated.get("execution_plan"), dict) else {}
+        item = dict(job.get("item") or {})
+        private = Path(str(job.get("private_dir") or updated.get("workspace_path") or ""))
+        if not getattr(result, "ok", False):
+            detail = (
+                str(getattr(result, "error", "") or "").strip()
+                or str(getattr(result, "test_output", "") or "").strip()
+                or "Pi could not finish this plan item."
+            )
+            self._block_locked(
+                session,
+                updated,
+                kind="tests_failed",
+                title="Tests did not pass",
+                detail=(
+                    f"Pi could not complete **{item.get('title')}**. {detail}"
+                ),
+                item=item,
+                plan=plan,
+            )
+            return True
         ok, test_detail = run_workspace_tests(private)
         if not ok:
             self._block_locked(
@@ -1308,24 +1671,64 @@ class SessionStore:
                 kind="tests_failed",
                 title="Tests did not pass",
                 detail=(
-                    f"I added tests for **{item.get('title')}** and ran the workspace "
-                    f"suites before moving on. {test_detail}"
+                    f"I evaluated **{item.get('title')}** with the predetermined tests "
+                    f"after Pi returned. {test_detail}"
                 ),
                 item=item,
                 plan=plan,
             )
             return True
+        summary = str(getattr(result, "summary", "") or "").strip()
         item["status"] = "done"
         item["notes"] = (
             f"{str(item.get('notes') or '').strip()} {test_detail}".strip()
-        )
+            + (f"\n\n{summary}" if summary else "")
+        ).strip()
+        title = str(item.get("title") or "item")
+        if summary:
+            notes = str(updated.get("implementation_notes") or "").strip()
+            block = f"## {title}\n\n{summary}"
+            updated["implementation_notes"] = f"{notes}\n\n{block}".strip() if notes else block
         updated["resume_instructions"] = ""
         updated["execution_plan"] = replace_item(plan, item)
+        self._refresh_implementation_status(updated)
+        summary_block = f"\n\n{summary}" if summary else ""
+        msgs = list(updated.get("messages") or [])
+        msgs.append(
+            {
+                "role": "assistant",
+                "content": _close(
+                    f"Pi finished **{title}**.{summary_block}\n\n"
+                    "I updated `IMPLEMENTATION_STATUS.md` for this service. "
+                    "Open the implementation status view on this tile to read it.",
+                    status="executing",
+                    can_approve=False,
+                ),
+                "node": "execute",
+            }
+        )
+        updated["messages"] = msgs
         if all_items_terminal(updated["execution_plan"]):
             self._ship_locked(session, updated)
             return True
         session.replace(updated)
         return False
+
+    def _tick_locked(self, session: FleetSession, sub: dict[str, Any]) -> bool:
+        outcome, job = self._prepare_next_item_locked(session, sub)
+        if not job:
+            return outcome == "stop"
+        result = implement_plan_item(
+            Path(str(job["private_dir"])),
+            item=job["item"],
+            microservice_name=str(job["microservice_name"]),
+            instructions=str(job.get("instructions") or ""),
+            feature_spec=str(job.get("feature_spec") or ""),
+            bug_spec=str(job.get("bug_spec") or ""),
+            offered_api=str(job.get("offered_api") or ""),
+            tech_stack=str(job.get("tech_stack") or ""),
+        )
+        return self._finish_item_locked(session, sub, job, result)
 
     def _ship_locked(self, session: FleetSession, sub: dict[str, Any]) -> None:
         status, err = ship_workspace(
@@ -1402,31 +1805,85 @@ class SessionStore:
 
     def _worker_loop(self, session_id: str, sub_id: str) -> None:
         while True:
+            job: dict[str, Any] | None = None
             with self._lock_for(session_id):
-                if self._stop_requested(sub_id):
-                    try:
-                        session = self.get(session_id)
-                        sub = session.find(sub_id=sub_id)
-                    except KeyError:
-                        return
-                    if sub and str(sub.get("status") or "") == "executing":
-                        paused = dict(sub)
-                        paused["previous_execution_plan"] = deepcopy(paused.get("execution_plan") or {})
-                        paused["status"] = "paused"
-                        session.replace(paused)
-                        self._persist(session)
-                    return
                 try:
                     session = self.get(session_id)
                 except KeyError:
                     return
                 sub = session.find(sub_id=sub_id)
+                if not sub:
+                    return
+                command = str(sub.get("pi_command") or "").strip()
+                if self._stop_requested(sub_id):
+                    if command in {"stop_item", "undo_item"}:
+                        plan = sub.get("execution_plan") if isinstance(sub.get("execution_plan"), dict) else {}
+                        item = _plan_item_with_status(plan, "in_progress")
+                        live = dict(sub)
+                        if command == "undo_item":
+                            self._apply_undo_item(live, item)
+                        else:
+                            self._apply_stop_item(live, item)
+                        self._clear_stop(sub_id)
+                        session.replace(live)
+                        self._persist(session)
+                    else:
+                        if str(sub.get("status") or "") == "executing":
+                            paused = dict(sub)
+                            paused["previous_execution_plan"] = deepcopy(paused.get("execution_plan") or {})
+                            paused["pi_hold"] = False
+                            paused["pi_command"] = ""
+                            paused["status"] = "paused"
+                            session.replace(paused)
+                            self._persist(session)
+                        return
+                sub = session.find(sub_id=sub_id)
                 if not sub or str(sub.get("status") or "") != "executing":
                     return
-                finished = self._tick_locked(session, sub)
+                outcome, job = self._prepare_next_item_locked(session, sub)
                 self._persist(session)
-                if finished:
+                if outcome == "stop":
                     return
+            if job:
+                result = implement_plan_item(
+                    Path(str(job["private_dir"])),
+                    item=job["item"],
+                    microservice_name=str(job["microservice_name"]),
+                    instructions=str(job.get("instructions") or ""),
+                    feature_spec=str(job.get("feature_spec") or ""),
+                    bug_spec=str(job.get("bug_spec") or ""),
+                    offered_api=str(job.get("offered_api") or ""),
+                    tech_stack=str(job.get("tech_stack") or ""),
+                    stop_check=lambda: self._stop_requested(sub_id),
+                )
+                with self._lock_for(session_id):
+                    try:
+                        session = self.get(session_id)
+                    except KeyError:
+                        return
+                    live = session.find(sub_id=sub_id)
+                    if not live:
+                        return
+                    if self._handle_pi_command_after_run(session, live, job, result):
+                        continue
+                    if self._stop_requested(sub_id):
+                        if str(live.get("status") or "") == "executing":
+                            paused = dict(live)
+                            paused["previous_execution_plan"] = deepcopy(
+                                paused.get("execution_plan") or {}
+                            )
+                            paused["pi_hold"] = False
+                            paused["pi_command"] = ""
+                            paused["status"] = "paused"
+                            session.replace(paused)
+                            self._persist(session)
+                        return
+                    if str(live.get("status") or "") != "executing":
+                        return
+                    finished = self._finish_item_locked(session, live, job, result)
+                    self._persist(session)
+                    if finished:
+                        return
             time.sleep(0.15)
 
     def _answer(self, sub: dict[str, Any], question: str) -> str:

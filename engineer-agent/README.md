@@ -17,14 +17,21 @@ and `microservice_id`. One **sub-engineer** per `(design_session_id, microservic
 owns that service's offered API/protocol and an **execution plan**. A new spec version
 stops in-flight coding, compares with the previous spec, and drafts a new plan. Approve
 the plan in the UI to start a long-running coding loop. The sub-engineer follows the
-plan one item at a time in priority order, adds tests, and only moves on when all
-workspace tests pass. Peer contracts are settled before cross-service items. If git
+plan one item at a time in priority order. Each item is handed to the local **Pi
+coding agent** (SDK): write tests from the feature/bug spec, implement the change,
+evaluate with those tests, and retry implementation if they fail. The sub-engineer
+only moves on when the predetermined tests pass. Peer contracts are settled before cross-service items. If git
 pull fails, a peer contract cannot be settled, or tests fail, the sub-engineer pauses,
 streams the issue to the UI, and chats for instructions. **Approve to continue** follows
 those instructions and retries. Pause to revise the plan is separate; execute again to
-transition from current progress. Code is shipped to git only after the entire plan
-completes. The sub-engineer pulls the fleet repo first and works in a private folder at
-the git root named after the microservice.
+transition from current progress. In the sub-engineer chat you can also command Pi on
+the **current item only**: stop it (`stop working on current feature`), resume it
+(`resume this item`), or undo every file change it made for that item
+(`undo the changes`). After Pi runs the command, the tile chat confirms success.
+When Pi finishes an item, the sub-engineer updates `IMPLEMENTATION_STATUS.md` in the
+service folder and the tile shows a button to open that status. Code is shipped to git
+only after the entire plan completes. The sub-engineer pulls the fleet repo first and
+works in a private folder at the git root named after the microservice.
 
 When the orchestrator relationship map says this service **initiates** toward another
 core microservice, the sub-engineer consults that peer's offered API. If it needs more
@@ -53,8 +60,13 @@ npm run dev          # http://127.0.0.1:5175 (proxies API to :8091)
 
 ```bash
 cd backend
-LLM_PROVIDER=stub uv run python scripts/test_engineer_flow.py
+LLM_PROVIDER=stub PI_CODER_ENABLED=false uv run python scripts/test_engineer_flow.py
 ```
+
+Production execute needs Node, `make install-pi-runner` (or `npm install` in
+`backend/src/engineer_agent/pi_runner`), and a configured Pi login/API key on the
+engineer host (`~/.pi/agent`). Set `PI_CODER_ENABLED=false` to keep the offline stub
+writer.
 
 ## A2A
 

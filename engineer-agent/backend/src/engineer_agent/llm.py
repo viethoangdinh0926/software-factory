@@ -268,7 +268,16 @@ def _stub_turn_intent(blob: str) -> dict[str, str]:
         return {"category": "command", "action": "approve"}
     if re.search(r"\b(pause|stop execution|hold on)\b", compact) and "approve" not in compact:
         return {"category": "command", "action": "pause"}
-    if re.search(r"\b(execute|run the plan|start coding)\b", compact):
+    if re.search(
+        r"\b(stop working on|stop fixing|stop this (?:item|feature|bug)|stop coding|stop pi)\b",
+        compact,
+    ):
+        return {"category": "command", "action": "stop_item"}
+    if re.search(r"\b(resume this|resume working on|resume coding|resume pi)\b", compact):
+        return {"category": "command", "action": "resume_item"}
+    if re.search(r"\b(undo|discard pi|revert this)\b", compact):
+        return {"category": "command", "action": "undo_item"}
+    if re.search(r"\b(execute|run the plan|start coding|resume execution|resume the plan)\b", compact) or compact == "resume":
         return {"category": "command", "action": "execute"}
     if any(
         hint in compact

@@ -1,0 +1,9 @@
+{
+  "name": "engineer-pi-runner",
+  "private": true,
+  "type": "module",
+  "description": "Pi SDK adapter for engineer-agent plan items",
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "^0.84.4"
+  }
+}

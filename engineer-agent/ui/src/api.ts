@@ -54,6 +54,7 @@ export type SubEngineer = {
   tech_stack: string;
   offered_api: string;
   implementation_notes: string;
+  implementation_status?: string;
   peer_consults: PeerConsult[];
   incoming_api_requests: { from_name?: string; detail: string; status: string }[];
   status: string;

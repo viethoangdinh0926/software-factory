@@ -17,7 +17,7 @@ SSL_VERIFY ?= true
 
 export PATH := $(HOME)/.local/bin:$(PATH)
 
-.PHONY: all deploy install install-ui install-backend build run stop clean check-env help ensure-uv
+.PHONY: all deploy install install-ui install-backend install-pi-runner build run stop clean check-env help ensure-uv
 
 all: deploy
 
@@ -39,7 +39,10 @@ check-env:
 	fi
 	@echo "Using existing $(ENV_FILE)"
 
-install: ensure-uv install-ui install-backend
+install: ensure-uv install-ui install-backend install-pi-runner
+
+install-pi-runner:
+	cd "$(BACKEND_DIR)/src/engineer_agent/pi_runner" && npm install
 
 ensure-uv:
 	@command -v uv >/dev/null 2>&1 || { \

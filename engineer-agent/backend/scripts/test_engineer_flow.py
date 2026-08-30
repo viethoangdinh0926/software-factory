@@ -11,6 +11,7 @@ from pathlib import Path
 os.environ["LLM_PROVIDER"] = "stub"
 os.environ["BACKGROUND_EXECUTE"] = "false"
 os.environ["GIT_EXECUTE_ENABLED"] = "false"
+os.environ["PI_CODER_ENABLED"] = "false"
 
 tmp = Path(tempfile.mkdtemp(prefix="engineer-smoke-"))
 os.environ["DATA_DIR"] = str(tmp / "sessions")
@@ -24,6 +25,8 @@ from engineer_agent import query_intent as engineer_intent
 from engineer_agent.query_intent import (
     NEXT_PROMPT_HEADER,
     USER_MESSAGE_FIRST_RULES,
+    classify_pi_item_command,
+    classify_user_message,
     format_classify_context,
     user_message_first_block,
     workflow_action,
@@ -45,6 +48,17 @@ assert "Latest user message:" in inspect.getsource(engineer_intent._llm_turn_int
 assert workflow_action("pause") == "pause"
 assert workflow_action("execute") == "execute"
 assert workflow_action("revise") == "revise"
+assert workflow_action("stop_item") == "stop_item"
+assert workflow_action("resume_item") == "resume_item"
+assert workflow_action("undo_item") == "undo_item"
+assert classify_pi_item_command("stop working on current feature") == "stop_item"
+assert classify_pi_item_command("stop fixing this bug") == "stop_item"
+assert classify_pi_item_command("stop the plan") is None
+assert classify_pi_item_command("stop execution") is None
+assert classify_user_message("resume") == ("command", "execute")
+assert classify_user_message("resume this feature") == ("command", "resume_item")
+assert classify_user_message("undo the changes") == ("command", "undo_item")
+assert classify_user_message("pause") == ("command", "pause")
 
 SESSION = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 IDENTITY = "11111111-1111-1111-1111-111111111111"
@@ -203,6 +217,55 @@ assert any("tests passed" in str(it.get("notes") or "").lower() for it in done),
 assert any((private / "items").glob("*/test_impl.py"))
 ok_tests, test_detail = run_workspace_tests(private)
 assert ok_tests, test_detail
+assert (private / "IMPLEMENTATION_STATUS.md").is_file()
+assert "Implementation status" in str(ident.get("implementation_status") or "")
+last_asst = ""
+for msg in reversed(ident.get("messages") or []):
+    if isinstance(msg, dict) and msg.get("role") == "assistant":
+        last_asst = str(msg.get("content") or "")
+        break
+assert "implementation status" in last_asst.lower(), last_asst[:400]
+
+print("stop / resume current item, then undo Pi work…", flush=True)
+s = store.chat(SESSION, "stop working on current feature", service_id=IDENTITY)
+ident = s.find(IDENTITY)
+assert ident is not None
+assert ident.get("pi_hold")
+stop_note = str((ident.get("messages") or [{}])[-1].get("content") or "")
+assert "successfully" in stop_note.lower(), stop_note[:400]
+s = store.tick_execution(SESSION, service_id=IDENTITY)
+ident = s.find(IDENTITY)
+assert ident is not None
+assert ident.get("pi_hold")
+done_after_hold = [
+    it for it in (ident.get("execution_plan") or {}).get("items") or [] if it.get("status") == "done"
+]
+assert len(done_after_hold) == 1, "hold must not start the next item"
+s = store.chat(SESSION, "resume this item", service_id=IDENTITY)
+ident = s.find(IDENTITY)
+assert ident is not None
+assert not ident.get("pi_hold")
+resume_note = str((ident.get("messages") or [{}])[-1].get("content") or "")
+assert "successfully" in resume_note.lower(), resume_note[:400]
+s = store.chat(SESSION, "undo the changes", service_id=IDENTITY)
+ident = s.find(IDENTITY)
+assert ident is not None
+undone = [
+    it
+    for it in (ident.get("execution_plan") or {}).get("items") or []
+    if it.get("status") == "stopped"
+]
+assert undone, ident.get("execution_plan")
+undone_dir = private / "items" / str(undone[0].get("id") or "")
+assert undone_dir.is_dir(), undone_dir
+assert not (undone_dir / "impl.py").is_file()
+assert (undone_dir / "SPEC.md").is_file()
+undo_note = str((ident.get("messages") or [{}])[-1].get("content") or "")
+assert "successfully" in undo_note.lower(), undo_note[:400]
+s = store.chat(SESSION, "resume this item", service_id=IDENTITY)
+ident = s.find(IDENTITY)
+assert ident is not None
+assert not ident.get("pi_hold")
 
 print("plan locked during execute…", flush=True)
 try:

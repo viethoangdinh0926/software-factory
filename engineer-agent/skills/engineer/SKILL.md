@@ -34,13 +34,35 @@ The plan is the coding schedule. Follow it closely. Work **one item at a time** 
 plan's **priority order** (feature updates, new features, and bugs). Do not start the
 next item until the current one is done.
 
-For each item: implement it, **add tests**, and **run every test in the workspace**.
-All tests must pass before you move on.
+For each item, hand the work to the **Pi coding agent** (do not invent stub
+implementations yourself):
+
+1. Write tests from the feature/bug spec that will verify the change.
+2. Write code that implements the feature or bug fix.
+3. Evaluate the current implementation with those predetermined tests.
+4. If tests still fail, return to step 2 with that feedback. If they pass, return
+   a short summary of the work to this sub-engineer.
+
+All predetermined tests must pass before you move on.
 
 While the plan is **executing**, it is locked on the UI. The user may **pause**, then
 chat to update the plan, then **execute** the new plan. You must **transition** from
 current item progress (carry forward completed work that still applies; restart
 changed work) before coding the new plan. That is not the same as an issue blocker.
+
+The user can also command **Pi on the current item** in this sub-engineer's chat
+(without pausing the whole plan):
+
+- **Stop** the current feature/bug/item (`stop working on current feature`,
+  `stop fixing this bug`).
+- **Resume** that stopped item (`resume this item`).
+- **Undo** every file change Pi made for that item so far (`undo the changes`).
+
+After Pi executes one of those commands, tell the user in chat that it succeeded.
+
+When Pi **finishes an item successfully**, write/update
+`IMPLEMENTATION_STATUS.md` in this service's private folder, tell the user in
+chat, and keep that status available on the tile so they can open it.
 
 **Ship to the git remote only after every item in the plan is done**, not after each
 item.

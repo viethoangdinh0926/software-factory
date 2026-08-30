@@ -46,6 +46,11 @@ class Settings(BaseSettings):
     background_execute: bool = True
     # Live git clone/pull/push while executing. Tests set false.
     git_execute_enabled: bool = True
+    # Hand each plan item to the local Pi coding-agent SDK. Tests set false.
+    pi_coder_enabled: bool = True
+    pi_node_bin: str = "node"
+    pi_coder_max_rounds: int = 5
+    pi_coder_timeout_seconds: int = 900
     context_digest_soft_tokens: int = 900
     context_digest_hard_tokens: int = 1400
     context_digest_compact_target_tokens: int = 700

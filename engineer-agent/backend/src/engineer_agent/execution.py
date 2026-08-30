@@ -8,6 +8,7 @@ from typing import Any
 VALID_KINDS = {"feature", "bug", "feature_update"}
 TERMINAL_ITEM = {"done", "skipped"}
 RUNNABLE_ITEM = {"pending", "consulting", "in_progress", "blocked"}
+HELD_ITEM = {"stopped"}
 
 
 def plan_items(plan: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -34,7 +35,7 @@ def normalize_plan(raw: dict[str, Any] | None, *, version: int | None = None) ->
         if kind not in VALID_KINDS:
             kind = "feature"
         status = str(item.get("status") or "pending").strip().lower()
-        if status not in RUNNABLE_ITEM | TERMINAL_ITEM:
+        if status not in RUNNABLE_ITEM | TERMINAL_ITEM | HELD_ITEM:
             status = "pending"
         depends = item.get("depends_on") or []
         if not isinstance(depends, list):
