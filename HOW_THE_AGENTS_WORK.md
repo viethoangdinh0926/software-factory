@@ -77,7 +77,7 @@ Implemented in each agent’s `session_presence.py` (same idea, not a shared mod
 | Lease TTL | ~45 seconds |
 | Heartbeat | ~4 seconds (`POST /api/sessions/{id}/presence` with `{ holder_id }`) |
 | Release | `POST .../presence/release`; UI also uses `navigator.sendBeacon` on `pagehide` / `beforeunload` |
-| Holder id | Per-tab UUID in `sessionStorage` |
+| Holder id | Per-tab UUID in `sessionStorage`. Minted with `crypto.randomUUID` when that API exists; otherwise `getRandomValues` (needed on `http://<lan-ip>` where `randomUUID` is missing) |
 | Mutation header | `X-Session-Holder` |
 | Conflict | HTTP **423** if another holder owns the lease |
 
